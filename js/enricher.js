@@ -341,42 +341,58 @@ Rules:
    * Can handle 50-100+ results.
    */
   async function _parallelDiscovery(query, targetCount = 50, onProgress) {
-    // Step 1: Ask AI to generate LOTS of search queries
-    const numQueries = Math.min(Math.max(Math.ceil(targetCount / 3), 8), 30);
+    // Check if query already contains pre-split search queries (one per line)
+    const preSplitQueries = query.split('\n').map(q => q.trim()).filter(q => q.length > 5);
+    const hasPreSplit = preSplitQueries.length >= 3 && preSplitQueries.every(q => q.length < 100);
 
-    const { text: queryText } = await AIProvider.aiCall(
-      `You generate web search queries to find real professionals. Given a user's request, create ${numQueries} diverse search queries.
+    let searchQueries;
+    if (hasPreSplit) {
+      // Already have specific queries from _splitSearchIntent — use them directly
+      // Plus generate variations (different title synonyms per firm)
+      const numExtra = Math.max(0, Math.min(20, targetCount / 3) - preSplitQueries.length);
+      searchQueries = [...preSplitQueries];
+
+      if (numExtra > 0) {
+        try {
+          const { text: extraText } = await AIProvider.aiCall(
+            `Given these existing LinkedIn search queries, generate ${Math.ceil(numExtra)} MORE queries that target the SAME firms but with DIFFERENT title variations or synonyms. Keep the same specificity level. Return ONLY a JSON array.`,
+            preSplitQueries.join('\n'),
+            { temperature: 0.4, maxTokens: 800 },
+          );
+          const m = extraText.match(/\[[\s\S]*\]/);
+          if (m) searchQueries.push(...JSON.parse(m[0]));
+        } catch { /* use what we have */ }
+      }
+    } else {
+      // Generate queries from scratch
+      const numQueries = Math.min(Math.max(Math.ceil(targetCount / 3), 8), 30);
+      const { text: queryText } = await AIProvider.aiCall(
+        `You generate web search queries to find real professionals. Given a user's request, create ${numQueries} diverse search queries.
 
 RULES:
 - Each query should find DIFFERENT people (vary job titles, companies, regions, seniority levels)
 - Include "LinkedIn" in most queries
-- Use specific job titles, not vague terms
-- Include variations: different synonyms for the role, different companies in the space, different seniority levels
-- Also include queries for staff directories, team pages, conference speakers, industry association members
-- Return a JSON array of strings. ONLY the JSON array.
+- Use SPECIFIC company names and job titles from the request — do NOT generalize
+- Include variations: different synonyms for the role, different companies in the space
+- Return a JSON array of strings. ONLY the JSON array.`,
+        query,
+        { temperature: 0.5, maxTokens: 1500 },
+      );
 
-Example for "ex-management consultants doing AI":
-["ex McKinsey consultant AI implementation LinkedIn", "former BCG partner artificial intelligence LinkedIn", "Deloitte alumni AI strategy director LinkedIn", "ex Bain consultant machine learning LinkedIn profile", "management consulting to AI startup founder LinkedIn", "AI transformation consultant ex Big 4 LinkedIn", "chief AI officer former consultant LinkedIn", "AI consulting firm leaders site:linkedin.com", "McKinsey Digital alumni LinkedIn", "ex Accenture AI practice lead LinkedIn"]`,
-      query,
-      { temperature: 0.5, maxTokens: 1500 },
-    );
+      try {
+        const m = queryText.match(/\[[\s\S]*\]/);
+        searchQueries = m ? JSON.parse(m[0]) : [];
+      } catch {
+        searchQueries = [];
+      }
 
-    let searchQueries;
-    try {
-      const m = queryText.match(/\[[\s\S]*\]/);
-      searchQueries = m ? JSON.parse(m[0]) : [];
-    } catch {
-      searchQueries = [];
-    }
-
-    // Always add a few basic fallbacks
-    if (searchQueries.length < 3) {
-      searchQueries = [
-        `${query} LinkedIn`,
-        `${query} site:linkedin.com`,
-        `${query} professionals directory`,
-        `${query} leaders experts`,
-      ];
+      if (searchQueries.length < 3) {
+        searchQueries = [
+          `${query} LinkedIn`,
+          `${query} site:linkedin.com`,
+          `${query} professionals directory`,
+        ];
+      }
     }
 
     console.log(`Parallel discovery: firing ${searchQueries.length} searches for "${query}"`);
@@ -551,13 +567,15 @@ SEARCH STRATEGY — craft queries that find ACTUAL PEOPLE, not articles:
 - Always include "LinkedIn" in at least 3 queries
 - Use specific job titles, not vague terms
 - Include company/organization names when relevant
+- If the query contains multiple lines, each line is a separate search query — use them as-is
 - Example good queries:
-  - "Trade Surveillance Director LinkedIn banking"
-  - "ex McKinsey consultant workforce transformation LinkedIn"
-  - "USDA FSA farm loan officer LinkedIn profile"
+  - "COO Investment Banking Houlihan Lokey LinkedIn"
+  - "Chief Data Officer Lazard LinkedIn profile"
+  - "Head of AI Strategy Evercore LinkedIn"
 - Example BAD queries (too vague, finds articles not people):
-  - "people in agrilending"
+  - "people in AI banking"
   - "management consultants AI"
+  - "investment banking technology" (finds articles, not people)
 
 After searching, return a JSON array of people found:
 [{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"LinkedIn URL or empty","context":"Why relevant","source":"Source URL"}]

@@ -213,50 +213,6 @@ ${candidateContext || 'No matching candidates found.'}`;
   let _lastQuery = null; // tracks the last meaningful search query
 
 
-  /**
-   * Extract a numeric count from a query like "find 100 people" or "give me 50".
-   */
-  function _extractCount(query) {
-    const m = query.match(/\b(\d{2,3})\s*(people|leads|contacts|prospects|names|results|persons)?\b/i);
-    return m ? parseInt(m[1], 10) : null;
-  }
-
-  /**
-   * Split a long research brief into multiple focused search sub-queries.
-   * Returns an array of short, specific search strings.
-   */
-  async function _splitSearchIntent(longQuery) {
-    try {
-      const { text } = await AIProvider.aiCall(
-        `You break a detailed research brief into many specific, independent LinkedIn search queries.
-
-Given the brief below, output a JSON array of 5-15 short search queries. MAXIMIZE coverage:
-- Each query targets a specific role + company/industry/org combination
-- Use specific job titles (e.g. "VP Trade Surveillance", "Director Compliance")
-- Include company/org names when mentioned in the brief
-- Include "LinkedIn" in each query for better results
-- Be concise (under 12 words each)
-- Cover ALL companies, roles, and archetypes mentioned in the brief
-- If the brief mentions 10 companies, make at least 10 queries (one per company)
-
-Do NOT include people's names from the brief. Focus on role archetypes + target organizations.
-Output ONLY the JSON array, nothing else. Example:
-["VP Trade Surveillance JPMorgan LinkedIn", "Head of Risk Deutsche Bank LinkedIn", "Director Compliance Goldman Sachs LinkedIn", "Chief Risk Officer Citibank LinkedIn"]`,
-        longQuery,
-        { temperature: 0.3, maxTokens: 600 }
-      );
-      const match = text.match(/\[[\s\S]*\]/);
-      if (match) {
-        const queries = JSON.parse(match[0]);
-        if (Array.isArray(queries) && queries.length > 0) return queries;
-      }
-    } catch (e) {
-      console.warn('Failed to split search intent:', e);
-    }
-    // Fallback: extract key phrases rather than truncating blindly
-    const sentences = longQuery.split(/[.;\n]+/).filter(s => s.trim().length > 10).slice(0, 5);
-    return sentences.length > 1 ? sentences.map(s => s.trim().slice(0, 100)) : [longQuery.slice(0, 300)];
-  }
 
   /**
    * Route the user's message to the right handler using AI classification.
@@ -267,15 +223,14 @@ Output ONLY the JSON array, nothing else. Example:
 
     // Step 0: Quick keyword check for obvious web search intent (skip classifier)
     const msgLower = userMessage.toLowerCase();
-    const webKeywords = /\b(on the internet|on the web|search online|find online|search the web|find them online|look online|find it online|discover online|web search)\b/i;
+    const webKeywords = /\b(on the internet|search the internet|on the web|search online|find online|search the web|find them online|look online|find it online|discover online|web search)\b/i;
     if (webKeywords.test(userMessage) && Enricher.isConfigured()) {
       // Resolve the actual query from context
       const searchTopic = _lastQuery || userMessage;
       const resolvedQuery = msgLower.includes('them') || msgLower.includes('it') || msgLower.length < 30
         ? searchTopic
         : userMessage;
-      const targetCount = _extractCount(resolvedQuery) || 15;
-      return _handleDiscoveryWithSplit(resolvedQuery, userMessage, targetCount);
+      return _handleDiscovery(resolvedQuery, userMessage, 15);
     }
 
     // Step 1: Quick AI classification of intent
@@ -317,7 +272,7 @@ Output ONLY the JSON array, nothing else. Example:
       // Use the classifier's resolved query if available (handles "find it online" → actual topic)
       const discoveryQuery = route.query || userMessage;
       const targetCount = route.count || 15;
-      return _handleDiscoveryWithSplit(discoveryQuery, userMessage, targetCount);
+      return _handleDiscovery(discoveryQuery, userMessage, targetCount);
     }
 
     // Default: search the local network
@@ -606,60 +561,8 @@ ${enrichContext}`;
    * Smart discovery: split long queries into sub-queries, short ones go direct.
    * Deduplicates across sub-queries and accumulates until targetCount is met.
    */
-  async function _handleDiscoveryWithSplit(query, userMessage, targetCount = 15) {
-    // Short queries go straight to discovery
-    if (query.length <= 200) {
-      return _handleDiscovery(query, userMessage, targetCount);
-    }
-
-    // Long queries: split into focused sub-queries
-    const subQueries = await _splitSearchIntent(query);
-    const perQuery = Math.max(10, Math.ceil(targetCount / subQueries.length));
-    const seenNames = new Set();
-    let allPeople = [];
-    let searchesDone = 0;
-
-    for (const sq of subQueries) {
-      const result = await _handleDiscovery(sq, userMessage, perQuery);
-      searchesDone++;
-      if (result.people) {
-        // Deduplicate across sub-queries
-        for (const p of result.people) {
-          const key = (p.name || '').toLowerCase().trim();
-          if (key && !seenNames.has(key)) {
-            seenNames.add(key);
-            allPeople.push(p);
-          }
-        }
-      }
-      if (allPeople.length >= targetCount) break;
-    }
-
-    // If we still don't have enough, the sub-queries were too narrow — retry with a broader single query
-    if (allPeople.length < targetCount * 0.5 && subQueries.length > 1) {
-      const broadQuery = subQueries.join(' OR ');
-      const remaining = targetCount - allPeople.length;
-      const result = await _handleDiscovery(broadQuery, userMessage, remaining);
-      if (result.people) {
-        for (const p of result.people) {
-          const key = (p.name || '').toLowerCase().trim();
-          if (key && !seenNames.has(key)) {
-            seenNames.add(key);
-            allPeople.push(p);
-          }
-        }
-      }
-      searchesDone++;
-    }
-
-    return {
-      text: `Found ${allPeople.length} people across ${searchesDone} searches.`,
-      tokensUsed: 0,
-      discovered: true,
-      people: allPeople,
-      query,
-    };
-  }
+  // Full brief text for the current search (used by filter for exclusion rules)
+  let _currentBrief = null;
 
   /**
    * Handle outbound people discovery — search the web for people.
@@ -787,22 +690,37 @@ ${enrichContext}`;
     // Step 3: If small enough set, skip AI call
     if (cleaned.length <= 8) return cleaned;
 
-    // Step 4: AI relevance scoring
+    // Step 4: AI relevance scoring — uses the full brief if available for strict filtering
     try {
       const listText = cleaned.map((p, i) =>
         `${i}: ${p.name} — ${p.title || '?'} at ${p.company || '?'}`
       ).join('\n');
 
-      const { text } = await AIProvider.aiCall(
-        `You filter search results for relevance. Given a search query and a numbered list of people found, return a JSON array of the INDEX NUMBERS that are relevant to the query. Remove duplicates (same person, different entry), people with fake/placeholder names, and people clearly unrelated to the query.
+      const briefContext = _currentBrief
+        ? `\n\nORIGINAL BRIEF (use this for exclusion rules, target firms, and title requirements):\n${_currentBrief.slice(0, 2000)}`
+        : '';
 
-Query: "${query}"
+      const { text } = await AIProvider.aiCall(
+        `You filter search results strictly. Given a search query and a numbered list of people found, return a JSON array of the INDEX NUMBERS that should be KEPT.
+
+REMOVE:
+- Duplicates (same person, different entry)
+- People with fake/placeholder names
+- People clearly unrelated to the query
+- People at companies the brief EXPLICITLY EXCLUDES
+- People whose titles the brief EXPLICITLY EXCLUDES
+- People whose seniority level doesn't match (e.g. Analysts/Associates when brief wants Directors+)
+- People at the wrong type of firm (e.g. pure wealth managers when brief wants IB)
+
+KEEP only people who genuinely match the brief's target profile.
+
+Query: "${query}"${briefContext}
 
 People:
 ${listText}
 
 Return ONLY a JSON array of index numbers, e.g. [0, 2, 5, 7]`,
-        'Filter these results.',
+        'Filter these results strictly.',
         { temperature: 0.05, maxTokens: 500 },
       );
 
@@ -1089,9 +1007,20 @@ STYLE:
     return html;
   }
 
+  /**
+   * Direct discovery — pass the raw brief straight to the search engine.
+   * No AI extraction, no query splitting. The user chose the count explicitly.
+   */
+  async function discover(query, targetCount) {
+    _currentBrief = query;
+    PersonModal.setSearchContext(query);
+    return _handleDiscovery(query, query, targetCount);
+  }
+
   return {
     buildNetworkSummary,
     send,
+    discover,
     localSearch,
     clearHistory,
     getMessages,

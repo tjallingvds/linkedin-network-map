@@ -189,28 +189,39 @@ const ChatUI = (() => {
       _showTyping(false);
       _hideEnrichProgress();
 
-      // Show AI text response — inject "Search the internet" button if no matches
+      // Show AI text response — inject web search form if no matches
       let formattedText = _formatMarkdown(Chat.formatResponse(result.text, _data));
       if (Enricher.isConfigured()) {
         formattedText = formattedText.replace(
           /(?:Try asking me to )?search (?:on )?the internet\.?/gi,
-          `<button class="chat-web-search-btn" data-query="${_esc(msg)}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            Search the internet
-          </button>`
+          `<div class="chat-web-search-form">
+            <div class="chat-wsf-label">Search the web instead?</div>
+            <div class="chat-wsf-row">
+              <input type="number" class="chat-wsf-count" value="25" min="5" max="200" step="5" placeholder="# people">
+              <button class="chat-wsf-go">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                Find people
+              </button>
+            </div>
+          </div>`
         );
       }
       _addMessage('assistant', formattedText, true);
 
-      // Bind web search buttons
+      // Bind web search form
       const container = document.getElementById('chatPageMessages');
-      container.querySelectorAll('.chat-web-search-btn').forEach(btn => {
+      container.querySelectorAll('.chat-wsf-go').forEach(btn => {
         if (btn._bound) return;
         btn._bound = true;
         btn.addEventListener('click', () => {
-          const input = document.getElementById('chatPageInput');
-          input.value = 'search the internet';
-          handleSend();
+          const form = btn.closest('.chat-web-search-form');
+          const count = parseInt(form.querySelector('.chat-wsf-count').value) || 25;
+          // Disable form to prevent double-clicks
+          btn.disabled = true;
+          btn.textContent = 'Searching...';
+          form.querySelector('.chat-wsf-count').disabled = true;
+          // Trigger discovery directly with the original query and explicit count
+          _triggerWebDiscovery(msg, count);
         });
       });
 
@@ -244,6 +255,23 @@ const ChatUI = (() => {
         _addMessage('system', 'No matching people found. Try broader terms or connect AI for smarter search.');
       }
     }
+  }
+
+  /**
+   * Trigger web discovery directly — bypasses classifier and AI extraction.
+   * Takes the raw user query and an explicit count.
+   */
+  async function _triggerWebDiscovery(query, count) {
+    _showTyping(true);
+    const result = await Chat.discover(query, count);
+    _showTyping(false);
+    _hideEnrichProgress();
+
+    _addMessage('assistant', _formatMarkdown(Chat.formatResponse(result.text, _data)), true);
+    if (result.discovered && result.people?.length > 0) {
+      _addDiscoveryResults(result.people, result.query);
+    }
+    _updateTokenCounter();
   }
 
   function sendSuggestion(text) {
