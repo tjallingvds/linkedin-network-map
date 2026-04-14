@@ -1,0 +1,18 @@
+# LinkedIn data (personal)
+Connections.csv
+*.csv
+
+# Environment / secrets
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Claude
+.claude/

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Network Graph</title>
+
+<!-- Three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+<!-- Styles -->
+<link rel="stylesheet" href="css/main.css?v=15">
+<link rel="stylesheet" href="css/modal.css?v=16">
+<link rel="stylesheet" href="css/person-modal.css?v=16">
+<link rel="stylesheet" href="css/chat.css?v=16">
+</head>
+<body>
+
+<!-- Main App -->
+<div class="app" id="app">
+  <div class="panel" id="sidePanel">
+    <div class="panel-header">
+      <div class="panel-header-top">
+        <div></div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <button id="settingsBtn" title="AI Settings" class="header-icon-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+          <button id="panelCollapseBtn" title="Hide panel" class="header-icon-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="11 17 6 12 11 7"/><polyline points="18 17 13 12 18 7"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Past chats (always visible) -->
+    <div class="sidebar-section-header">
+      <span class="sidebar-section-label">Recent</span>
+      <button id="newChatBtn" title="New chat" class="sidebar-new-chat-btn">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="sidebar-chats" id="sidebarChats"></div>
+
+    <!-- Graph button (bottom of sidebar) -->
+    <div class="sidebar-bottom">
+      <button class="sidebar-graph-btn" id="graphToggleBtn" title="Toggle 3D graph">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="14" y1="10" x2="17" y2="7"/><line x1="10" y1="10" x2="7" y2="7"/><line x1="7" y1="17" x2="10" y2="14"/><line x1="17" y1="17" x2="14" y2="14"/></svg>
+        <span>Graph</span>
+      </button>
+    </div>
+
+    <!-- Graph filters (hidden by default, shown when graph is open) -->
+    <div class="filters" id="graphFilters" style="display:none">
+      <input type="text" class="search-input" id="searchBox" placeholder="Search people, companies, roles...">
+      <div class="filter-row">
+        <select class="filter-select" id="industryFilter"><option value="">All industries</option></select>
+        <select class="filter-select" id="roleFilter"><option value="">All roles</option></select>
+      </div>
+      <div class="category-chips" id="categoryChips"></div>
+      <button class="sidebar-classify-btn" id="classifyBtn" title="AI-classify people in 'Other'">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+        </svg>
+        <span id="classifyBtnLabel">Classify "Other"</span>
+      </button>
+      <details class="priority-settings" id="prioritySettings">
+        <summary>Priority weights</summary>
+        <div class="priority-controls">
+          <label><input type="checkbox" id="pw-email" checked> Has email <span class="pw-val">+20</span></label>
+          <label><input type="checkbox" id="pw-founder" checked> Founder/CEO <span class="pw-val">+50</span></label>
+          <label><input type="checkbox" id="pw-investor" checked> Investor/VC <span class="pw-val">+35</span></label>
+          <label><input type="checkbox" id="pw-exec" checked> Executive <span class="pw-val">+30</span></label>
+          <label><input type="checkbox" id="pw-sales" checked> Sales/Growth <span class="pw-val">+20</span></label>
+          <label><input type="checkbox" id="pw-ops"> Ops/Strategy <span class="pw-val">+15</span></label>
+          <label><input type="checkbox" id="pw-eng"> Product/Eng <span class="pw-val">+10</span></label>
+        </div>
+      </details>
+    </div>
+
+  </div>
+
+  <!-- Full-page Chat View -->
+  <div class="chat-page" id="chatPage" style="display:flex">
+    <div class="chat-page-inner">
+      <div class="chat-page-messages" id="chatPageMessages">
+        <!-- welcome + messages rendered here -->
+      </div>
+      <div class="chat-page-typing" id="chatPageTyping">
+        <span></span><span></span><span></span>
+      </div>
+      <div class="chat-page-input-wrap">
+        <div class="chat-page-input-area">
+          <textarea class="chat-page-input" id="chatPageInput" placeholder="Describe what you're working on..." rows="1"></textarea>
+          <button class="chat-page-send" id="chatPageSend" title="Send">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+            </svg>
+          </button>
+        </div>
+        <div class="chat-page-token-counter" id="chatPageTokens"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="canvas-wrap" id="canvasWrap" style="display:none">
+    <canvas id="graphCanvas"></canvas>
+    <div class="cluster-toggle" id="clusterToggle">
+      <button class="cluster-btn active" data-mode="category">Cluster by role</button>
+      <button class="cluster-btn" data-mode="company">Cluster by company</button>
+      <button class="cluster-btn" data-mode="industry">Cluster by industry</button>
+      <button class="cluster-btn" data-mode="none">Free</button>
+    </div>
+    <div class="legend" id="legend"></div>
+    <div class="controls-hint">
+      Drag to rotate · Scroll to zoom<br>Right-drag to pan · Click node for details
+    </div>
+  </div>
+</div>
+
+<!-- Expand panel button (shown when collapsed) -->
+<button class="panel-expand-btn" id="panelExpandBtn" title="Show panel" style="display:none">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/>
+  </svg>
+</button>
+
+<div class="tooltip" id="tooltip"></div>
+<div class="detail-panel" id="detailPanel"></div>
+
+<!-- JS Modules (order matters) -->
+<script src="js/ai-provider.js?v=15"></script>
+<script src="js/categorizer.js?v=15"></script>
+<script src="js/data.js?v=15"></script>
+<script src="js/enricher.js?v=16"></script>
+<script src="js/person-modal.js?v=16"></script>
+<script src="js/network-search.js?v=16"></script>
+<script src="js/modal.js?v=16"></script>
+<script src="js/chat.js?v=16"></script>
+<script src="js/chat-ui.js?v=15"></script>
+<script src="js/graph.js?v=15"></script>
+
+</body>
+</html>
