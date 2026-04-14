@@ -189,8 +189,30 @@ const ChatUI = (() => {
       _showTyping(false);
       _hideEnrichProgress();
 
-      // Show AI text response first
-      _addMessage('assistant', _formatMarkdown(Chat.formatResponse(result.text, _data)), true);
+      // Show AI text response — inject "Search the internet" button if no matches
+      let formattedText = _formatMarkdown(Chat.formatResponse(result.text, _data));
+      if (Enricher.isConfigured()) {
+        formattedText = formattedText.replace(
+          /(?:Try asking me to )?search (?:on )?the internet\.?/gi,
+          `<button class="chat-web-search-btn" data-query="${_esc(msg)}">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Search the internet
+          </button>`
+        );
+      }
+      _addMessage('assistant', formattedText, true);
+
+      // Bind web search buttons
+      const container = document.getElementById('chatPageMessages');
+      container.querySelectorAll('.chat-web-search-btn').forEach(btn => {
+        if (btn._bound) return;
+        btn._bound = true;
+        btn.addEventListener('click', () => {
+          const input = document.getElementById('chatPageInput');
+          input.value = 'search the internet';
+          handleSend();
+        });
+      });
 
       // Then show rich cards below the text
       if (result.enriched && result.profile && result.person) {

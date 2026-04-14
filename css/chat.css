@@ -132,6 +132,19 @@
   border: none; border-top: 1px solid var(--border); margin: 8px 0;
 }
 
+/* Web search CTA button */
+.chat-web-search-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; margin-top: 6px; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text2); font-size: 13px; cursor: pointer;
+  transition: all 0.12s;
+}
+.chat-web-search-btn:hover {
+  background: var(--surface); border-color: var(--text3);
+  color: var(--text1);
+}
+
 /* Person chips */
 .chat-page-msg .person-chip {
   display: inline-flex; align-items: center; gap: 3px;
