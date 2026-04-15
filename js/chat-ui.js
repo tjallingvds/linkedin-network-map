@@ -498,8 +498,10 @@ const ChatUI = (() => {
     if (networkMatched.length > 0) {
       _addPersonCards(networkMatched);
     }
-    // Don't render cards for text-parsed "discovered" names — too error-prone.
-    // Discovery cards only come from actual web search results via _addDiscoveryResults.
+    // Render cards for non-network people mentioned in the AI response
+    if (discoveredPeople.length > 0) {
+      _addDiscoveryResults(discoveredPeople, '');
+    }
   }
 
   function _addPersonCards(results) {
