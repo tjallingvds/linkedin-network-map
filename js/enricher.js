@@ -110,17 +110,19 @@ const Enricher = (() => {
   }
 
   // ─── Tavily Search ───
-  async function _tavilySearch(query, searchDepth = 'basic', maxResults = 5) {
+  async function _tavilySearch(query, searchDepth = 'basic', maxResults = 5, includeDomains = null) {
+    const body = {
+      api_key: _tavilyKey,
+      query,
+      search_depth: searchDepth,
+      max_results: maxResults,
+      include_answer: false,
+    };
+    if (includeDomains) body.include_domains = includeDomains;
     const res = await fetch(TAVILY_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        api_key: _tavilyKey,
-        query,
-        search_depth: searchDepth,
-        max_results: maxResults,
-        include_answer: false,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!res.ok) {
@@ -341,78 +343,67 @@ Rules:
    * Can handle 50-100+ results.
    */
   async function _parallelDiscovery(query, targetCount = 50, onProgress, extractionHint = '') {
-    // Check if query already contains pre-split search queries (one per line)
-    const preSplitQueries = query.split('\n').map(q => q.trim()).filter(q => q.length > 5);
-    const hasPreSplit = preSplitQueries.length >= 3 && preSplitQueries.every(q => q.length < 100);
+    // Generate search queries from the full brief/query — one AI call
+    const numQueries = Math.min(Math.max(Math.ceil(targetCount / 2), 10), 30);
 
-    let searchQueries;
-    if (hasPreSplit) {
-      // Already have specific queries from _splitSearchIntent — use them directly
-      // Plus generate variations (different title synonyms per firm)
-      const numExtra = Math.max(0, Math.min(20, targetCount / 3) - preSplitQueries.length);
-      searchQueries = [...preSplitQueries];
+    const { text: queryText } = await AIProvider.aiCall(
+      `You are an expert recruiter sourcing people on LinkedIn. The user wants to find approximately ${targetCount} people. Generate ${numQueries} search queries that together should surface at least ${targetCount} candidates.
 
-      if (numExtra > 0) {
-        try {
-          const variationContext = extractionHint
-            ? `\nCONTEXT:${extractionHint}\n\nExisting queries:\n${preSplitQueries.join('\n')}`
-            : preSplitQueries.join('\n');
-          const { text: extraText } = await AIProvider.aiCall(
-            `Given these existing LinkedIn search queries, generate ${Math.ceil(numExtra)} MORE queries that target the SAME firms but with DIFFERENT title variations or synonyms. Use site:linkedin.com. Keep the same specificity level. Return ONLY a JSON array.`,
-            variationContext,
-            { temperature: 0.4, maxTokens: 800 },
-          );
-          const m = extraText.match(/\[[\s\S]*\]/);
-          if (m) searchQueries.push(...JSON.parse(m[0]));
-        } catch { /* use what we have */ }
-      }
-    } else {
-      // Generate queries from scratch
-      const numQueries = Math.min(Math.max(Math.ceil(targetCount / 3), 8), 30);
-      const queryContext = extractionHint
-        ? `${extractionHint}\n\nUser request:\n${query}`
-        : query;
-      const { text: queryText } = await AIProvider.aiCall(
-        `You generate web search queries to find real professionals. Create ${numQueries} diverse search queries.
+TARGET: ~${targetCount} people total. Each query should find 3-10 people, so you need ${numQueries} diverse queries to hit the target.
+
+${targetCount <= 15 ? `SMALL SEARCH (${targetCount} people): Use narrow, precise queries — one company + one title per query. Quality over quantity.
+Examples: "COO Houlihan Lokey", "Chief Data Officer Lazard"` :
+targetCount <= 40 ? `MEDIUM SEARCH (${targetCount} people): Mix precise and grouped queries. Some single-company, some grouped.
+Examples: "COO Houlihan Lokey OR Lazard", "Chief Data Officer boutique investment bank"` :
+`LARGE SEARCH (${targetCount} people): Use broad, high-yield queries. Group multiple companies with OR. Use industry-level sweeps.
+Examples: "COO investment banking Houlihan Lokey OR Lazard OR Evercore OR Moelis", "Chief Data Officer mid-market bank", "Jefferies OR Piper Sandler OR William Blair technology leadership"`}
 
 RULES:
-- Each query should find DIFFERENT people (vary job titles, companies, regions, seniority levels)
-- Use site:linkedin.com in most queries to find actual LinkedIn profiles
-- Use SPECIFIC company names and job titles — do NOT generalize
-- If context above lists target firms and titles, use those EXACT firms and titles in your queries
-- If context above lists exclusions, do NOT generate queries for excluded firms
-- Return a JSON array of strings. ONLY the JSON array.`,
-        queryContext,
-        { temperature: 0.5, maxTokens: 1500 },
-      );
+- Read the brief carefully — use the EXACT company names and job titles it mentions
+- Do NOT query for companies the brief EXCLUDES
+- Cover different titles and different company groups across queries
+- Each query: 3-15 words
 
-      try {
-        const m = queryText.match(/\[[\s\S]*\]/);
-        searchQueries = m ? JSON.parse(m[0]) : [];
-      } catch {
-        searchQueries = [];
-      }
+Return ONLY a JSON array of strings.`,
+      query,
+      { temperature: 0.4, maxTokens: 2000 },
+    );
 
-      if (searchQueries.length < 3) {
-        searchQueries = [
-          `${query} LinkedIn`,
-          `${query} site:linkedin.com`,
-          `${query} professionals directory`,
-        ];
-      }
+    let searchQueries;
+    try {
+      const m = queryText.match(/\[[\s\S]*\]/);
+      searchQueries = m ? JSON.parse(m[0]) : [];
+    } catch {
+      searchQueries = [];
     }
+
+    if (searchQueries.length < 3) {
+      searchQueries = [
+        `${query.slice(0, 80)} LinkedIn`,
+        `${query.slice(0, 80)} professionals`,
+      ];
+    }
+
+    console.log(`Parallel discovery: ${searchQueries.length} queries generated:`, searchQueries.slice(0, 8));
 
     console.log(`Parallel discovery: firing ${searchQueries.length} searches for "${query}"`);
     if (onProgress) onProgress('searching', 0, 0);
 
-    // Step 2: Fire ALL searches in parallel
+    // Step 2: Fire ALL searches in parallel — constrain to LinkedIn profiles
     const searchPromises = searchQueries.map(async (sq, i) => {
       _searchCount++;
       if (_onSearchProgress) _onSearchProgress(_searchCount, sq);
+      // Clean any site: operators from query text
+      const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, ' ').trim();
       try {
-        return await _tavilySearch(sq, 'advanced', 20);
+        // Always search LinkedIn first via include_domains
+        const maxPerQuery = targetCount > 30 ? 20 : 10;
+        const results = await _tavilySearch(cleanQuery, 'advanced', maxPerQuery, ['linkedin.com']);
+        if (results.length > 0) return results;
+        // Fallback: open web but still bias to LinkedIn
+        return await _tavilySearch(cleanQuery + ' LinkedIn profile', 'advanced', maxPerQuery);
       } catch {
-        try { return await _tavilySearch(sq, 'basic', 10); }
+        try { return await _tavilySearch(cleanQuery, 'basic', 10); }
         catch { return []; }
       }
     });
@@ -446,18 +437,18 @@ RULES:
     const extractionPromises = chunks.map(async (chunk) => {
       const context = chunk.map(r => `[${r.title}] (${r.url})\n${r.content}`).join('\n\n---\n\n');
       try {
-        const hintBlock = extractionHint || `\n- Only people relevant to: "${query.slice(0, 200)}"`;
+        const briefContext = query.length > 100 ? query.slice(0, 1500) : '';
         const { text } = await AIProvider.aiCall(
-          `Extract ONLY people who match ALL of these criteria from the search results. Be strict — skip anyone who doesn't clearly match.
-${hintBlock}
-
+          `Extract all real people from these search results. We need ~${targetCount} people total so extract as many as you can find.
+${briefContext ? `\nSEARCH BRIEF:\n${briefContext}\n` : ''}
 Return a JSON array:
-[{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"URL or empty","context":"Why they match","source":"URL"}]
+[{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"linkedin.com/in/ URL or empty","context":"Why relevant","source":"URL"}]
 
 Rules:
-- Full first AND last name required (skip "John S." or initials)
-- SKIP people who don't match the criteria above — do NOT extract everyone
-- LinkedIn URLs only (linkedin.com/in/...) — skip other URLs
+- Full first AND last name required (skip "John S." or initials-only)
+- Extract EVERY person you can identify — we need volume, filtering happens later
+- Prioritize people with LinkedIn profile URLs (linkedin.com/in/...)
+- For linkedin field, extract the exact linkedin.com/in/ URL from the search result
 - Return ONLY the JSON array`,
           context,
           { temperature: 0.1, maxTokens: 4000 },
@@ -574,26 +565,17 @@ Rules: Full first AND last name required. Skip anyone without a clear match to t
     }
 
     // Normal search: AI-driven tool calling
-    const hintSection = extractionHint
-      ? `\nSEARCH CONTEXT:${extractionHint}\n\nUse the target firms and titles above to craft your search queries. Do NOT search for excluded firms or titles.\n`
-      : '';
-    const systemPrompt = `You find real professionals by searching the web. You are excellent at crafting precise LinkedIn search queries.
-${hintSection}
+    const systemPrompt = `You find real professionals by searching the web. Read the user's search brief carefully.
+
 Use the web_search tool to find people. Make 4-5 searches. Each search MUST use search_depth "advanced" and max_results 10.
 
-SEARCH STRATEGY — craft queries that find ACTUAL PEOPLE, not articles:
-- Use site:linkedin.com in at least 3 queries
-- Use specific job titles, not vague terms
-- Include company/organization names when relevant
-- If the query contains multiple lines, each line is a separate search query — use them as-is
-- Example good queries:
-  - "COO Investment Banking Houlihan Lokey site:linkedin.com"
-  - "Chief Data Officer Lazard site:linkedin.com"
-  - "Head of AI Strategy Evercore site:linkedin.com"
-- Example BAD queries (too vague, finds articles not people):
-  - "people in AI banking"
-  - "management consultants AI"
-  - "investment banking technology" (finds articles, not people)
+SEARCH STRATEGY — maximize people found per search:
+- Group related companies with OR: "COO Houlihan Lokey OR Lazard OR Evercore"
+- Group related titles for one firm: "Jefferies COO OR CTO OR Chief Data Officer"
+- Use industry sweeps: "COO boutique investment bank"
+- Include "LinkedIn" in queries to find profile pages
+- Read the brief for specific companies and titles — use them
+- Do NOT search for companies the brief EXCLUDES
 
 After searching, return a JSON array of people found:
 [{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"LinkedIn URL or empty","context":"Why relevant","source":"Source URL"}]

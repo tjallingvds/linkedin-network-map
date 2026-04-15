@@ -688,6 +688,7 @@ ${enrichContext}`;
    * Runs a cheap AI call to score relevance and filter out noise.
    */
   async function _filterDiscoveryResults(people, query) {
+    console.log(`Filter input: ${people.length} people`);
     if (!people.length || people.length <= 3) return people;
 
     // Step 1: Deduplicate by normalized name
@@ -699,35 +700,32 @@ ${enrichContext}`;
       seen.add(key);
       return true;
     });
+    console.log(`After dedup: ${deduped.length}`);
 
     // Step 2: Remove obviously bad entries (no real name, placeholder titles)
     const cleaned = deduped.filter(p => {
       const name = (p.name || '').trim();
-      // Must have first + last name
       if (!name.includes(' ')) return false;
       if (name.length < 4) return false;
-      // Skip placeholder names
       if (/^(not specified|unknown|n\/a|company representative|author)/i.test(name)) return false;
       if (/^(not specified|unknown|n\/a)/i.test(p.title || '')) return false;
       return true;
     });
+    console.log(`After cleanup: ${cleaned.length}`);
 
-    // Step 3: Hard exclusion filter — removes excluded firms/titles with exact matching (no AI)
+    // Step 3: Hard exclusion filter — only remove people at EXCLUDED firms/titles
     let filtered = cleaned;
     if (_parsedBrief) {
       const exFirms = (_parsedBrief.excludeFirms || []).map(f => f.toLowerCase());
       const exTitles = (_parsedBrief.excludeTitles || []).map(t => t.toLowerCase());
       const exSeniority = (_parsedBrief.excludeSeniority || []).map(s => s.toLowerCase());
 
-      // Build word sets for fuzzy company matching (handles "GS" vs "Goldman Sachs")
       const exFirmWords = exFirms.map(f => f.split(/[\s,&]+/).filter(w => w.length > 2));
 
       const companyMatchesExcluded = (company) => {
         if (!company) return false;
         const c = company.toLowerCase();
-        // Direct substring match
         if (exFirms.some(ef => c.includes(ef) || ef.includes(c))) return true;
-        // Word overlap — if 2+ significant words from an excluded firm appear in the company name
         return exFirmWords.some(words => {
           const matches = words.filter(w => c.includes(w));
           return matches.length >= 2 || (words.length === 1 && matches.length === 1);
@@ -735,7 +733,6 @@ ${enrichContext}`;
       };
 
       filtered = cleaned.filter(p => {
-        const company = (p.company || '').toLowerCase();
         const title = (p.title || '').toLowerCase();
 
         // Exclude if company matches an excluded firm
@@ -750,51 +747,11 @@ ${enrichContext}`;
         return true;
       });
 
-      console.log(`Hard filter: ${cleaned.length} → ${filtered.length} (removed ${cleaned.length - filtered.length} excluded)`);
+      console.log(`After hard filter: ${filtered.length} (removed ${cleaned.length - filtered.length})`);
     }
 
-    // Step 4: If small enough set after hard filter, skip AI call
-    if (filtered.length <= 8) return filtered;
-
-    // Step 5: AI relevance scoring for remaining candidates
-    try {
-      const listText = filtered.map((p, i) =>
-        `${i}: ${p.name} — ${p.title || '?'} at ${p.company || '?'}`
-      ).join('\n');
-
-      // Build concise exclusion context from parsed brief (not the full 2000-char blob)
-      let filterRules = '';
-      if (_parsedBrief) {
-        filterRules = `\n\nFILTER RULES:`;
-        if (_parsedBrief.context) filterRules += `\nLooking for: ${_parsedBrief.context}`;
-        if (_parsedBrief.firms?.length) filterRules += `\nTarget firms: ${_parsedBrief.firms.join(', ')}`;
-        if (_parsedBrief.titles?.length) filterRules += `\nTarget titles: ${_parsedBrief.titles.slice(0, 8).join(', ')}`;
-      }
-
-      const { text } = await AIProvider.aiCall(
-        `You filter search results strictly. Return a JSON array of INDEX NUMBERS to KEEP.
-
-REMOVE: duplicates, fake names, people clearly unrelated to the search.${filterRules}
-
-People:
-${listText}
-
-Return ONLY a JSON array of index numbers, e.g. [0, 2, 5, 7]`,
-        'Filter these results.',
-        { temperature: 0.05, maxTokens: 500 },
-      );
-
-      const match = text.match(/\[[\s\S]*?\]/);
-      if (match) {
-        const indices = JSON.parse(match[0]);
-        return indices
-          .filter(i => typeof i === 'number' && i >= 0 && i < filtered.length)
-          .map(i => filtered[i]);
-      }
-    } catch (e) {
-      console.warn('AI filter failed, using hard-filtered results:', e);
-    }
-
+    // Step 4: Done — skip AI filter entirely. The hard filter handles exclusions,
+    // and being too aggressive with AI filtering was dropping good results.
     return filtered;
   }
 
@@ -1110,38 +1067,6 @@ Return ONLY the JSON object.`,
    * Build Tavily search queries programmatically from parsed brief.
    * No AI involved — just firm × title combinations.
    */
-  function _buildSearchQueries(parsed, targetCount) {
-    const queries = [];
-    const firms = parsed.firms || [];
-    const titles = parsed.titles || [];
-
-    // Shorten long titles to key terms for better search results
-    // "COO of Investment Banking" → "COO" , "Chief Data Officer" → "Chief Data Officer"
-    const shortTitle = (t) => {
-      // Extract the core title (before "of", "at", "-", etc.)
-      return t.replace(/\s+(of|at|for|in|-|–|,)\s+.*/i, '').trim();
-    };
-
-    // Strategy: one query per firm with the top 2-3 title keywords
-    // site:linkedin.com constrains to actual LinkedIn profiles
-    const topTitles = titles.slice(0, 3).map(shortTitle);
-    const titleKeywords = topTitles.join(' OR ');
-
-    for (const firm of firms) {
-      // Primary: firm + top titles on LinkedIn
-      queries.push(`${firm} ${titleKeywords} site:linkedin.com`);
-    }
-
-    // Also run title-focused queries without specific firms for broader reach
-    for (const title of titles.slice(0, 5)) {
-      const short = shortTitle(title);
-      queries.push(`${short} investment bank site:linkedin.com`);
-    }
-
-    // Cap at 30 queries max to stay within Tavily rate limits
-    return queries.slice(0, 30);
-  }
-
   /**
    * Direct discovery from a research brief.
    * Parses the brief into structured params, builds queries programmatically,
@@ -1155,29 +1080,13 @@ Return ONLY the JSON object.`,
     const parsed = await _parseBrief(query);
 
     if (parsed && parsed.firms?.length > 0) {
-      // Build search queries from structured data — no AI query generation
-      const searchQueries = _buildSearchQueries(parsed, targetCount);
-
-      // Store parsed brief for extraction and filter prompts
+      console.log('Parsed brief:', parsed);
       _parsedBrief = parsed;
-
-      // Build extraction hint — concise rules for every downstream AI prompt
-      let hint = '';
-      if (parsed.context) hint += `\n- GOAL: ${parsed.context}`;
-      hint += `\n- ONLY extract people at these target firms: ${parsed.firms.join(', ')}`;
-      if (parsed.titles?.length) hint += `\n- ONLY extract people with titles like: ${parsed.titles.slice(0, 6).join(', ')}`;
-      if (parsed.excludeFirms?.length) hint += `\n- EXCLUDE anyone at: ${parsed.excludeFirms.join(', ')}`;
-      if (parsed.excludeTitles?.length) hint += `\n- EXCLUDE titles containing: ${parsed.excludeTitles.join(', ')}`;
-      if (parsed.excludeSeniority?.length) hint += `\n- EXCLUDE seniority levels: ${parsed.excludeSeniority.join(', ')}`;
-      if (parsed.geography?.length) hint += `\n- GEOGRAPHY priority: ${parsed.geography.join(', ')}`;
-
-      // Pass queries to discovery as newline-separated list
-      const combinedQuery = searchQueries.join('\n');
-      return _handleDiscovery(combinedQuery, query, targetCount, hint);
+    } else {
+      _parsedBrief = null;
     }
 
-    // Fallback: short/simple query, just pass through
-    _parsedBrief = null;
+    // Pass the FULL brief directly — let the AI generate good search queries from it
     return _handleDiscovery(query, query, targetCount);
   }
 
