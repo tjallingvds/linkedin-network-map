@@ -949,12 +949,8 @@ const ChatUI = (() => {
       for (const msg of session.messages) {
         Chat.getMessages().push(msg);
       }
+      // Only restore text messages — discovery cards are rendered inline as text
       _restoreSavedMessages(session.messages);
-
-      // Restore discovery cards
-      if (session.discovery?.people?.length > 0) {
-        _addDiscoveryResults(session.discovery.people, session.discovery.query);
-      }
     } else {
       // No saved session data — show welcome
       _renderWelcome();
