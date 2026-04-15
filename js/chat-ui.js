@@ -871,7 +871,20 @@ const ChatUI = (() => {
   function _loadChatHistory() {
     try {
       const saved = localStorage.getItem('chat_history');
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      const history = JSON.parse(saved);
+      // Migrate old entries that don't have an id
+      let migrated = false;
+      for (const chat of history) {
+        if (!chat.id) {
+          chat.id = 'chat_' + (chat.time || Date.now()) + '_' + Math.random().toString(36).slice(2, 6);
+          migrated = true;
+        }
+      }
+      if (migrated) {
+        localStorage.setItem('chat_history', JSON.stringify(history));
+      }
+      return history;
     } catch { return []; }
   }
 
@@ -912,6 +925,8 @@ const ChatUI = (() => {
   }
 
   function _switchToChat(chatId) {
+    if (!chatId) return;
+
     // Save current chat first
     if (_activeChatId) _saveChatSession(_activeChatId);
 
@@ -923,20 +938,23 @@ const ChatUI = (() => {
     const container = document.getElementById('chatPageMessages');
     if (container) container.innerHTML = '';
 
-    // Restore chat state
-    Chat.clearHistory();
-    if (session?.messages) {
+    // Clear Chat module state without saving (we don't want to overwrite stored sessions)
+    Chat.getMessages().length = 0;
+
+    if (session?.messages?.length) {
       // Rebuild _messages in Chat module
       for (const msg of session.messages) {
         Chat.getMessages().push(msg);
       }
       _restoreSavedMessages(session.messages);
-    }
-    // Restore discovery cards
-    if (session?.discovery?.people?.length > 0) {
-      // Need to set this in Chat module too — use discover results setter
-      // For now just render cards
-      _addDiscoveryResults(session.discovery.people, session.discovery.query);
+
+      // Restore discovery cards
+      if (session.discovery?.people?.length > 0) {
+        _addDiscoveryResults(session.discovery.people, session.discovery.query);
+      }
+    } else {
+      // No saved session data — show welcome
+      _renderWelcome();
     }
 
     _renderChatHistory();
