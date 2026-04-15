@@ -176,12 +176,5 @@
 .pm-loading-text { font-size: 12px; color: var(--text3); font-weight: 500; }
 .pm-empty { text-align: center; padding: 32px 0; font-size: 12px; color: var(--text3); }
 
-.pm-enrich-btn {
-  width: 24px; height: 24px; border-radius: 6px;
-  background: transparent; border: 1px solid var(--border);
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  color: var(--text3); transition: all 0.1s; padding: 0;
-}
-.pm-enrich-btn:hover { border-color: var(--text3); color: var(--text2); }
 .disc-enrich-btn { background: transparent; border: none; }
 .disc-enrich-btn:hover { color: var(--text2) !important; background: var(--surface); }
