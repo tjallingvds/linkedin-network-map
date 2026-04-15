@@ -727,8 +727,30 @@ ${enrichContext}`;
     });
     console.log(`After dedup: ${deduped.length}`);
 
+    // Step 1b: Exclude people who are pending invitations (already reached out)
+    let afterInvFilter = deduped;
+    try {
+      const invData = localStorage.getItem('invitations_data');
+      if (invData) {
+        const invitations = JSON.parse(invData);
+        const invNames = new Set(invitations.map(inv => inv.name.toLowerCase().trim()));
+        const invUrls = new Set(invitations.map(inv => (inv.url || '').toLowerCase().replace(/\/$/, '')));
+        afterInvFilter = deduped.filter(p => {
+          const nameLower = (p.name || '').toLowerCase().trim();
+          const linkedinLower = (p.linkedin || '').toLowerCase().replace(/\/$/, '');
+          // Exclude if name matches a pending invitation
+          if (invNames.has(nameLower)) return false;
+          // Exclude if LinkedIn URL matches
+          if (linkedinLower && invUrls.has(linkedinLower)) return false;
+          return true;
+        });
+        const excluded = deduped.length - afterInvFilter.length;
+        if (excluded > 0) console.log(`Excluded ${excluded} pending invitations`);
+      }
+    } catch { /* ignore */ }
+
     // Step 2: Remove obviously bad entries (no real name, placeholder titles)
-    const cleaned = deduped.filter(p => {
+    const cleaned = afterInvFilter.filter(p => {
       const name = (p.name || '').trim();
       if (!name.includes(' ')) return false;
       if (name.length < 4) return false;

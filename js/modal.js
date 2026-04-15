@@ -125,6 +125,16 @@ const Modal = (() => {
           <div class="modal-field-hint">Export from <a href="https://www.linkedin.com/mypreferences/d/download-my-data" target="_blank">LinkedIn Data Export</a> → Connections.csv</div>
         </div>
 
+        <div class="modal-section">
+          <div class="modal-section-label">Pending Invitations <span class="modal-opt">optional</span></div>
+          <div class="modal-csv-row">
+            <span class="modal-csv-status" id="invStatus">${_getInvitationsStatus()}</span>
+            <input type="file" id="invUpload" accept=".csv" style="display:none">
+            <label for="invUpload" class="modal-csv-btn">Upload Invitations.csv</label>
+          </div>
+          <div class="modal-field-hint">From the same LinkedIn export — excludes pending connections from search results.</div>
+        </div>
+
         <div class="modal-footer">
           <button class="modal-skip" id="skipBtn">Skip</button>
           <button class="modal-go" id="connectBtn" disabled>Connect</button>
@@ -146,6 +156,55 @@ const Modal = (() => {
       claude: 'From <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a> · claude-sonnet-4-20250514',
       deepseek: 'From <a href="https://platform.deepseek.com/" target="_blank">platform.deepseek.com</a> · deepseek-chat',
     }[p] || '';
+  }
+
+  function _getInvitationsStatus() {
+    try {
+      const data = localStorage.getItem('invitations_data');
+      if (data) {
+        const parsed = JSON.parse(data);
+        return `${parsed.length} invitations loaded`;
+      }
+    } catch { }
+    return 'Not loaded';
+  }
+
+  function _parseInvitationsCSV(text) {
+    const lines = text.split('\n').filter(l => l.trim());
+    if (lines.length < 2) return [];
+    // Parse header to find column indices
+    const header = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const toIdx = header.indexOf('to');
+    const urlIdx = header.findIndex(h => h.includes('inviteeprofileurl'));
+    const dirIdx = header.indexOf('direction');
+    if (toIdx < 0) return [];
+
+    const invitations = [];
+    for (let i = 1; i < lines.length; i++) {
+      // Handle CSV with quoted fields
+      const fields = [];
+      let current = '';
+      let inQuotes = false;
+      for (const ch of lines[i]) {
+        if (ch === '"') { inQuotes = !inQuotes; continue; }
+        if (ch === ',' && !inQuotes) { fields.push(current.trim()); current = ''; continue; }
+        current += ch;
+      }
+      fields.push(current.trim());
+
+      const name = fields[toIdx] || '';
+      const url = urlIdx >= 0 ? (fields[urlIdx] || '') : '';
+      const direction = dirIdx >= 0 ? (fields[dirIdx] || '') : '';
+      if (name && name.length > 1) {
+        invitations.push({ name, url, direction });
+      }
+    }
+    return invitations;
+  }
+
+  function _saveInvitations(invitations) {
+    try { localStorage.setItem('invitations_data', JSON.stringify(invitations)); }
+    catch { /* ignore */ }
   }
 
   function _getCSVStatus() {
@@ -200,6 +259,24 @@ const Modal = (() => {
           // Reinitialize the app with new data
           initApp(data);
         });
+      });
+    }
+
+    // Invitations upload handler
+    const invUpload = document.getElementById('invUpload');
+    if (invUpload) {
+      invUpload.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const status = document.getElementById('invStatus');
+        if (status) status.textContent = 'Loading...';
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const invitations = _parseInvitationsCSV(ev.target.result);
+          _saveInvitations(invitations);
+          if (status) status.textContent = `${invitations.length} invitations loaded ✓`;
+        };
+        reader.readAsText(file);
       });
     }
 
