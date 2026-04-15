@@ -303,6 +303,12 @@ const ChatUI = (() => {
         _addMessage('assistant', _formatMarkdown(Chat.formatResponse(msg.content, _data)), true);
       }
     }
+
+    // Restore discovery cards if we have saved results
+    const lastDiscovery = Chat.getLastDiscovery();
+    if (lastDiscovery?.people?.length > 0) {
+      _addDiscoveryResults(lastDiscovery.people, lastDiscovery.query);
+    }
   }
 
   // ─── Render Helpers ───

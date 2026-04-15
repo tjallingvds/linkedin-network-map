@@ -228,9 +228,31 @@ ${candidateContext || 'No matching candidates found.'}`;
   function setDiscoveryProgressCallback(fn) { _onDiscoveryProgress = fn; }
 
   // Last results for follow-up context
-  let _lastDiscoveryResults = null;
+  let _lastDiscoveryResults = _loadDiscoveryResults();
   let _lastBatchResults = null;
   let _lastQuery = null; // tracks the last meaningful search query
+
+  function _saveDiscoveryResults() {
+    try {
+      if (_lastDiscoveryResults) {
+        // Only save people array and query, skip huge context strings
+        const toSave = {
+          people: _lastDiscoveryResults.people?.slice(0, 100) || [],
+          query: _lastDiscoveryResults.query || '',
+        };
+        localStorage.setItem('discovery_results', JSON.stringify(toSave));
+      } else {
+        localStorage.removeItem('discovery_results');
+      }
+    } catch { /* ignore */ }
+  }
+
+  function _loadDiscoveryResults() {
+    try {
+      const saved = localStorage.getItem('discovery_results');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  }
 
 
 
@@ -668,6 +690,7 @@ ${enrichContext}`;
       } else {
         _lastDiscoveryResults = { people, query: baseQuery, peopleContext };
       }
+      _saveDiscoveryResults();
       _lastBatchResults = null;
 
       return {
@@ -713,20 +736,34 @@ ${enrichContext}`;
     });
     console.log(`After cleanup: ${cleaned.length}`);
 
-    // Step 3: Hard exclusion filter — only remove people at EXCLUDED firms/titles
+    // Step 3: Hard filter — exclude banned firms/titles AND require target firm match
     let filtered = cleaned;
     if (_parsedBrief) {
       const exFirms = (_parsedBrief.excludeFirms || []).map(f => f.toLowerCase());
       const exTitles = (_parsedBrief.excludeTitles || []).map(t => t.toLowerCase());
       const exSeniority = (_parsedBrief.excludeSeniority || []).map(s => s.toLowerCase());
+      const targetFirms = (_parsedBrief.firms || []).map(f => f.toLowerCase());
 
       const exFirmWords = exFirms.map(f => f.split(/[\s,&]+/).filter(w => w.length > 2));
+      const targetFirmWords = targetFirms.map(f => f.split(/[\s,&]+/).filter(w => w.length > 2));
 
       const companyMatchesExcluded = (company) => {
         if (!company) return false;
         const c = company.toLowerCase();
         if (exFirms.some(ef => c.includes(ef) || ef.includes(c))) return true;
         return exFirmWords.some(words => {
+          const matches = words.filter(w => c.includes(w));
+          return matches.length >= 2 || (words.length === 1 && matches.length === 1);
+        });
+      };
+
+      const companyMatchesTarget = (company) => {
+        if (!company) return false;
+        const c = company.toLowerCase();
+        // Direct substring match against target firms
+        if (targetFirms.some(tf => c.includes(tf) || tf.includes(c))) return true;
+        // Word overlap match
+        return targetFirmWords.some(words => {
           const matches = words.filter(w => c.includes(w));
           return matches.length >= 2 || (words.length === 1 && matches.length === 1);
         });
@@ -743,6 +780,9 @@ ${enrichContext}`;
 
         // Exclude if title matches an excluded title pattern
         if (exTitles.some(et => title.includes(et))) return false;
+
+        // Must be at a target firm (if target firms are specified)
+        if (targetFirms.length > 0 && !companyMatchesTarget(p.company)) return false;
 
         return true;
       });
@@ -973,7 +1013,10 @@ STYLE:
     return NetworkSearch.search(query, _allData, 8);
   }
 
-  function clearHistory() { _messages = []; _saveMessages(); }
+  function clearHistory() {
+    _messages = []; _saveMessages();
+    _lastDiscoveryResults = null; _saveDiscoveryResults();
+  }
   function getMessages() { return _messages; }
   function getData() { return _allData; }
 
@@ -1082,15 +1125,26 @@ Return ONLY the JSON object.`,
     if (parsed && parsed.firms?.length > 0) {
       console.log('Parsed brief:', parsed);
       _parsedBrief = parsed;
+
+      // Build a short, structured extraction context (not the full 3000-char brief)
+      let extractCtx = '';
+      if (parsed.context) extractCtx += `LOOKING FOR: ${parsed.context}\n`;
+      extractCtx += `TARGET FIRMS (only extract people at these): ${parsed.firms.join(', ')}\n`;
+      if (parsed.titles?.length) extractCtx += `TARGET TITLES: ${parsed.titles.join(', ')}\n`;
+      if (parsed.excludeFirms?.length) extractCtx += `EXCLUDE firms: ${parsed.excludeFirms.join(', ')}\n`;
+      if (parsed.excludeSeniority?.length) extractCtx += `EXCLUDE seniority: ${parsed.excludeSeniority.join(', ')}\n`;
+
+      return _handleDiscovery(query, query, targetCount, extractCtx);
     } else {
       _parsedBrief = null;
     }
 
-    // Pass the FULL brief directly — let the AI generate good search queries from it
     return _handleDiscovery(query, query, targetCount);
   }
 
   let _parsedBrief = null;
+
+  function getLastDiscovery() { return _lastDiscoveryResults; }
 
   return {
     buildNetworkSummary,
@@ -1099,6 +1153,7 @@ Return ONLY the JSON object.`,
     localSearch,
     clearHistory,
     getMessages,
+    getLastDiscovery,
     getData,
     formatResponse,
     setEnrichProgressCallback,

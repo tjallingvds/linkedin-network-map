@@ -437,18 +437,17 @@ Return ONLY a JSON array of strings.`,
     const extractionPromises = chunks.map(async (chunk) => {
       const context = chunk.map(r => `[${r.title}] (${r.url})\n${r.content}`).join('\n\n---\n\n');
       try {
-        const briefContext = query.length > 100 ? query.slice(0, 1500) : '';
         const { text } = await AIProvider.aiCall(
-          `Extract all real people from these search results. We need ~${targetCount} people total so extract as many as you can find.
-${briefContext ? `\nSEARCH BRIEF:\n${briefContext}\n` : ''}
+          `Extract people from these search results. We need ~${targetCount} people total.
+${extractionHint ? `\n${extractionHint}\n` : ''}
 Return a JSON array:
 [{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"linkedin.com/in/ URL or empty","context":"Why relevant","source":"URL"}]
 
 Rules:
 - Full first AND last name required (skip "John S." or initials-only)
-- Extract EVERY person you can identify — we need volume, filtering happens later
-- Prioritize people with LinkedIn profile URLs (linkedin.com/in/...)
-- For linkedin field, extract the exact linkedin.com/in/ URL from the search result
+${extractionHint ? '- ONLY extract people at the TARGET FIRMS listed above — skip everyone else' : '- Extract every person you can identify'}
+- ONLY extract from linkedin.com URLs — skip news articles, blog posts, press releases
+- For linkedin field, extract the exact linkedin.com/in/ URL
 - Return ONLY the JSON array`,
           context,
           { temperature: 0.1, maxTokens: 4000 },
