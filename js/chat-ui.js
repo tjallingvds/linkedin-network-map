@@ -202,8 +202,13 @@ const ChatUI = (() => {
       _showTyping(false);
       _hideEnrichProgress();
 
-      // Show AI text response — inject web search form if no matches
-      let formattedText = _formatMarkdown(Chat.formatResponse(result.text, _data));
+      // Show AI text response — but only the summary line if discovery results will show cards
+      let displayText = result.text;
+      if (result.discovered && result.people?.length > 0) {
+        // Only show the summary line, cards handle the rest
+        displayText = displayText.split('\n')[0];
+      }
+      let formattedText = _formatMarkdown(Chat.formatResponse(displayText, _data));
       if (Enricher.isConfigured()) {
         formattedText = formattedText.replace(
           /(?:Try asking me to )?search (?:on )?the internet\.?/gi,
@@ -238,7 +243,7 @@ const ChatUI = (() => {
         });
       });
 
-      // Then show rich cards below the text
+      // Show rich cards — cards ONLY, no duplicate text
       if (result.enriched && result.profile && result.person) {
         _addEnrichedProfile(result.person, result.profile);
       }
@@ -249,13 +254,16 @@ const ChatUI = (() => {
         _addDiscoveryResults(result.people, result.query);
       }
 
-      // Auto-render cards for people mentioned in text — but only if the formatted
-      // response doesn't already contain person chips (avoids duplicate text + cards)
+      // For non-discovery results: render cards for people mentioned in text
       if (!result.enriched && !result.discovered) {
-        const formattedHtml = Chat.formatResponse(result.text, _data);
-        const hasChips = formattedHtml.includes('person-chip');
-        if (!hasChips) {
-          _addMentionedPeopleCards(result.text);
+        const cardsRendered = _addMentionedPeopleCards(result.text);
+        // If cards were rendered, trim the text to just the summary line
+        if (cardsRendered) {
+          const lastMsg = container.querySelector('.chat-page-msg.assistant:last-of-type');
+          if (lastMsg) {
+            const firstLine = result.text.split('\n')[0];
+            lastMsg.innerHTML = _formatMarkdown(Chat.formatResponse(firstLine, _data));
+          }
         }
       }
       _updateTokenCounter();
@@ -282,7 +290,12 @@ const ChatUI = (() => {
     _showTyping(false);
     _hideEnrichProgress();
 
-    _addMessage('assistant', _formatMarkdown(Chat.formatResponse(result.text, _data)), true);
+    // Show only summary line when cards will be rendered
+    let displayText = result.text;
+    if (result.discovered && result.people?.length > 0) {
+      displayText = displayText.split('\n')[0];
+    }
+    _addMessage('assistant', _formatMarkdown(Chat.formatResponse(displayText, _data)), true);
     if (result.discovered && result.people?.length > 0) {
       _addDiscoveryResults(result.people, result.query);
     }
@@ -433,7 +446,7 @@ const ChatUI = (() => {
    * Matches network connections AND parses discovered people from the text.
    */
   function _addMentionedPeopleCards(rawText) {
-    if (!rawText) return;
+    if (!rawText) return false;
 
     // Extract all bold names
     const nameMatches = [];
@@ -443,7 +456,7 @@ const ChatUI = (() => {
       nameMatches.push(m[1].trim());
     }
 
-    if (!nameMatches.length) return;
+    if (!nameMatches.length) return false;
 
     // Match to network data
     const networkMatched = [];
@@ -495,13 +508,14 @@ const ChatUI = (() => {
       }
     }
 
+    const hasCards = networkMatched.length > 0 || discoveredPeople.length > 0;
     if (networkMatched.length > 0) {
       _addPersonCards(networkMatched);
     }
-    // Render cards for non-network people mentioned in the AI response
     if (discoveredPeople.length > 0) {
       _addDiscoveryResults(discoveredPeople, '');
     }
+    return hasCards;
   }
 
   function _addPersonCards(results) {
