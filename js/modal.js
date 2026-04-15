@@ -10,11 +10,20 @@ const Modal = (() => {
   function show(onComplete) {
     _onComplete = onComplete;
     const saved = _loadSaved();
+    const hasCSV = !!localStorage.getItem('connections_csv');
+
     if (saved) {
       AIProvider.configure(saved.provider, saved.key);
       Categorizer.enableAI();
       const tavilyKey = _loadTavilyKey();
       if (tavilyKey) Enricher.configure(tavilyKey);
+
+      // If API keys saved but no CSV yet, show settings so user can upload
+      if (!hasCSV) {
+        _render();
+        return;
+      }
+
       if (_onComplete) _onComplete(true);
       return;
     }

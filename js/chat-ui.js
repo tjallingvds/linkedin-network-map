@@ -834,6 +834,11 @@ const ChatUI = (() => {
     Chat.buildNetworkSummary(data);
     _updateAIStatus();
     _updateClassifyBtn();
+    // Update welcome message if still showing
+    const welcome = document.querySelector('.chat-page-welcome p');
+    if (welcome) {
+      welcome.textContent = `Search your ${_data.length.toLocaleString()} connections or find new people on the web.`;
+    }
     const sub = document.getElementById('chatPageSub');
     if (sub) {
       const p = AIProvider.getProvider();

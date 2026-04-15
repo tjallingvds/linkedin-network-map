@@ -1097,34 +1097,13 @@ function loadCSV() {
         _saveCSVToStorage(text);
         initApp(data);
       } else {
-        console.error('No data parsed from Connections.csv');
+        // No data in file — start empty, settings modal handles CSV upload
+        initApp([]);
       }
     })
     .catch(() => {
-      // 3. Show file picker with skip option
-      const overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
-      const box = document.createElement('div');
-      box.style.cssText = 'background:#fff;padding:32px;border-radius:16px;text-align:center;font-family:Inter,sans-serif;max-width:420px;';
-      box.innerHTML = '<h2 style="margin-bottom:12px;font-size:18px;">Load Connections</h2>' +
-        '<p style="margin-bottom:20px;color:#6B6B5E;font-size:14px;">Select your <strong>Connections.csv</strong> file from LinkedIn, or skip to use web discovery only.</p>' +
-        '<input type="file" id="csvPicker" accept=".csv" style="display:none">' +
-        '<div style="display:flex;gap:10px;justify-content:center;">' +
-        '<label for="csvPicker" style="display:inline-block;padding:10px 24px;background:#191918;color:#fff;border-radius:10px;cursor:pointer;font-size:14px;font-weight:500;">Choose CSV file</label>' +
-        '<button id="csvSkip" style="padding:10px 24px;background:transparent;color:#6B6B5E;border:1px solid #ddd;border-radius:10px;cursor:pointer;font-size:14px;">Skip</button>' +
-        '</div>';
-      overlay.appendChild(box);
-      document.body.appendChild(overlay);
-      document.getElementById('csvPicker').addEventListener('change', function(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-        overlay.remove();
-        loadCSVFromFile(file);
-      });
-      document.getElementById('csvSkip').addEventListener('click', function() {
-        overlay.remove();
-        initApp([]);
-      });
+      // No CSV file found — start empty, settings modal handles CSV upload
+      initApp([]);
     });
 }
 loadCSV();
