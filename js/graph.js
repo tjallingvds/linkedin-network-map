@@ -423,6 +423,8 @@ function simulateForces(iterations) {
 
 function animate() {
   animFrame = requestAnimationFrame(animate);
+  // Skip rendering when graph isn't visible — saves GPU and prevents flicker
+  if (activeView !== 'graph') return;
   if (!renderer || !scene || !camera) return;
   controls.update();
   nodeMeshes.forEach((mesh, i) => {
