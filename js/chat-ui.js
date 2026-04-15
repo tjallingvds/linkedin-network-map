@@ -19,12 +19,17 @@ const ChatUI = (() => {
     _updateClassifyBtn();
     _renderAIStatus();
 
-    // Restore previous chat messages or show welcome
-    const savedMessages = Chat.getMessages();
-    if (savedMessages.length > 0) {
-      _restoreSavedMessages(savedMessages);
+    // Restore the last active chat session or show welcome
+    if (_activeChatId) {
+      _switchToChat(_activeChatId);
     } else {
-      _renderWelcome();
+      // Check if there's a recent unfinished chat
+      const lastChat = _chatHistory[_chatHistory.length - 1];
+      if (lastChat && !lastChat.done) {
+        _switchToChat(lastChat.id);
+      } else {
+        _renderWelcome();
+      }
     }
     _renderChatHistory();
 
@@ -254,6 +259,8 @@ const ChatUI = (() => {
         }
       }
       _updateTokenCounter();
+      // Save session after each response
+      if (_activeChatId) _saveChatSession(_activeChatId);
     } else {
       // Local search
       const results = Chat.localSearch(msg);
@@ -280,6 +287,7 @@ const ChatUI = (() => {
       _addDiscoveryResults(result.people, result.query);
     }
     _updateTokenCounter();
+    if (_activeChatId) _saveChatSession(_activeChatId);
   }
 
   function sendSuggestion(text) {
@@ -302,12 +310,6 @@ const ChatUI = (() => {
       } else if (msg.role === 'assistant') {
         _addMessage('assistant', _formatMarkdown(Chat.formatResponse(msg.content, _data)), true);
       }
-    }
-
-    // Restore discovery cards if we have saved results
-    const lastDiscovery = Chat.getLastDiscovery();
-    if (lastDiscovery?.people?.length > 0) {
-      _addDiscoveryResults(lastDiscovery.people, lastDiscovery.query);
     }
   }
 
@@ -855,8 +857,11 @@ const ChatUI = (() => {
     }
   }
 
-  // ─── Past Chats ───
+  // ─── Past Chats (multi-session) ───
   let _chatHistory = _loadChatHistory();
+  let _activeChatId = _chatHistory.find(c => !c.done)?.id || null;
+
+  function _genChatId() { return 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6); }
 
   function _saveChatHistory() {
     try { localStorage.setItem('chat_history', JSON.stringify(_chatHistory.slice(-20))); }
@@ -870,18 +875,71 @@ const ChatUI = (() => {
     } catch { return []; }
   }
 
+  function _saveChatSession(chatId) {
+    // Save current messages + discovery results under this chat ID
+    try {
+      const session = {
+        messages: Chat.getMessages(),
+        discovery: Chat.getLastDiscovery(),
+      };
+      localStorage.setItem('chat_session_' + chatId, JSON.stringify(session));
+    } catch { /* ignore */ }
+  }
+
+  function _loadChatSession(chatId) {
+    try {
+      const saved = localStorage.getItem('chat_session_' + chatId);
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  }
+
   function _addToChatHistory(msg) {
-    // Add first user message as a chat session title
-    if (!_chatHistory.length || _chatHistory[_chatHistory.length - 1].done) {
-      _chatHistory.push({ title: msg.slice(0, 50), time: Date.now(), done: false });
+    // Create new session on first message or after previous was marked done
+    if (!_activeChatId || !_chatHistory.length || _chatHistory[_chatHistory.length - 1].done) {
+      const id = _genChatId();
+      _chatHistory.push({ id, title: msg.slice(0, 50), time: Date.now(), done: false });
+      _activeChatId = id;
     }
     _saveChatHistory();
+    _saveChatSession(_activeChatId);
     _renderChatHistory();
   }
 
   function _markChatDone() {
     if (_chatHistory.length) _chatHistory[_chatHistory.length - 1].done = true;
+    if (_activeChatId) _saveChatSession(_activeChatId);
     _saveChatHistory();
+  }
+
+  function _switchToChat(chatId) {
+    // Save current chat first
+    if (_activeChatId) _saveChatSession(_activeChatId);
+
+    // Load the target session
+    const session = _loadChatSession(chatId);
+    _activeChatId = chatId;
+
+    // Clear UI
+    const container = document.getElementById('chatPageMessages');
+    if (container) container.innerHTML = '';
+
+    // Restore chat state
+    Chat.clearHistory();
+    if (session?.messages) {
+      // Rebuild _messages in Chat module
+      for (const msg of session.messages) {
+        Chat.getMessages().push(msg);
+      }
+      _restoreSavedMessages(session.messages);
+    }
+    // Restore discovery cards
+    if (session?.discovery?.people?.length > 0) {
+      // Need to set this in Chat module too — use discover results setter
+      // For now just render cards
+      _addDiscoveryResults(session.discovery.people, session.discovery.query);
+    }
+
+    _renderChatHistory();
   }
 
   function _renderChatHistory() {
@@ -889,21 +947,25 @@ const ChatUI = (() => {
     if (!container) return;
     container.innerHTML = '';
 
-    // Show most recent first, max 10
     const recent = [..._chatHistory].reverse().slice(0, 10);
     recent.forEach(chat => {
       const item = document.createElement('div');
-      item.className = 'sidebar-chat-item';
+      item.className = `sidebar-chat-item${chat.id === _activeChatId ? ' active' : ''}`;
       item.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        <span>${chat.title}</span>
+        <span>${_esc(chat.title)}</span>
       `;
+      item.addEventListener('click', () => {
+        if (chat.id !== _activeChatId) _switchToChat(chat.id);
+      });
       container.appendChild(item);
     });
   }
 
   function _newChat() {
     _markChatDone();
+    if (_activeChatId) _saveChatSession(_activeChatId);
+    _activeChatId = null;
     Chat.clearHistory();
     const container = document.getElementById('chatPageMessages');
     if (container) container.innerHTML = '';
