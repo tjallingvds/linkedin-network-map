@@ -346,27 +346,31 @@ Rules:
     // Generate search queries from the full brief/query — one AI call
     const numQueries = Math.min(Math.max(Math.ceil(targetCount / 2), 10), 30);
 
+    // Pass the full brief as user message, but inject structured filters into the system prompt
     const { text: queryText } = await AIProvider.aiCall(
-      `You are an expert recruiter sourcing people on LinkedIn. The user wants to find approximately ${targetCount} people. Generate ${numQueries} search queries that together should surface at least ${targetCount} candidates.
+      `You generate LinkedIn search queries to find specific people. Generate exactly ${numQueries} queries from the research brief below.
 
-TARGET: ~${targetCount} people total. Each query should find 3-10 people, so you need ${numQueries} diverse queries to hit the target.
+${extractionHint ? `STRUCTURED FILTERS (use these exact firms, titles, and exclusions):\n${extractionHint}\n` : ''}
+QUERY FORMAT — every query MUST name a specific company from the brief:
+  GOOD: "COO Houlihan Lokey"
+  GOOD: "Head of AI Evercore OR Moelis OR PJT Partners"
+  GOOD: "Chief Data Officer Lazard"
+  GOOD: "Raymond James Head of AI strategy"
+  BAD:  "AI leaders investment banking" (no company name — finds articles, not people)
+  BAD:  "mid-market bank COO" (no company name — too vague)
+  BAD:  "digital transformation financial services" (finds thought leadership, not profiles)
 
-${targetCount <= 15 ? `SMALL SEARCH (${targetCount} people): Use narrow, precise queries — one company + one title per query. Quality over quantity.
-Examples: "COO Houlihan Lokey", "Chief Data Officer Lazard"` :
-targetCount <= 40 ? `MEDIUM SEARCH (${targetCount} people): Mix precise and grouped queries. Some single-company, some grouped.
-Examples: "COO Houlihan Lokey OR Lazard", "Chief Data Officer boutique investment bank"` :
-`LARGE SEARCH (${targetCount} people): Use broad, high-yield queries. Group multiple companies with OR. Use industry-level sweeps.
-Examples: "COO investment banking Houlihan Lokey OR Lazard OR Evercore OR Moelis", "Chief Data Officer mid-market bank", "Jefferies OR Piper Sandler OR William Blair technology leadership"`}
-
-RULES:
-- Read the brief carefully — use the EXACT company names and job titles it mentions
-- Do NOT query for companies the brief EXCLUDES
-- Cover different titles and different company groups across queries
-- Each query: 3-15 words
+STRATEGY for ${numQueries} queries:
+- Read the full brief to understand WHO we're looking for and WHY
+- Pair each target firm with 1-2 target titles from the brief
+- Group 2-3 similar firms with OR for broader coverage
+- Every query must contain at least one specific company name from the brief
+- Vary the title across queries so you don't search the same role 20 times
+- Do NOT generate queries for any EXCLUDED firms listed in the brief or filters above
 
 Return ONLY a JSON array of strings.`,
       query,
-      { temperature: 0.4, maxTokens: 2000 },
+      { temperature: 0.3, maxTokens: 2000 },
     );
 
     let searchQueries;
@@ -573,23 +577,25 @@ Rules: Full first AND last name required. Do NOT pad results — if only 3 quali
     }
 
     // Normal search: AI-driven tool calling
-    const systemPrompt = `You find real professionals by searching the web. Read the user's search brief carefully.
-
+    const hintSection = extractionHint ? `\nSTRUCTURED FILTERS:\n${extractionHint}\n` : '';
+    const systemPrompt = `You find real professionals by searching the web. Read the user's full research brief to understand who they're looking for.
+${hintSection}
 Use the web_search tool to find people. Make 4-5 searches. Each search MUST use search_depth "advanced" and max_results 10.
 
-SEARCH STRATEGY — maximize people found per search:
-- Group related companies with OR: "COO Houlihan Lokey OR Lazard OR Evercore"
-- Group related titles for one firm: "Jefferies COO OR CTO OR Chief Data Officer"
-- Use industry sweeps: "COO boutique investment bank"
+SEARCH STRATEGY — every query MUST name a specific company from the brief:
+- GOOD: "COO Houlihan Lokey", "Head of AI Evercore OR Moelis"
+- BAD: "AI leaders investment banking" (no company → finds articles)
+- BAD: "mid-market bank transformation" (too vague → finds thought pieces)
 - Include "LinkedIn" in queries to find profile pages
-- Read the brief for specific companies and titles — use them
-- Do NOT search for companies the brief EXCLUDES
+- Use the EXACT firm names and titles from the brief and filters above
+- Do NOT search for EXCLUDED firms
 
 After searching, return a JSON array of people found:
-[{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"LinkedIn URL or empty","context":"Why relevant","source":"Source URL"}]
+[{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"LinkedIn URL or empty","evidence":"Why they qualify","confidence":"high|medium|low","source":"Source URL"}]
 
 Rules:
 - Full first AND last name required. Skip "John S." or initials.
+- Only include people whose CURRENT employer is a target firm
 - Deduplicate by name
 - Return ONLY the JSON array`;
 
