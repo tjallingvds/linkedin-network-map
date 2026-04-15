@@ -653,22 +653,19 @@ ${enrichContext}`;
       // AI relevance filter — dedupe and remove clearly irrelevant results
       const filteredPeople = await _filterDiscoveryResults(result.people, query);
 
-      // Mark people who are in the network
-      const people = filteredPeople.map(p => ({
-        ...p,
-        inNetwork: isInNetwork(p.name),
-      }));
+      // Mark people who are in the network, remove low confidence, sort high first
+      let people = filteredPeople
+        .map(p => ({ ...p, inNetwork: isInNetwork(p.name) }))
+        .filter(p => p.confidence !== 'low');
+
+      const confOrder = { high: 0, medium: 1 };
+      people.sort((a, b) => (confOrder[a.confidence] ?? 1) - (confOrder[b.confidence] ?? 1));
 
       if (!people.length) {
         const text = `Searched the web but didn't find anyone clearly relevant. Try being more specific.`;
         _pushMessage('assistant', text);
         return { text, tokensUsed: 0 };
       }
-
-      // Remove low confidence, sort high first
-      people = people.filter(p => p.confidence !== 'low');
-      const confOrder = { high: 0, medium: 1 };
-      people.sort((a, b) => (confOrder[a.confidence] ?? 1) - (confOrder[b.confidence] ?? 1));
 
       // Short summary — cards do the real work
       const peopleContext = people.map(p =>
