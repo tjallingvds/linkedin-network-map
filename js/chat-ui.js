@@ -743,13 +743,16 @@ const ChatUI = (() => {
       const initials = p.name.split(' ').map(w => w[0] || '').join('').slice(0, 2).toUpperCase();
       const color = p.inNetwork ? '#4A8F72' : avatarColors[i % avatarColors.length];
 
+      const confidenceColor = { high: '#4A8F72', medium: '#C4953A', low: '#C0785C' }[p.confidence] || '';
+      const evidenceText = p.evidence || p.context || '';
+
       card.innerHTML = `
         <div class="disc-card-row">
           <div class="disc-card-avatar" style="background:${color}">${initials}</div>
           <div class="disc-card-body">
-            <div class="disc-card-name">${_esc(p.name)}${p.inNetwork ? '<span class="disc-network-tag">In network</span>' : ''}</div>
+            <div class="disc-card-name">${_esc(p.name)}${p.inNetwork ? '<span class="disc-network-tag">In network</span>' : ''}${p.confidence ? `<span class="disc-confidence-tag" style="color:${confidenceColor}">${_esc(p.confidence)}</span>` : ''}</div>
             <div class="disc-card-role">${_esc(p.title || '')}${p.company ? ` at ${_esc(p.company)}` : ''}</div>
-            ${p.context ? `<div class="disc-card-context">${_esc(p.context)}</div>` : ''}
+            ${evidenceText ? `<div class="disc-card-context">${_esc(evidenceText)}</div>` : ''}
           </div>
           <div class="disc-card-links">
             ${p.linkedin ? `<a href="${_esc(p.linkedin)}" target="_blank" class="disc-link" title="LinkedIn">

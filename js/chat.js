@@ -671,8 +671,10 @@ ${enrichContext}`;
       ).join('\n');
 
       const networkCount = people.filter(p => p.inNetwork).length;
-      const networkNote = networkCount > 0 ? ` (${networkCount} in your network)` : '';
-      const text = `Found ${people.length} people${networkNote}.`;
+      const highConf = people.filter(p => p.confidence === 'high').length;
+      const networkNote = networkCount > 0 ? `, ${networkCount} in your network` : '';
+      const confNote = highConf > 0 ? `, ${highConf} high confidence` : '';
+      const text = `${people.length} qualified leads found${confNote}${networkNote}.`;
       const tokensUsed = 0;
 
       _pushMessage('assistant', text + '\n' + peopleContext);

@@ -433,24 +433,31 @@ Return ONLY a JSON array of strings.`,
       chunks.push(unique.slice(i, i + CHUNK_SIZE));
     }
 
-    // Process chunks in parallel
+    // Process chunks in parallel — using lead qualification approach
     const extractionPromises = chunks.map(async (chunk) => {
       const context = chunk.map(r => `[${r.title}] (${r.url})\n${r.content}`).join('\n\n---\n\n');
       try {
         const { text } = await AIProvider.aiCall(
-          `Extract people from these search results. We need ~${targetCount} people total.
-${extractionHint ? `\n${extractionHint}\n` : ''}
-Return a JSON array:
-[{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"linkedin.com/in/ URL or empty","context":"Why relevant","source":"URL"}]
+          `You are a lead qualification filter, not a search engine. Your job is to extract ONLY candidates that pass mandatory filters, with evidence for each.
 
-Rules:
-- Full first AND last name required (skip "John S." or initials-only)
-${extractionHint ? '- ONLY extract people at the TARGET FIRMS listed above — skip everyone else' : '- Extract every person you can identify'}
-- ONLY extract from linkedin.com URLs — skip news articles, blog posts, press releases
-- For linkedin field, extract the exact linkedin.com/in/ URL
-- Return ONLY the JSON array`,
+${extractionHint ? extractionHint + '\n' : ''}MANDATORY FILTERS — every candidate must pass ALL of these:
+1. FULL NAME: Must have a real first AND last name (skip initials, abbreviations, "John S.")
+2. CURRENT EMPLOYER: Must be verifiable from the search result. ${extractionHint ? 'Must match a TARGET FIRM listed above.' : ''}
+3. CURRENT TITLE: Must be a real title from their LinkedIn profile, not inferred from article context
+4. LINKEDIN PROFILE: Strongly prefer candidates with a linkedin.com/in/ URL in the search result
+
+FAILURE MODES TO AVOID:
+- CLUSTER HARVESTING: If an article mentions 5 people at an event, do NOT extract all 5. Each person must independently pass the filters.
+- KEYWORD CONFLATION: A profile mentioning "AI" at a "bank" is NOT automatically qualified. Check the actual title and actual employer.
+- ARTICLE AUTHORS/COMMENTERS: Someone who wrote an article about AI in banking is NOT a lead. Only extract people who ARE the target persona, not people who WRITE ABOUT the target persona.
+- STALE DATA: If the source is old, the person may have moved on. Note uncertainty.
+
+Return a JSON array of ONLY qualified candidates:
+[{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Specific reason they pass the filters","confidence":"high|medium|low","source":"URL"}]
+
+Do NOT pad results. If only 2 people qualify from these results, return 2. Return ONLY the JSON array.`,
           context,
-          { temperature: 0.1, maxTokens: 4000 },
+          { temperature: 0.05, maxTokens: 4000 },
         );
         const m = text.match(/\[[\s\S]*\]/);
         return m ? JSON.parse(m[0]) : [];
@@ -518,16 +525,18 @@ ${extractionHint ? '- ONLY extract people at the TARGET FIRMS listed above — s
     const seen = new Set();
     const unique = allResults.filter(r => { if (seen.has(r.url)) return false; seen.add(r.url); return true; });
 
-    // Extract people with AI — higher token limit for large searches
+    // Extract people using lead qualification filter
     const context = unique.map(r => `[${r.title}] (${r.url})\n${r.content}`).join('\n\n---\n\n');
     const { text: extractText } = await AIProvider.aiCall(
-      `Extract people from these search results who are relevant to: "${query.slice(0, 300)}". Be strict — only include people who clearly match.
+      `You are a lead qualification filter. Extract ONLY candidates whose current employer and title clearly match the search criteria. Do NOT extract article authors, event attendees, or commenters unless they ARE the target persona.
 
-Return a JSON array: [{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"linkedin.com URL or empty","context":"Why relevant","source":"URL"}]
+Search: "${query.slice(0, 300)}"
 
-Rules: Full first AND last name required. Skip anyone without a clear match to the search criteria. Return ONLY the JSON array.`,
+Return a JSON array: [{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Why they qualify","confidence":"high|medium|low","source":"URL"}]
+
+Rules: Full first AND last name required. Do NOT pad results — if only 3 qualify, return 3. Return ONLY the JSON array.`,
       context,
-      { temperature: 0.1, maxTokens: isLarge ? 8000 : 3000 },
+      { temperature: 0.05, maxTokens: isLarge ? 8000 : 3000 },
     );
 
     try {
