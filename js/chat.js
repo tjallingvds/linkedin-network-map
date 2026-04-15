@@ -665,6 +665,11 @@ ${enrichContext}`;
         return { text, tokensUsed: 0 };
       }
 
+      // Remove low confidence, sort high first
+      people = people.filter(p => p.confidence !== 'low');
+      const confOrder = { high: 0, medium: 1 };
+      people.sort((a, b) => (confOrder[a.confidence] ?? 1) - (confOrder[b.confidence] ?? 1));
+
       // Short summary — cards do the real work
       const peopleContext = people.map(p =>
         `- ${p.name} — ${p.title} at ${p.company}${p.inNetwork ? ' [IN YOUR NETWORK]' : ''}${p.context ? ' (' + p.context + ')' : ''}`

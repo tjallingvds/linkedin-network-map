@@ -98,22 +98,24 @@
 @keyframes pmPulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 
 .pm-enrich-prompt {
-  text-align: center; padding: 24px 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 24px 20px; gap: 12px;
 }
 .pm-enrich-text {
-  font-size: 13px; color: var(--text3); margin: 0 0 12px;
+  font-size: 13px; color: var(--text3); margin: 0;
 }
 .pm-enrich-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 16px; border-radius: 8px;
-  background: var(--surface2); border: 1px solid var(--border);
-  color: var(--text2); font-size: 13px; cursor: pointer;
-  transition: all 0.12s;
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; white-space: nowrap;
+  padding: 9px 20px; border-radius: 8px;
+  background: var(--text); border: none;
+  color: var(--surface); font-size: 13px; font-weight: 500;
+  cursor: pointer; transition: opacity 0.12s;
+  font-family: inherit;
 }
-.pm-enrich-btn:hover {
-  background: var(--surface); border-color: var(--text3);
-  color: var(--text1);
-}
+.pm-enrich-btn:hover { opacity: 0.85; }
+.pm-enrich-btn:disabled { opacity: 0.5; cursor: default; }
+.pm-enrich-btn svg { flex-shrink: 0; }
 
 .pm-bio-section { margin-bottom: 16px; }
 .pm-bio { font-size: 13px; color: var(--text2); line-height: 1.6; }

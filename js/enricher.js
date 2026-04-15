@@ -456,10 +456,15 @@ FAILURE MODES TO AVOID:
 - ARTICLE AUTHORS/COMMENTERS: Someone who wrote an article about AI in banking is NOT a lead. Only extract people who ARE the target persona, not people who WRITE ABOUT the target persona.
 - STALE DATA: If the source is old, the person may have moved on. Note uncertainty.
 
-Return a JSON array of ONLY qualified candidates:
-[{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Specific reason they pass the filters","confidence":"high|medium|low","source":"URL"}]
+CONFIDENCE SCORING — be strict:
+- "high": Current employer is a target firm AND current title matches a target title AND you have a LinkedIn URL. All three verified.
+- "medium": Two of the three are verified, or employer/title are close but not exact matches.
+- Do NOT include anyone you'd rate below medium. If you're not at least moderately confident they match, exclude them entirely.
 
-Do NOT pad results. If only 2 people qualify from these results, return 2. Return ONLY the JSON array.`,
+Return a JSON array of ONLY qualified candidates (high or medium confidence):
+[{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Specific reason they pass the filters","confidence":"high|medium","source":"URL"}]
+
+Do NOT pad results. If only 2 people qualify, return 2. Return ONLY the JSON array.`,
           context,
           { temperature: 0.05, maxTokens: 4000 },
         );
@@ -536,7 +541,9 @@ Do NOT pad results. If only 2 people qualify from these results, return 2. Retur
 
 Search: "${query.slice(0, 300)}"
 
-Return a JSON array: [{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Why they qualify","confidence":"high|medium|low","source":"URL"}]
+Confidence: "high" = employer + title + LinkedIn URL all verified. "medium" = two of three verified. Do NOT include anyone below medium.
+
+Return a JSON array: [{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Why they qualify","confidence":"high|medium","source":"URL"}]
 
 Rules: Full first AND last name required. Do NOT pad results — if only 3 qualify, return 3. Return ONLY the JSON array.`,
       context,
@@ -591,7 +598,9 @@ SEARCH STRATEGY — every query MUST name a specific company from the brief:
 - Do NOT search for EXCLUDED firms
 
 After searching, return a JSON array of people found:
-[{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"LinkedIn URL or empty","evidence":"Why they qualify","confidence":"high|medium|low","source":"Source URL"}]
+[{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"LinkedIn URL or empty","evidence":"Why they qualify","confidence":"high|medium","source":"Source URL"}]
+
+Only return high or medium confidence. Exclude anyone you're not at least moderately confident about.
 
 Rules:
 - Full first AND last name required. Skip "John S." or initials.
