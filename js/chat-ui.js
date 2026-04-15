@@ -299,7 +299,7 @@ const ChatUI = (() => {
   /**
    * Restore saved messages from a previous session into the chat UI.
    */
-  function _restoreSavedMessages(messages) {
+  function _restoreSavedMessages(messages, hasDiscovery = false) {
     // Remove welcome screen
     const welcome = document.querySelector('.chat-page-welcome');
     if (welcome) welcome.remove();
@@ -308,7 +308,13 @@ const ChatUI = (() => {
       if (msg.role === 'user') {
         _addMessage('user', msg.content);
       } else if (msg.role === 'assistant') {
-        _addMessage('assistant', _formatMarkdown(Chat.formatResponse(msg.content, _data)), true);
+        let content = msg.content;
+        // If discovery cards will be rendered, strip the bullet-point people list
+        // from the message (keep only the summary line)
+        if (hasDiscovery && content.includes('\n- ')) {
+          content = content.split('\n- ')[0].trim();
+        }
+        _addMessage('assistant', _formatMarkdown(Chat.formatResponse(content, _data)), true);
       }
     }
   }
@@ -949,8 +955,13 @@ const ChatUI = (() => {
       for (const msg of session.messages) {
         Chat.getMessages().push(msg);
       }
-      // Only restore text messages — discovery cards are rendered inline as text
-      _restoreSavedMessages(session.messages);
+      const hasDisc = session.discovery?.people?.length > 0;
+      _restoreSavedMessages(session.messages, hasDisc);
+
+      // Restore discovery cards below the messages
+      if (hasDisc) {
+        _addDiscoveryResults(session.discovery.people, session.discovery.query);
+      }
     } else {
       // No saved session data — show welcome
       _renderWelcome();
