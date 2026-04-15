@@ -340,7 +340,7 @@ Rules:
    * fires them ALL at Tavily simultaneously, then extracts people.
    * Can handle 50-100+ results.
    */
-  async function _parallelDiscovery(query, targetCount = 50, onProgress) {
+  async function _parallelDiscovery(query, targetCount = 50, onProgress, extractionHint = '') {
     // Check if query already contains pre-split search queries (one per line)
     const preSplitQueries = query.split('\n').map(q => q.trim()).filter(q => q.length > 5);
     const hasPreSplit = preSplitQueries.length >= 3 && preSplitQueries.every(q => q.length < 100);
@@ -354,9 +354,12 @@ Rules:
 
       if (numExtra > 0) {
         try {
+          const variationContext = extractionHint
+            ? `\nCONTEXT:${extractionHint}\n\nExisting queries:\n${preSplitQueries.join('\n')}`
+            : preSplitQueries.join('\n');
           const { text: extraText } = await AIProvider.aiCall(
-            `Given these existing LinkedIn search queries, generate ${Math.ceil(numExtra)} MORE queries that target the SAME firms but with DIFFERENT title variations or synonyms. Keep the same specificity level. Return ONLY a JSON array.`,
-            preSplitQueries.join('\n'),
+            `Given these existing LinkedIn search queries, generate ${Math.ceil(numExtra)} MORE queries that target the SAME firms but with DIFFERENT title variations or synonyms. Use site:linkedin.com. Keep the same specificity level. Return ONLY a JSON array.`,
+            variationContext,
             { temperature: 0.4, maxTokens: 800 },
           );
           const m = extraText.match(/\[[\s\S]*\]/);
@@ -366,16 +369,20 @@ Rules:
     } else {
       // Generate queries from scratch
       const numQueries = Math.min(Math.max(Math.ceil(targetCount / 3), 8), 30);
+      const queryContext = extractionHint
+        ? `${extractionHint}\n\nUser request:\n${query}`
+        : query;
       const { text: queryText } = await AIProvider.aiCall(
-        `You generate web search queries to find real professionals. Given a user's request, create ${numQueries} diverse search queries.
+        `You generate web search queries to find real professionals. Create ${numQueries} diverse search queries.
 
 RULES:
 - Each query should find DIFFERENT people (vary job titles, companies, regions, seniority levels)
-- Include "LinkedIn" in most queries
-- Use SPECIFIC company names and job titles from the request — do NOT generalize
-- Include variations: different synonyms for the role, different companies in the space
+- Use site:linkedin.com in most queries to find actual LinkedIn profiles
+- Use SPECIFIC company names and job titles — do NOT generalize
+- If context above lists target firms and titles, use those EXACT firms and titles in your queries
+- If context above lists exclusions, do NOT generate queries for excluded firms
 - Return a JSON array of strings. ONLY the JSON array.`,
-        query,
+        queryContext,
         { temperature: 0.5, maxTokens: 1500 },
       );
 
@@ -439,14 +446,18 @@ RULES:
     const extractionPromises = chunks.map(async (chunk) => {
       const context = chunk.map(r => `[${r.title}] (${r.url})\n${r.content}`).join('\n\n---\n\n');
       try {
+        const hintBlock = extractionHint || `\n- Only people relevant to: "${query.slice(0, 200)}"`;
         const { text } = await AIProvider.aiCall(
-          `Extract ALL real people from these search results. Return a JSON array:
-[{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"URL or empty","context":"Why relevant","source":"URL"}]
+          `Extract ONLY people who match ALL of these criteria from the search results. Be strict — skip anyone who doesn't clearly match.
+${hintBlock}
+
+Return a JSON array:
+[{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"URL or empty","context":"Why they match","source":"URL"}]
 
 Rules:
 - Full first AND last name required (skip "John S." or initials)
-- Only people relevant to: "${query}"
-- Extract EVERY person you can find
+- SKIP people who don't match the criteria above — do NOT extract everyone
+- LinkedIn URLs only (linkedin.com/in/...) — skip other URLs
 - Return ONLY the JSON array`,
           context,
           { temperature: 0.1, maxTokens: 4000 },
@@ -520,7 +531,11 @@ Rules:
     // Extract people with AI — higher token limit for large searches
     const context = unique.map(r => `[${r.title}] (${r.url})\n${r.content}`).join('\n\n---\n\n');
     const { text: extractText } = await AIProvider.aiCall(
-      `Extract ALL real people from these search results into a JSON array: [{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"URL or empty","context":"Why relevant","source":"URL"}]. Only include people relevant to: "${query}". Only include people with a full first AND last name (skip "John S." or initials-only). Extract as many people as possible — aim for ${targetCount}+. Return ONLY the JSON array.`,
+      `Extract people from these search results who are relevant to: "${query.slice(0, 300)}". Be strict — only include people who clearly match.
+
+Return a JSON array: [{"name":"Full Name","title":"Job Title","company":"Company","linkedin":"linkedin.com URL or empty","context":"Why relevant","source":"URL"}]
+
+Rules: Full first AND last name required. Skip anyone without a clear match to the search criteria. Return ONLY the JSON array.`,
       context,
       { temperature: 0.1, maxTokens: isLarge ? 8000 : 3000 },
     );
@@ -536,7 +551,7 @@ Rules:
    * Uses AI tool calling to let the model decide what and how to search.
    * Returns { people: [...], query, searchCount }
    */
-  async function discoverPeople(query, onProgress, targetCount = 15) {
+  async function discoverPeople(query, onProgress, targetCount = 15, extractionHint = '') {
     if (!_tavilyKey) throw new Error('Tavily API key not configured');
     if (!AIProvider.getProvider()) throw new Error('AI provider not configured');
 
@@ -546,7 +561,7 @@ Rules:
     // For large searches (20+), skip tool calling entirely and go straight to
     // parallel Tavily blitz — much faster and more results
     if (targetCount > 20) {
-      let people = await _parallelDiscovery(query, targetCount, onProgress);
+      let people = await _parallelDiscovery(query, targetCount, onProgress, extractionHint);
       const nameSet = new Set();
       const uniquePeople = people.filter(p => {
         if (!p.name) return false;
@@ -559,19 +574,22 @@ Rules:
     }
 
     // Normal search: AI-driven tool calling
+    const hintSection = extractionHint
+      ? `\nSEARCH CONTEXT:${extractionHint}\n\nUse the target firms and titles above to craft your search queries. Do NOT search for excluded firms or titles.\n`
+      : '';
     const systemPrompt = `You find real professionals by searching the web. You are excellent at crafting precise LinkedIn search queries.
-
+${hintSection}
 Use the web_search tool to find people. Make 4-5 searches. Each search MUST use search_depth "advanced" and max_results 10.
 
 SEARCH STRATEGY — craft queries that find ACTUAL PEOPLE, not articles:
-- Always include "LinkedIn" in at least 3 queries
+- Use site:linkedin.com in at least 3 queries
 - Use specific job titles, not vague terms
 - Include company/organization names when relevant
 - If the query contains multiple lines, each line is a separate search query — use them as-is
 - Example good queries:
-  - "COO Investment Banking Houlihan Lokey LinkedIn"
-  - "Chief Data Officer Lazard LinkedIn profile"
-  - "Head of AI Strategy Evercore LinkedIn"
+  - "COO Investment Banking Houlihan Lokey site:linkedin.com"
+  - "Chief Data Officer Lazard site:linkedin.com"
+  - "Head of AI Strategy Evercore site:linkedin.com"
 - Example BAD queries (too vague, finds articles not people):
   - "people in AI banking"
   - "management consultants AI"

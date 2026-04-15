@@ -1054,36 +1054,76 @@ document.getElementById('panelExpandBtn')?.addEventListener('click', () => {
 });
 
 // ─── Load CSV ───
+function _saveCSVToStorage(csvText) {
+  try { localStorage.setItem('connections_csv', csvText); }
+  catch (e) { console.warn('Failed to save CSV to localStorage:', e); }
+}
+
+function _loadCSVFromStorage() {
+  try { return localStorage.getItem('connections_csv') || null; }
+  catch { return null; }
+}
+
+function loadCSVFromFile(file, onDone) {
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    const text = ev.target.result;
+    const data = DataLoader.parseCSV(text);
+    if (data.length) {
+      _saveCSVToStorage(text);
+      if (onDone) onDone(data);
+      else initApp(data);
+    } else {
+      alert('No data found in CSV.');
+    }
+  };
+  reader.readAsText(file);
+}
+
 function loadCSV() {
+  // 1. Try localStorage first
+  const cached = _loadCSVFromStorage();
+  if (cached) {
+    const data = DataLoader.parseCSV(cached);
+    if (data.length) { initApp(data); return; }
+  }
+
+  // 2. Try fetching Connections.csv from server
   fetch('Connections.csv')
     .then(r => { if (r.ok) return r.text(); throw new Error('not found'); })
     .then(text => {
       const data = DataLoader.parseCSV(text);
-      if (data.length) initApp(data);
-      else console.error('No data parsed from Connections.csv');
+      if (data.length) {
+        _saveCSVToStorage(text);
+        initApp(data);
+      } else {
+        console.error('No data parsed from Connections.csv');
+      }
     })
     .catch(() => {
+      // 3. Show file picker with skip option
       const overlay = document.createElement('div');
       overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
       const box = document.createElement('div');
       box.style.cssText = 'background:#fff;padding:32px;border-radius:16px;text-align:center;font-family:Inter,sans-serif;max-width:420px;';
       box.innerHTML = '<h2 style="margin-bottom:12px;font-size:18px;">Load Connections</h2>' +
-        '<p style="margin-bottom:20px;color:#6B6B5E;font-size:14px;">Select your <strong>Connections.csv</strong> file from LinkedIn.</p>' +
+        '<p style="margin-bottom:20px;color:#6B6B5E;font-size:14px;">Select your <strong>Connections.csv</strong> file from LinkedIn, or skip to use web discovery only.</p>' +
         '<input type="file" id="csvPicker" accept=".csv" style="display:none">' +
-        '<label for="csvPicker" style="display:inline-block;padding:10px 24px;background:#191918;color:#fff;border-radius:10px;cursor:pointer;font-size:14px;font-weight:500;">Choose CSV file</label>';
+        '<div style="display:flex;gap:10px;justify-content:center;">' +
+        '<label for="csvPicker" style="display:inline-block;padding:10px 24px;background:#191918;color:#fff;border-radius:10px;cursor:pointer;font-size:14px;font-weight:500;">Choose CSV file</label>' +
+        '<button id="csvSkip" style="padding:10px 24px;background:transparent;color:#6B6B5E;border:1px solid #ddd;border-radius:10px;cursor:pointer;font-size:14px;">Skip</button>' +
+        '</div>';
       overlay.appendChild(box);
       document.body.appendChild(overlay);
       document.getElementById('csvPicker').addEventListener('change', function(e) {
         const file = e.target.files[0];
         if (!file) return;
-        const reader = new FileReader();
-        reader.onload = function(ev) {
-          overlay.remove();
-          const data = DataLoader.parseCSV(ev.target.result);
-          if (data.length) initApp(data);
-          else alert('No data found in CSV.');
-        };
-        reader.readAsText(file);
+        overlay.remove();
+        loadCSVFromFile(file);
+      });
+      document.getElementById('csvSkip').addEventListener('click', function() {
+        overlay.remove();
+        initApp([]);
       });
     });
 }

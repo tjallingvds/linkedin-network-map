@@ -104,6 +104,18 @@ const Modal = (() => {
           <div class="modal-field-hint">From <a href="https://app.tavily.com/home" target="_blank">app.tavily.com</a> — enables background research on people.</div>
         </div>
 
+        <div class="modal-sep"></div>
+
+        <div class="modal-section">
+          <div class="modal-section-label">Connections Data</div>
+          <div class="modal-csv-row">
+            <span class="modal-csv-status" id="csvStatus">${_getCSVStatus()}</span>
+            <input type="file" id="csvUpload" accept=".csv" style="display:none">
+            <label for="csvUpload" class="modal-csv-btn">Upload new CSV</label>
+          </div>
+          <div class="modal-field-hint">Export from <a href="https://www.linkedin.com/mypreferences/d/download-my-data" target="_blank">LinkedIn Data Export</a> → Connections.csv</div>
+        </div>
+
         <div class="modal-footer">
           <button class="modal-skip" id="skipBtn">Skip</button>
           <button class="modal-go" id="connectBtn" disabled>Connect</button>
@@ -125,6 +137,17 @@ const Modal = (() => {
       claude: 'From <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a> · claude-sonnet-4-20250514',
       deepseek: 'From <a href="https://platform.deepseek.com/" target="_blank">platform.deepseek.com</a> · deepseek-chat',
     }[p] || '';
+  }
+
+  function _getCSVStatus() {
+    try {
+      const csv = localStorage.getItem('connections_csv');
+      if (csv) {
+        const lines = csv.split('\n').filter(l => l.trim()).length - 1; // minus header
+        return `${lines} connections loaded`;
+      }
+    } catch { }
+    return 'No data loaded';
   }
 
   function _bindEvents(overlay) {
@@ -154,6 +177,22 @@ const Modal = (() => {
       overlay.style.transition = 'opacity 0.15s';
       setTimeout(() => { overlay.remove(); if (_onComplete) _onComplete(false); }, 150);
     });
+
+    // CSV upload handler
+    const csvUpload = document.getElementById('csvUpload');
+    if (csvUpload) {
+      csvUpload.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const status = document.getElementById('csvStatus');
+        if (status) status.textContent = 'Loading...';
+        loadCSVFromFile(file, (data) => {
+          if (status) status.textContent = `${data.length} connections loaded ✓`;
+          // Reinitialize the app with new data
+          initApp(data);
+        });
+      });
+    }
 
     setTimeout(() => input.focus(), 100);
   }

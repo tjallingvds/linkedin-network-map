@@ -13,12 +13,20 @@ const ChatUI = (() => {
     Chat.buildNetworkSummary(data);
     if (_initialized) return;
     _initialized = true;
-    _renderWelcome();
     _bindInputEvents();
     _bindClassifyBtn();
     _bindNewChatBtn();
     _updateClassifyBtn();
     _renderAIStatus();
+
+    // Restore previous chat messages or show welcome
+    const savedMessages = Chat.getMessages();
+    if (savedMessages.length > 0) {
+      _restoreSavedMessages(savedMessages);
+    } else {
+      _renderWelcome();
+    }
+    _renderChatHistory();
 
     // Wire up progress callbacks
     Chat.setEnrichProgressCallback((status, done, total, query) => {
@@ -278,6 +286,23 @@ const ChatUI = (() => {
     const input = document.getElementById('chatPageInput');
     input.value = text;
     handleSend();
+  }
+
+  /**
+   * Restore saved messages from a previous session into the chat UI.
+   */
+  function _restoreSavedMessages(messages) {
+    // Remove welcome screen
+    const welcome = document.querySelector('.chat-page-welcome');
+    if (welcome) welcome.remove();
+
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        _addMessage('user', msg.content);
+      } else if (msg.role === 'assistant') {
+        _addMessage('assistant', _formatMarkdown(Chat.formatResponse(msg.content, _data)), true);
+      }
+    }
   }
 
   // ─── Render Helpers ───
@@ -820,18 +845,32 @@ const ChatUI = (() => {
   }
 
   // ─── Past Chats ───
-  let _chatHistory = [];
+  let _chatHistory = _loadChatHistory();
+
+  function _saveChatHistory() {
+    try { localStorage.setItem('chat_history', JSON.stringify(_chatHistory.slice(-20))); }
+    catch { /* ignore */ }
+  }
+
+  function _loadChatHistory() {
+    try {
+      const saved = localStorage.getItem('chat_history');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  }
 
   function _addToChatHistory(msg) {
     // Add first user message as a chat session title
     if (!_chatHistory.length || _chatHistory[_chatHistory.length - 1].done) {
       _chatHistory.push({ title: msg.slice(0, 50), time: Date.now(), done: false });
     }
+    _saveChatHistory();
     _renderChatHistory();
   }
 
   function _markChatDone() {
     if (_chatHistory.length) _chatHistory[_chatHistory.length - 1].done = true;
+    _saveChatHistory();
   }
 
   function _renderChatHistory() {

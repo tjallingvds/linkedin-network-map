@@ -10,9 +10,29 @@
  */
 
 const Chat = (() => {
-  let _messages = []; // { role, content }
+  let _messages = _loadMessages(); // { role, content }
   let _networkStats = '';
   let _allData = [];
+
+  function _saveMessages() {
+    try {
+      // Only save last 50 messages to avoid localStorage bloat
+      const toSave = _messages.slice(-50);
+      localStorage.setItem('chat_messages', JSON.stringify(toSave));
+    } catch (e) { console.warn('Failed to save chat messages:', e); }
+  }
+
+  function _loadMessages() {
+    try {
+      const saved = localStorage.getItem('chat_messages');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  }
+
+  function _pushMessage(role, content) {
+    _messages.push({ role, content });
+    _saveMessages();
+  }
 
   /**
    * Build a lightweight network stats summary (~200 tokens).
@@ -219,7 +239,7 @@ ${candidateContext || 'No matching candidates found.'}`;
    * The AI decides: network search, web discovery, enrichment, or batch enrichment.
    */
   async function send(userMessage) {
-    _messages.push({ role: 'user', content: userMessage });
+    _pushMessage('user', userMessage);
 
     // Step 0: Quick keyword check for obvious web search intent (skip classifier)
     const msgLower = userMessage.toLowerCase();
@@ -238,7 +258,7 @@ ${candidateContext || 'No matching candidates found.'}`;
 
     if (route.action === 'clarify' && route.question) {
       const text = route.question;
-      _messages.push({ role: 'assistant', content: text });
+      _pushMessage('assistant', text);
       return { text, tokensUsed: 0 };
     }
 
@@ -347,13 +367,18 @@ Return a JSON object with "action" and optional fields:
    - User wants to refine, filter, or understand previous results
    - Return: { "action": "followup" }
 
-7. "clarify" — The query is too vague to get good results. Use when:
-   - The query is very broad and would return generic/useless results (e.g. "find me consultants", "people in tech", "AI people")
-   - There's no specific industry, organization, job title, or region mentioned
-   - You'd need to know more to make useful search queries
+7. "clarify" — You're not confident enough to search effectively. Use when ANY of these apply:
+   - No specific companies, job titles, or industries are mentioned (e.g. "find me consultants", "people in tech", "AI people")
+   - The query is ambiguous — it could mean multiple very different types of people
+   - Missing key constraints that would make results useful: no geography, no seniority level, no firm size/type
+   - You're less than 80% confident you understand the exact person profile being requested
    - Return: { "action": "clarify", "question": "A specific clarifying question" }
-   - Example: user says "find me consultants" → { "action": "clarify", "question": "What type of consulting? (e.g. management, IT, strategy) And any specific firms, industries, or regions?" }
-   - Only ask ONE concise question. Don't be overly cautious — if the query has enough detail to search, just search.
+   - Ask ONE focused question that would most improve search quality. Suggest concrete options.
+   - Examples:
+     "find me consultants" → { "action": "clarify", "question": "What type of consulting? (e.g. management, IT, strategy) And any target firms or industries?" }
+     "I need people in AI" → { "action": "clarify", "question": "What kind of AI roles? (e.g. AI strategy leaders, ML engineers, AI product managers) And at what type of company?" }
+     "help me find leads" → { "action": "clarify", "question": "What kind of leads? What industry, role type, and company size are you targeting?" }
+   - Do NOT clarify if the query already has specific firms + specific titles + clear criteria (e.g. a detailed research brief). Those are ready to search.
 
 Respond ONLY with the JSON object.`;
 
@@ -412,11 +437,11 @@ Respond ONLY with the JSON object.`;
         { temperature: 0.4, maxTokens: 800 }
       );
 
-      _messages.push({ role: 'assistant', content: text });
+      _pushMessage('assistant', text);
       return { text, tokensUsed };
     } catch (e) {
       const errMsg = `Sorry, I couldn't process that: ${e.message}`;
-      _messages.push({ role: 'assistant', content: errMsg });
+      _pushMessage('assistant', errMsg);
       return { text: errMsg, tokensUsed: 0 };
     }
   }
@@ -460,11 +485,11 @@ ${enrichContext}`;
         { temperature: 0.3, maxTokens: 800 }
       );
 
-      _messages.push({ role: 'assistant', content: text });
+      _pushMessage('assistant', text);
       return { text, tokensUsed, enriched: true, person, profile };
     } catch (e) {
       const errMsg = `Couldn't enrich ${person.f} ${person.l}: ${e.message}`;
-      _messages.push({ role: 'assistant', content: errMsg });
+      _pushMessage('assistant', errMsg);
       return { text: errMsg, tokensUsed: 0 };
     }
   }
@@ -494,7 +519,7 @@ ${enrichContext}`;
 
       if (candidates.length === 0 && directMatches.length === 0) {
         const text = `I couldn't find anyone obviously connected to "${query}" in your network. The CSV only has current role and company — with more connections, a broader search might help.`;
-        _messages.push({ role: 'assistant', content: text });
+        _pushMessage('assistant', text);
         return { text, tokensUsed: 0 };
       }
 
@@ -534,7 +559,7 @@ ${enrichContext}`;
         { temperature: 0.3, maxTokens: 1024 }
       );
 
-      _messages.push({ role: 'assistant', content: text });
+      _pushMessage('assistant', text);
 
       // Return all matched profiles for UI cards
       const allMatchedProfiles = matches.map(m => ({ person: m.person, profile: m.profile }));
@@ -552,7 +577,7 @@ ${enrichContext}`;
       };
     } catch (e) {
       const errMsg = `Error searching backgrounds: ${e.message}`;
-      _messages.push({ role: 'assistant', content: errMsg });
+      _pushMessage('assistant', errMsg);
       return { text: errMsg, tokensUsed: 0 };
     }
   }
@@ -567,7 +592,7 @@ ${enrichContext}`;
   /**
    * Handle outbound people discovery — search the web for people.
    */
-  async function _handleDiscovery(query, userMessage, targetCount = 15) {
+  async function _handleDiscovery(query, userMessage, targetCount = 15, extractionHint = '') {
     PersonModal.setSearchContext(query);
     try {
       // Cross-reference function for marking network connections
@@ -595,11 +620,11 @@ ${enrichContext}`;
 
       const result = await Enricher.discoverPeople(query, (status, done, total) => {
         if (_onDiscoveryProgress) _onDiscoveryProgress(status, done, total, query);
-      }, targetCount);
+      }, targetCount, extractionHint);
 
       if (!result.people.length) {
         const text = `I searched the web but couldn't find specific people to recommend. Try being more specific — e.g. "find founders doing AI in climate tech" or "CTOs at fintech startups in London".`;
-        _messages.push({ role: 'assistant', content: text });
+        _pushMessage('assistant', text);
         return { text, tokensUsed: 0 };
       }
 
@@ -614,7 +639,7 @@ ${enrichContext}`;
 
       if (!people.length) {
         const text = `Searched the web but didn't find anyone clearly relevant. Try being more specific.`;
-        _messages.push({ role: 'assistant', content: text });
+        _pushMessage('assistant', text);
         return { text, tokensUsed: 0 };
       }
 
@@ -628,7 +653,7 @@ ${enrichContext}`;
       const text = `Found ${people.length} people${networkNote}.`;
       const tokensUsed = 0;
 
-      _messages.push({ role: 'assistant', content: text + '\n' + peopleContext });
+      _pushMessage('assistant', text + '\n' + peopleContext);
 
       // Store for follow-up context — accumulate if same topic
       const baseQuery = query.replace(/\s*\(find different people.*?\)\s*$/, '');
@@ -653,7 +678,7 @@ ${enrichContext}`;
       };
     } catch (e) {
       const errMsg = `Discovery failed: ${e.message}`;
-      _messages.push({ role: 'assistant', content: errMsg });
+      _pushMessage('assistant', errMsg);
       return { text: errMsg, tokensUsed: 0 };
     }
   }
@@ -687,40 +712,75 @@ ${enrichContext}`;
       return true;
     });
 
-    // Step 3: If small enough set, skip AI call
-    if (cleaned.length <= 8) return cleaned;
+    // Step 3: Hard exclusion filter — removes excluded firms/titles with exact matching (no AI)
+    let filtered = cleaned;
+    if (_parsedBrief) {
+      const exFirms = (_parsedBrief.excludeFirms || []).map(f => f.toLowerCase());
+      const exTitles = (_parsedBrief.excludeTitles || []).map(t => t.toLowerCase());
+      const exSeniority = (_parsedBrief.excludeSeniority || []).map(s => s.toLowerCase());
 
-    // Step 4: AI relevance scoring — uses the full brief if available for strict filtering
+      // Build word sets for fuzzy company matching (handles "GS" vs "Goldman Sachs")
+      const exFirmWords = exFirms.map(f => f.split(/[\s,&]+/).filter(w => w.length > 2));
+
+      const companyMatchesExcluded = (company) => {
+        if (!company) return false;
+        const c = company.toLowerCase();
+        // Direct substring match
+        if (exFirms.some(ef => c.includes(ef) || ef.includes(c))) return true;
+        // Word overlap — if 2+ significant words from an excluded firm appear in the company name
+        return exFirmWords.some(words => {
+          const matches = words.filter(w => c.includes(w));
+          return matches.length >= 2 || (words.length === 1 && matches.length === 1);
+        });
+      };
+
+      filtered = cleaned.filter(p => {
+        const company = (p.company || '').toLowerCase();
+        const title = (p.title || '').toLowerCase();
+
+        // Exclude if company matches an excluded firm
+        if (companyMatchesExcluded(p.company)) return false;
+
+        // Exclude if title contains an excluded seniority level
+        if (exSeniority.some(es => title.includes(es))) return false;
+
+        // Exclude if title matches an excluded title pattern
+        if (exTitles.some(et => title.includes(et))) return false;
+
+        return true;
+      });
+
+      console.log(`Hard filter: ${cleaned.length} → ${filtered.length} (removed ${cleaned.length - filtered.length} excluded)`);
+    }
+
+    // Step 4: If small enough set after hard filter, skip AI call
+    if (filtered.length <= 8) return filtered;
+
+    // Step 5: AI relevance scoring for remaining candidates
     try {
-      const listText = cleaned.map((p, i) =>
+      const listText = filtered.map((p, i) =>
         `${i}: ${p.name} — ${p.title || '?'} at ${p.company || '?'}`
       ).join('\n');
 
-      const briefContext = _currentBrief
-        ? `\n\nORIGINAL BRIEF (use this for exclusion rules, target firms, and title requirements):\n${_currentBrief.slice(0, 2000)}`
-        : '';
+      // Build concise exclusion context from parsed brief (not the full 2000-char blob)
+      let filterRules = '';
+      if (_parsedBrief) {
+        filterRules = `\n\nFILTER RULES:`;
+        if (_parsedBrief.context) filterRules += `\nLooking for: ${_parsedBrief.context}`;
+        if (_parsedBrief.firms?.length) filterRules += `\nTarget firms: ${_parsedBrief.firms.join(', ')}`;
+        if (_parsedBrief.titles?.length) filterRules += `\nTarget titles: ${_parsedBrief.titles.slice(0, 8).join(', ')}`;
+      }
 
       const { text } = await AIProvider.aiCall(
-        `You filter search results strictly. Given a search query and a numbered list of people found, return a JSON array of the INDEX NUMBERS that should be KEPT.
+        `You filter search results strictly. Return a JSON array of INDEX NUMBERS to KEEP.
 
-REMOVE:
-- Duplicates (same person, different entry)
-- People with fake/placeholder names
-- People clearly unrelated to the query
-- People at companies the brief EXPLICITLY EXCLUDES
-- People whose titles the brief EXPLICITLY EXCLUDES
-- People whose seniority level doesn't match (e.g. Analysts/Associates when brief wants Directors+)
-- People at the wrong type of firm (e.g. pure wealth managers when brief wants IB)
-
-KEEP only people who genuinely match the brief's target profile.
-
-Query: "${query}"${briefContext}
+REMOVE: duplicates, fake names, people clearly unrelated to the search.${filterRules}
 
 People:
 ${listText}
 
 Return ONLY a JSON array of index numbers, e.g. [0, 2, 5, 7]`,
-        'Filter these results strictly.',
+        'Filter these results.',
         { temperature: 0.05, maxTokens: 500 },
       );
 
@@ -728,14 +788,14 @@ Return ONLY a JSON array of index numbers, e.g. [0, 2, 5, 7]`,
       if (match) {
         const indices = JSON.parse(match[0]);
         return indices
-          .filter(i => typeof i === 'number' && i >= 0 && i < cleaned.length)
-          .map(i => cleaned[i]);
+          .filter(i => typeof i === 'number' && i >= 0 && i < filtered.length)
+          .map(i => filtered[i]);
       }
     } catch (e) {
-      console.warn('AI filter failed, using unfiltered results:', e);
+      console.warn('AI filter failed, using hard-filtered results:', e);
     }
 
-    return cleaned;
+    return filtered;
   }
 
   /**
@@ -792,11 +852,11 @@ STYLE:
         { temperature: 0.3, maxTokens: 1000 }
       );
 
-      _messages.push({ role: 'assistant', content: text });
+      _pushMessage('assistant', text);
       return { text, tokensUsed };
     } catch (e) {
       const errMsg = `Follow-up failed: ${e.message}`;
-      _messages.push({ role: 'assistant', content: errMsg });
+      _pushMessage('assistant', errMsg);
       return { text: errMsg, tokensUsed: 0 };
     }
   }
@@ -956,7 +1016,7 @@ STYLE:
     return NetworkSearch.search(query, _allData, 8);
   }
 
-  function clearHistory() { _messages = []; }
+  function clearHistory() { _messages = []; _saveMessages(); }
   function getMessages() { return _messages; }
   function getData() { return _allData; }
 
@@ -1008,14 +1068,120 @@ STYLE:
   }
 
   /**
-   * Direct discovery — pass the raw brief straight to the search engine.
-   * No AI extraction, no query splitting. The user chose the count explicitly.
+   * Parse a research brief into structured search parameters.
+   * One focused AI call — extracts firms, titles, exclusions as JSON.
+   */
+  async function _parseBrief(brief) {
+    try {
+      const { text } = await AIProvider.aiCall(
+        `You extract structured search parameters from a research brief. Return a JSON object with:
+
+{
+  "firms": ["Company1", "Company2", ...],        // target companies to search
+  "titles": ["COO", "Chief Data Officer", ...],    // SHORT searchable title keywords (highest priority first)
+  "excludeFirms": ["Goldman Sachs", "JPMorgan", ...],  // companies to EXCLUDE — include common name variations (e.g. both "JPMorgan" and "J.P. Morgan")
+  "excludeTitles": ["title pattern", ...],        // title patterns to exclude
+  "excludeSeniority": ["Analyst", "Associate"],   // seniority levels to exclude
+  "geography": ["US", "UK", ...],                 // target regions
+  "context": "1-2 sentence summary of what kind of person we're looking for"
+}
+
+Rules:
+- Extract the EXACT company names mentioned as targets
+- For titles, extract the SHORT searchable keyword (e.g. "COO", "Chief Data Officer", "CTO", "Head of AI") — NOT the full verbose title like "COO of Investment Banking Division"
+- List titles in priority order (Tier 1 first, then Tier 2, etc.)
+- Extract ALL explicit exclusions (companies, titles, seniority levels)
+- For excludeFirms: include ALL name variations (e.g. "JPMorgan", "J.P. Morgan", "JPMorgan Chase", "Morgan Stanley", "Goldman Sachs", "Bank of America", "Barclays", etc.)
+- Be thorough — capture every firm and every title variant mentioned
+
+Return ONLY the JSON object.`,
+        brief,
+        { temperature: 0.1, maxTokens: 1500 }
+      );
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) return JSON.parse(match[0]);
+    } catch (e) {
+      console.warn('Brief parsing failed:', e);
+    }
+    return null;
+  }
+
+  /**
+   * Build Tavily search queries programmatically from parsed brief.
+   * No AI involved — just firm × title combinations.
+   */
+  function _buildSearchQueries(parsed, targetCount) {
+    const queries = [];
+    const firms = parsed.firms || [];
+    const titles = parsed.titles || [];
+
+    // Shorten long titles to key terms for better search results
+    // "COO of Investment Banking" → "COO" , "Chief Data Officer" → "Chief Data Officer"
+    const shortTitle = (t) => {
+      // Extract the core title (before "of", "at", "-", etc.)
+      return t.replace(/\s+(of|at|for|in|-|–|,)\s+.*/i, '').trim();
+    };
+
+    // Strategy: one query per firm with the top 2-3 title keywords
+    // site:linkedin.com constrains to actual LinkedIn profiles
+    const topTitles = titles.slice(0, 3).map(shortTitle);
+    const titleKeywords = topTitles.join(' OR ');
+
+    for (const firm of firms) {
+      // Primary: firm + top titles on LinkedIn
+      queries.push(`${firm} ${titleKeywords} site:linkedin.com`);
+    }
+
+    // Also run title-focused queries without specific firms for broader reach
+    for (const title of titles.slice(0, 5)) {
+      const short = shortTitle(title);
+      queries.push(`${short} investment bank site:linkedin.com`);
+    }
+
+    // Cap at 30 queries max to stay within Tavily rate limits
+    return queries.slice(0, 30);
+  }
+
+  /**
+   * Direct discovery from a research brief.
+   * Parses the brief into structured params, builds queries programmatically,
+   * and injects exclusion rules into extraction and filtering.
    */
   async function discover(query, targetCount) {
     _currentBrief = query;
     PersonModal.setSearchContext(query);
+
+    // Parse the brief into structured search params
+    const parsed = await _parseBrief(query);
+
+    if (parsed && parsed.firms?.length > 0) {
+      // Build search queries from structured data — no AI query generation
+      const searchQueries = _buildSearchQueries(parsed, targetCount);
+
+      // Store parsed brief for extraction and filter prompts
+      _parsedBrief = parsed;
+
+      // Build extraction hint — concise rules for every downstream AI prompt
+      let hint = '';
+      if (parsed.context) hint += `\n- GOAL: ${parsed.context}`;
+      hint += `\n- ONLY extract people at these target firms: ${parsed.firms.join(', ')}`;
+      if (parsed.titles?.length) hint += `\n- ONLY extract people with titles like: ${parsed.titles.slice(0, 6).join(', ')}`;
+      if (parsed.excludeFirms?.length) hint += `\n- EXCLUDE anyone at: ${parsed.excludeFirms.join(', ')}`;
+      if (parsed.excludeTitles?.length) hint += `\n- EXCLUDE titles containing: ${parsed.excludeTitles.join(', ')}`;
+      if (parsed.excludeSeniority?.length) hint += `\n- EXCLUDE seniority levels: ${parsed.excludeSeniority.join(', ')}`;
+      if (parsed.geography?.length) hint += `\n- GEOGRAPHY priority: ${parsed.geography.join(', ')}`;
+
+      // Pass queries to discovery as newline-separated list
+      const combinedQuery = searchQueries.join('\n');
+      return _handleDiscovery(combinedQuery, query, targetCount, hint);
+    }
+
+    // Fallback: short/simple query, just pass through
+    _parsedBrief = null;
     return _handleDiscovery(query, query, targetCount);
   }
+
+  let _parsedBrief = null;
 
   return {
     buildNetworkSummary,

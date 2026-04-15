@@ -122,6 +122,24 @@
 }
 .modal-field-hint a:hover { text-decoration-color: var(--text2); }
 
+/* CSV upload */
+.modal-csv-row {
+  display: flex; align-items: center; gap: 10px;
+}
+.modal-csv-status {
+  font-size: 12px; color: var(--text3); flex: 1;
+}
+.modal-csv-btn {
+  padding: 5px 12px; border-radius: 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text2); font-size: 12px; cursor: pointer;
+  transition: all 0.12s;
+}
+.modal-csv-btn:hover {
+  background: var(--surface); border-color: var(--text3);
+  color: var(--text1);
+}
+
 /* Separator */
 .modal-sep {
   height: 1px; background: var(--border); margin: 4px 0 14px;
