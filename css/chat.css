@@ -17,11 +17,9 @@
 }
 
 .chat-page-breadcrumb {
-  flex-shrink: 0; padding: 14px 0 0;
+  flex-shrink: 0; padding: 12px 20px 0;
   display: flex; align-items: center; gap: 6px;
   font-size: 13px; font-weight: 500; letter-spacing: -0.1px;
-  /* Position from the white container edge, not the inner content area */
-  margin: 0 -24px; padding-left: 20px;
 }
 .chat-breadcrumb-parent { color: var(--text3); }
 .chat-breadcrumb-sep { color: var(--text3); opacity: 0.5; font-weight: 400; }
