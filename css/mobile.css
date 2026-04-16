@@ -1,0 +1,223 @@
+/* ═══════════════════════════════════════════
+   MOBILE RESPONSIVE
+   ═══════════════════════════════════════════ */
+
+/* ── Tablet & below (≤ 768px) ── */
+@media (max-width: 768px) {
+
+  /* Sidebar becomes a slide-over drawer */
+  .panel {
+    position: fixed; top: 0; left: 0; height: 100vh; z-index: 200;
+    width: 280px; min-width: 280px;
+    background: var(--surface);
+    box-shadow: 8px 0 30px rgba(0,0,0,0.1);
+    transform: translateX(-100%);
+    transition: transform 0.3s var(--ease-spring);
+    opacity: 1;
+  }
+  .panel.collapsed {
+    width: 280px; min-width: 280px; opacity: 1;
+    pointer-events: auto; overflow: hidden;
+    transform: translateX(-100%);
+  }
+  .panel.mobile-open {
+    transform: translateX(0);
+  }
+
+  /* Backdrop behind open sidebar */
+  .mobile-backdrop {
+    position: fixed; inset: 0; z-index: 199;
+    background: rgba(20,20,18,0.35);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.25s var(--ease);
+  }
+  .mobile-backdrop.visible {
+    opacity: 1; pointer-events: auto;
+  }
+
+  /* Hamburger / mobile top bar */
+  .mobile-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    z-index: 50;
+    flex-shrink: 0;
+  }
+  .mobile-menu-btn {
+    width: 36px; height: 36px; border-radius: 8px;
+    background: transparent; border: 1px solid var(--border);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    color: var(--text2); transition: all 0.1s; flex-shrink: 0;
+  }
+  .mobile-menu-btn:hover { background: var(--hover); color: var(--text); }
+  .mobile-header-title {
+    font-size: 14px; font-weight: 600; color: var(--text);
+    letter-spacing: -0.2px; flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mobile-new-chat-btn {
+    width: 36px; height: 36px; border-radius: 8px;
+    background: transparent; border: 1px solid var(--border);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    color: var(--text2); transition: all 0.1s; flex-shrink: 0;
+  }
+  .mobile-new-chat-btn:hover { background: var(--hover); color: var(--text); }
+
+  /* Hide desktop panel expand/collapse controls */
+  .panel-expand-btn { display: none !important; }
+  #panelCollapseBtn { display: none !important; }
+
+  /* App layout goes vertical */
+  .app {
+    flex-direction: column;
+  }
+
+  /* Chat page full-bleed */
+  .chat-page {
+    margin: 0; border-radius: 0; border: none;
+    box-shadow: none; flex: 1;
+  }
+  .chat-page-inner {
+    padding: 0 12px;
+    max-width: 100%;
+  }
+  .chat-page-breadcrumb {
+    display: none;
+  }
+
+  /* Welcome adjustments */
+  .chat-page-welcome h3 {
+    font-size: 26px;
+  }
+  .chat-page-welcome p {
+    font-size: 16px;
+  }
+  .welcome-cards {
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 24px;
+  }
+  .welcome-card {
+    padding: 16px;
+  }
+
+  /* Messages */
+  .chat-page-msg.user {
+    max-width: 85%;
+  }
+
+  /* Input area */
+  .chat-page-input {
+    padding: 12px 14px 4px;
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
+  .chat-page-input::placeholder { font-size: 16px; }
+  .chat-page-send {
+    width: 36px; height: 36px;
+  }
+
+  /* Canvas full-bleed */
+  .canvas-wrap {
+    margin: 0; border-radius: 0; border: none;
+    box-shadow: none;
+  }
+
+  /* Graph controls – stack cluster toggle */
+  .cluster-toggle {
+    top: 10px; left: 10px;
+    flex-wrap: wrap;
+    max-width: calc(100% - 20px);
+  }
+  .controls-hint {
+    display: none;
+  }
+  .legend {
+    bottom: 10px; left: 10px;
+    max-width: 55%;
+    font-size: 9px;
+  }
+
+  /* Detail panel full-screen overlay on mobile */
+  .detail-panel {
+    width: 100%; right: -100%;
+  }
+  .detail-panel.visible { right: 0; }
+
+  /* Person modal full-width */
+  .pm-card {
+    max-width: 100%; width: 100%;
+    max-height: 85vh;
+    border-radius: 16px 16px 0 0;
+  }
+  .pm-overlay {
+    align-items: flex-end;
+  }
+
+  /* Settings modal */
+  .modal {
+    max-width: 100%; width: 94%;
+  }
+
+  /* List view adjustments */
+  .list-full-view {
+    padding: 16px;
+  }
+  .list-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Bigger touch targets */
+  .sidebar-chat-item {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  .chip {
+    padding: 6px 12px;
+    font-size: 11px;
+  }
+
+  /* Discovery cards */
+  .disc-card {
+    padding: 12px 14px;
+  }
+
+  /* Scope buttons wrap better */
+  .chat-scope-suggestions {
+    gap: 6px;
+  }
+  .chat-scope-btn {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+}
+
+/* ── Small phones (≤ 420px) ── */
+@media (max-width: 420px) {
+  .chat-page-welcome h3 {
+    font-size: 22px;
+  }
+  .chat-page-welcome p {
+    font-size: 14px;
+  }
+
+  .welcome-card-title {
+    font-size: 13px;
+  }
+  .welcome-card-desc {
+    font-size: 11px;
+  }
+
+  .chat-page-msg {
+    font-size: 14px;
+  }
+  .chat-page-msg.user {
+    max-width: 90%;
+  }
+}
+
+/* ── Desktop: hide mobile elements ── */
+@media (min-width: 769px) {
+  .mobile-header { display: none !important; }
+  .mobile-backdrop { display: none !important; }
+}
