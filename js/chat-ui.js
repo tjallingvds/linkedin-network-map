@@ -74,7 +74,9 @@ const ChatUI = (() => {
 
     input.addEventListener('input', () => {
       input.style.height = 'auto';
-      input.style.height = Math.min(input.scrollHeight, 100) + 'px';
+      input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+      // Show/hide send button based on content
+      sendBtn.classList.toggle('visible', input.value.trim().length > 0);
     });
 
     input.addEventListener('keydown', (e) => {
@@ -188,6 +190,7 @@ const ChatUI = (() => {
 
     input.value = '';
     input.style.height = 'auto';
+    input.placeholder = 'Follow up or start a new search...';
 
     // Remove welcome screen on first message
     const welcome = document.querySelector('.chat-page-welcome');
@@ -1082,6 +1085,8 @@ const ChatUI = (() => {
     Chat.clearHistory();
     const container = document.getElementById('chatPageMessages');
     if (container) container.innerHTML = '';
+    const input = document.getElementById('chatPageInput');
+    if (input) input.placeholder = 'Describe who you\'re looking for...';
     _renderWelcome();
     _renderChatHistory();
   }

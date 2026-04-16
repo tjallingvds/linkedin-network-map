@@ -238,35 +238,41 @@
    INPUT
    ═══════════════════════════════════════════ */
 
-.chat-page-input-wrap { flex-shrink: 0; padding: 8px 0 16px; }
+.chat-page-input-wrap {
+  flex-shrink: 0; padding: 0 0 8px;
+}
 .chat-page-input-area {
   display: flex; align-items: flex-end;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 24px; padding: 4px 6px 4px 0;
-  transition: border-color 0.15s, box-shadow 0.15s;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+  background: #fff; border: 1px solid #d1cdc4;
+  border-radius: 12px; padding: 0 8px 0 0;
+  transition: border-color 0.15s;
 }
 .chat-page-input-area:focus-within {
-  border-color: var(--text3);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+  border-color: #a8a49a;
 }
 .chat-page-input {
-  flex: 1; padding: 12px 8px 12px 20px; background: transparent; border: none;
+  flex: 1; padding: 16px 8px 16px 18px; background: transparent; border: none;
   font-size: 15px; font-family: inherit; color: var(--text);
-  outline: none; resize: none; max-height: 160px; min-height: 24px;
-  line-height: 1.45; letter-spacing: -0.1px;
+  outline: none; resize: none; max-height: 200px; min-height: 24px;
+  line-height: 1.5;
 }
-.chat-page-input::placeholder { color: var(--text3); font-size: 14.5px; }
+.chat-page-input::placeholder { color: #b5b1a8; font-size: 15px; }
 
 .chat-page-send {
-  width: 32px; height: 32px; border-radius: 50%;
-  background: var(--text); color: var(--surface); border: none;
+  width: 30px; height: 30px; border-radius: 8px;
+  background: #c17b4a; color: #fff; border: none;
   cursor: pointer; display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0; transition: opacity 0.1s; margin-bottom: 2px;
+  flex-shrink: 0; transition: all 0.12s; margin-bottom: 8px;
+  opacity: 0; pointer-events: none;
 }
-.chat-page-send svg { width: 15px; height: 15px; }
-.chat-page-send:hover { opacity: 0.8; }
-.chat-page-send:disabled { opacity: 0.1; cursor: default; }
+.chat-page-send svg { width: 14px; height: 14px; }
+.chat-page-send:hover { background: #a96a3e; }
+.chat-page-send.visible { opacity: 1; pointer-events: auto; }
+
+.chat-page-disclaimer {
+  text-align: center; font-size: 11px; color: #b5b1a8;
+  padding: 4px 0 0; letter-spacing: -0.1px;
+}
 
 .chat-page-token-counter { display: none; }
 

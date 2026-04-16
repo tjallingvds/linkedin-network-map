@@ -694,15 +694,11 @@ ${enrichContext}`;
       }, targetCount, extractionHint);
 
       if (!result.people.length) {
-        const text = `I searched the web but couldn't find specific people to recommend. Try being more specific — e.g. "find founders doing AI in climate tech" or "CTOs at fintech startups in London".`;
-        _pushMessage('assistant', text);
-        return { text, tokensUsed: 0 };
+        return { text: 'No results found.', tokensUsed: 0, people: [] };
       }
 
-      // AI relevance filter — dedupe and remove clearly irrelevant results
+      // Filter, mark network, remove low confidence, sort high first
       const filteredPeople = await _filterDiscoveryResults(result.people, query);
-
-      // Mark people who are in the network, remove low confidence, sort high first
       let people = filteredPeople
         .map(p => ({ ...p, inNetwork: isInNetwork(p.name) }))
         .filter(p => p.confidence !== 'low');
@@ -710,48 +706,7 @@ ${enrichContext}`;
       const confOrder = { high: 0, medium: 1 };
       people.sort((a, b) => (confOrder[a.confidence] ?? 1) - (confOrder[b.confidence] ?? 1));
 
-      if (!people.length) {
-        const text = `Searched the web but didn't find anyone clearly relevant. Try being more specific.`;
-        _pushMessage('assistant', text);
-        return { text, tokensUsed: 0 };
-      }
-
-      // Short summary — cards do the real work
-      const peopleContext = people.map(p =>
-        `- ${p.name} — ${p.title} at ${p.company}${p.inNetwork ? ' [IN YOUR NETWORK]' : ''}${p.context ? ' (' + p.context + ')' : ''}`
-      ).join('\n');
-
-      const networkCount = people.filter(p => p.inNetwork).length;
-      const highConf = people.filter(p => p.confidence === 'high').length;
-      const networkNote = networkCount > 0 ? `, ${networkCount} in your network` : '';
-      const confNote = highConf > 0 ? `, ${highConf} high confidence` : '';
-      const text = `${people.length} qualified leads found${confNote}${networkNote}.`;
-      const tokensUsed = 0;
-
-      _pushMessage('assistant', text + '\n' + peopleContext);
-
-      // Store for follow-up context — accumulate if same topic
-      const baseQuery = query.replace(/\s*\(find different people.*?\)\s*$/, '');
-      if (_lastDiscoveryResults && _lastDiscoveryResults.query === baseQuery) {
-        // Append new people, deduplicate by name
-        const existingNames = new Set(_lastDiscoveryResults.people.map(p => p.name?.toLowerCase()));
-        const newPeople = people.filter(p => !existingNames.has(p.name?.toLowerCase()));
-        _lastDiscoveryResults.people = [..._lastDiscoveryResults.people, ...newPeople];
-        _lastDiscoveryResults.peopleContext = _lastDiscoveryResults.people.map(p =>
-          `- ${p.name} — ${p.title} at ${p.company}${p.inNetwork ? ' [IN YOUR NETWORK]' : ''}${p.context ? ' (' + p.context + ')' : ''}`
-        ).join('\n');
-      } else {
-        _lastDiscoveryResults = { people, query: baseQuery, peopleContext };
-      }
-      _saveDiscoveryResults();
-      _lastBatchResults = null;
-
-      return {
-        text, tokensUsed,
-        discovered: true,
-        people,
-        query,
-      };
+      return { text: '', tokensUsed: 0, discovered: true, people, query };
     } catch (e) {
       const errMsg = `Discovery failed: ${e.message}`;
       _pushMessage('assistant', errMsg);
@@ -1196,25 +1151,83 @@ Return ONLY the JSON object.`,
 
     // Parse the brief into structured search params
     const parsed = await _parseBrief(query);
+    let extractCtx = '';
 
     if (parsed && parsed.firms?.length > 0) {
       console.log('Parsed brief:', parsed);
       _parsedBrief = parsed;
 
-      // Build a short, structured extraction context (not the full 3000-char brief)
-      let extractCtx = '';
       if (parsed.context) extractCtx += `LOOKING FOR: ${parsed.context}\n`;
       extractCtx += `TARGET FIRMS (only extract people at these): ${parsed.firms.join(', ')}\n`;
       if (parsed.titles?.length) extractCtx += `TARGET TITLES: ${parsed.titles.join(', ')}\n`;
       if (parsed.excludeFirms?.length) extractCtx += `EXCLUDE firms: ${parsed.excludeFirms.join(', ')}\n`;
       if (parsed.excludeSeniority?.length) extractCtx += `EXCLUDE seniority: ${parsed.excludeSeniority.join(', ')}\n`;
-
-      return _handleDiscovery(query, query, targetCount, extractCtx);
     } else {
       _parsedBrief = null;
     }
 
-    return _handleDiscovery(query, query, targetCount);
+    // Loop: keep searching until we hit the target or run out of new results
+    const allPeople = [];
+    const seenNames = new Set();
+    const maxRounds = 3;
+
+    // Pre-seed seenNames with invitation names so they're excluded
+    try {
+      const invData = localStorage.getItem('invitations_data');
+      if (invData) {
+        JSON.parse(invData).forEach(inv => {
+          if (inv.name) seenNames.add(inv.name.toLowerCase().trim());
+        });
+        console.log(`Pre-excluded ${seenNames.size} invitation names`);
+      }
+    } catch { /* ignore */ }
+
+    for (let round = 0; round < maxRounds; round++) {
+      const remaining = targetCount - allPeople.length;
+      if (remaining <= 0) break;
+
+      // On subsequent rounds, tell the AI to find DIFFERENT people
+      const roundQuery = round === 0
+        ? query
+        : query + `\n\n(ROUND ${round + 1}: Find DIFFERENT people. Already found: ${allPeople.map(p => p.name).join(', ')}. Do NOT return these again.)`;
+
+      const result = await _handleDiscovery(roundQuery, query, remaining, extractCtx);
+
+      if (!result.people?.length) break; // no more results
+
+      // Deduplicate across rounds
+      let newCount = 0;
+      for (const p of result.people) {
+        const key = (p.name || '').toLowerCase().trim();
+        if (key && !seenNames.has(key)) {
+          seenNames.add(key);
+          allPeople.push(p);
+          newCount++;
+        }
+      }
+
+      console.log(`Discovery round ${round + 1}: found ${newCount} new people (total: ${allPeople.length}/${targetCount})`);
+
+      // If this round found very few new people, stop — we've exhausted the search space
+      if (newCount < 3) break;
+    }
+
+    // Build the final result
+    const highConf = allPeople.filter(p => p.confidence === 'high').length;
+    const text = `${allPeople.length} qualified leads found${highConf > 0 ? `, ${highConf} high confidence` : ''}.`;
+    _pushMessage('assistant', text);
+
+    // Store for follow-up
+    _lastDiscoveryResults = { people: allPeople, query, peopleContext: '' };
+    _saveDiscoveryResults();
+
+    return {
+      text,
+      tokensUsed: 0,
+      discovered: true,
+      people: allPeople,
+      query,
+    };
   }
 
   let _parsedBrief = null;
