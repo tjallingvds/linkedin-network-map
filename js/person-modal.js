@@ -60,34 +60,7 @@ const PersonModal = (() => {
     if (!_overlay) return;
     const body = _overlay.querySelector('.pm-body');
     if (!body) return;
-    body.innerHTML = `
-      <div class="pm-enrich-prompt">
-        <p class="pm-enrich-text">No background info loaded yet.</p>
-        <button class="pm-enrich-btn">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          Enrich profile
-        </button>
-      </div>
-    `;
-    body.querySelector('.pm-enrich-btn').addEventListener('click', async () => {
-      body.innerHTML = `
-        <div class="pm-loading">
-          <div class="pm-loading-dots"><span></span><span></span><span></span></div>
-          <div class="pm-loading-text">Searching the web for background info...</div>
-        </div>
-      `;
-      try {
-        const enriched = await Enricher.enrichPerson(person);
-        if (_overlay) {
-          _render(person, enriched, cat, initials);
-          if (_lastRelevanceHtml) _injectRelevance(_lastRelevanceHtml);
-        }
-      } catch (e) {
-        if (_overlay && body) {
-          body.innerHTML = `<div class="pm-empty">Could not load profile: ${_esc(e.message)}</div>`;
-        }
-      }
-    });
+    body.innerHTML = `<div class="pm-empty">No background info loaded yet.</div>`;
   }
 
   let _lastRelevanceHtml = ''; // cached so we can re-inject after re-render

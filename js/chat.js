@@ -191,28 +191,33 @@ Respond ONLY with the JSON object. No explanation.`;
    */
   function _getSystemPrompt(candidateContext, filters) {
     const intent = filters?.intent || 'find relevant people';
-    return `You help a user explore their LinkedIn network. You have ${_allData.length} of their connections loaded with only basic info: name, job title, company, and category.
+    const hasWebSearch = Enricher.isConfigured();
+    return `You help a user explore their LinkedIn network of ${_allData.length} connections.${hasWebSearch ? ' Web search is also available.' : ''}
 
 USER'S INTENT: ${intent}
 
-YOUR JOB:
-- List the most relevant people from the CANDIDATES below.
-- Format names as **FirstName LastName** (exact match from list).
-- For each: state their ACTUAL title and company. That's all you know — don't infer anything else.
-- If someone has an email listed, include it.
+You MUST respond with a JSON object. No other text. Choose ONE action:
 
-WHAT YOU DON'T KNOW:
-- You don't know if these people are available, interested, or good fits beyond their title.
-- You don't know their skills, personality, or relationship to the user.
-- Don't pretend otherwise. Don't say "could be open to a new venture" or "experienced in fundraising" — you have no basis for that.
+ACTION "results" — you found matching people in the network:
+{"action":"results", "summary":"What you found", "people":[{"name":"First Last","title":"Job Title","company":"Company","relevance":"Why they match","email":"email or null"}], "suggest_web_search":false}
 
-STYLE:
-- Just list people with their real info. Short. No fluff.
-- No outreach templates. No generic advice. No disclaimers.
-- If matches are weak, say so in one line.
-- If no candidates match, just say "No matches in your network. Try asking me to search on the internet."
-- NEVER say "I cannot browse the internet" — you CAN search the web if the user asks.
-- CRITICAL: Only use **bold** for actual person names (first + last name). NEVER bold phrases, sentences, or instructions like "no matches" or "search on the internet".
+ACTION "no_matches" — no good matches in network, suggest web search:
+{"action":"no_matches", "summary":"No strong matches in your network for X.", "people":[], "suggest_web_search":true}
+
+ACTION "suggest_scope" — the query is vague/broad, propose a refined search before running it:
+{"action":"suggest_scope", "summary":"Your query is broad — here's what I'd suggest searching for.", "suggestions":["Specific search 1 you'd recommend", "Specific search 2", "Specific search 3"], "message":"I can search for these specific profiles. Which would you like me to look for, or should I search for all of them?"}
+
+ACTION "message" — conversational response (not a search):
+{"action":"message", "message":"Your response here"}
+
+DECISION RULES:
+- If CANDIDATES below contain strong matches → "results"
+- If CANDIDATES are empty or very weak AND ${hasWebSearch ? 'web search is available' : 'no web search'} → "no_matches" with suggest_web_search:${hasWebSearch}
+- If the query is vague (no specific firms, roles, or industries) AND could mean very different things → "suggest_scope" with 2-4 concrete suggestions of what to search for
+- If the user is asking a conversational question, not searching → "message"
+- If matches exist but are weak, return them AND set suggest_web_search:true so the user can optionally search the web too
+- For each person in "people": use their EXACT name, title, and company from the CANDIDATES list. Don't infer.
+- Return ONLY the JSON object. No markdown, no wrapping.
 
 ${_networkStats}
 
@@ -263,19 +268,7 @@ ${candidateContext || 'No matching candidates found.'}`;
   async function send(userMessage) {
     _pushMessage('user', userMessage);
 
-    // Step 0: Quick keyword check for obvious web search intent (skip classifier)
-    const msgLower = userMessage.toLowerCase();
-    const webKeywords = /\b(on the internet|search the internet|on the web|search online|find online|search the web|find them online|look online|find it online|discover online|web search)\b/i;
-    if (webKeywords.test(userMessage) && Enricher.isConfigured()) {
-      // Resolve the actual query from context
-      const searchTopic = _lastQuery || userMessage;
-      const resolvedQuery = msgLower.includes('them') || msgLower.includes('it') || msgLower.length < 30
-        ? searchTopic
-        : userMessage;
-      return _handleDiscovery(resolvedQuery, userMessage, 15);
-    }
-
-    // Step 1: Quick AI classification of intent
+    // Step 1: AI classification of intent — handles ALL routing including web search
     const route = await _classifyIntent(userMessage);
 
     if (route.action === 'clarify' && route.question) {
@@ -308,13 +301,26 @@ ${candidateContext || 'No matching candidates found.'}`;
 
     if (route.action === 'discover') {
       if (!Enricher.isConfigured()) {
-        // Fall through to network search if no web search configured
         return _handleNormalSearch(userMessage);
       }
-      // Use the classifier's resolved query if available (handles "find it online" → actual topic)
-      const discoveryQuery = route.query || userMessage;
-      const targetCount = route.count || 15;
-      return _handleDiscovery(discoveryQuery, userMessage, targetCount);
+      const discoveryQuery = route.query || _lastQuery || userMessage;
+
+      // If user specified a count explicitly (e.g. "find 50 people online"), search directly
+      if (route.count && route.count > 0) {
+        return _handleDiscovery(discoveryQuery, userMessage, route.count);
+      }
+
+      // Otherwise show the web search form so user can set count
+      _pushMessage('assistant', JSON.stringify({ action: 'no_matches', summary: 'Ready to search the web.', suggest_web_search: true }));
+      return {
+        text: 'Ready to search the web.',
+        structured: true,
+        action: 'no_matches',
+        people: [],
+        suggestWebSearch: true,
+        _webQuery: discoveryQuery,
+        tokensUsed: 0,
+      };
     }
 
     // Default: search the local network
@@ -453,12 +459,55 @@ Respond ONLY with the JSON object.`;
     const recentMessages = _messages.slice(-20);
 
     try {
-      const { text, tokensUsed } = await AIProvider.aiChat(
-        _getSystemPrompt(candidateContext, filters),
-        recentMessages,
-        { temperature: 0.4, maxTokens: 800 }
-      );
+      // Try up to 2 times to get valid JSON
+      let parsed = null;
+      let text = '';
+      let tokensUsed = 0;
 
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await AIProvider.aiChat(
+          _getSystemPrompt(candidateContext, filters),
+          recentMessages,
+          { temperature: attempt === 0 ? 0.3 : 0.1, maxTokens: 1200 }
+        );
+        text = result.text;
+        tokensUsed = result.tokensUsed;
+
+        try {
+          const jsonMatch = text.match(/\{[\s\S]*\}/);
+          parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+        } catch { parsed = null; }
+
+        if (parsed && parsed.action) break; // valid JSON with action field
+        console.warn(`JSON parse attempt ${attempt + 1} failed, retrying...`);
+      }
+
+      if (parsed && parsed.action) {
+        // Store for conversation history
+        _pushMessage('assistant', text);
+
+        // Match people to network data
+        const matchedPeople = (parsed.people || []).map(p => {
+          const networkPerson = _allData.find(np => {
+            const full = `${np.f} ${np.l}`.toLowerCase();
+            return full === (p.name || '').toLowerCase();
+          });
+          return { ...p, _networkPerson: networkPerson || null };
+        });
+
+        return {
+          text: parsed.summary || '',
+          tokensUsed,
+          structured: true,
+          action: parsed.action,
+          people: matchedPeople,
+          suggestWebSearch: parsed.suggest_web_search || false,
+          message: parsed.message || '',
+          suggestions: parsed.suggestions || [],
+        };
+      }
+
+      // Fallback: AI didn't return JSON — treat as plain message
       _pushMessage('assistant', text);
       return { text, tokensUsed };
     } catch (e) {

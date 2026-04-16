@@ -162,6 +162,23 @@
 .chat-wsf-go:hover { opacity: 0.85; }
 .chat-wsf-go:disabled { opacity: 0.5; cursor: default; }
 
+/* Scope suggestions */
+.chat-scope-suggestions {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 8px 0; margin-left: 4px;
+}
+.chat-scope-btn {
+  padding: 7px 14px; border-radius: 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text2); font-size: 12.5px; cursor: pointer;
+  transition: all 0.12s; font-family: inherit; text-align: left;
+}
+.chat-scope-btn:hover { border-color: var(--text3); color: var(--text1); }
+.chat-scope-btn.selected { background: var(--text); color: var(--surface); border-color: var(--text); }
+.chat-scope-btn.used:not(.selected) { opacity: 0.4; cursor: default; }
+.chat-scope-btn:disabled { cursor: default; }
+.chat-scope-all { font-weight: 500; }
+
 /* Person chips */
 .chat-page-msg .person-chip {
   display: inline-flex; align-items: center; gap: 3px;

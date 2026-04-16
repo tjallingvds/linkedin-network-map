@@ -202,72 +202,26 @@ const ChatUI = (() => {
       _showTyping(false);
       _hideEnrichProgress();
 
-      // Show AI text response — but only the summary line if discovery results will show cards
-      let displayText = result.text;
-      if (result.discovered && result.people?.length > 0) {
-        // Only show the summary line, cards handle the rest
-        displayText = displayText.split('\n')[0];
-      }
-      let formattedText = _formatMarkdown(Chat.formatResponse(displayText, _data));
-      if (Enricher.isConfigured()) {
-        formattedText = formattedText.replace(
-          /(?:Try asking me to )?search (?:on )?the internet\.?/gi,
-          `<div class="chat-web-search-form">
-            <div class="chat-wsf-label">Search the web instead?</div>
-            <div class="chat-wsf-row">
-              <input type="number" class="chat-wsf-count" value="25" min="5" max="200" step="5" placeholder="# people">
-              <button class="chat-wsf-go">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                Find people
-              </button>
-            </div>
-          </div>`
-        );
-      }
-      _addMessage('assistant', formattedText, true);
-
-      // Bind web search form
-      const container = document.getElementById('chatPageMessages');
-      container.querySelectorAll('.chat-wsf-go').forEach(btn => {
-        if (btn._bound) return;
-        btn._bound = true;
-        btn.addEventListener('click', () => {
-          const form = btn.closest('.chat-web-search-form');
-          const count = parseInt(form.querySelector('.chat-wsf-count').value) || 25;
-          // Disable form to prevent double-clicks
-          btn.disabled = true;
-          btn.textContent = 'Searching...';
-          form.querySelector('.chat-wsf-count').disabled = true;
-          // Trigger discovery directly with the original query and explicit count
-          _triggerWebDiscovery(msg, count);
-        });
-      });
-
-      // Show rich cards — cards ONLY, no duplicate text
-      if (result.enriched && result.profile && result.person) {
-        _addEnrichedProfile(result.person, result.profile);
-      }
-      if (result.batchEnriched && result.results?.length > 0) {
-        _addBatchEnrichCards(result.results, result.query);
-      }
-      if (result.discovered && result.people?.length > 0) {
+      // ─── Deterministic rendering from structured results ───
+      if (result.structured) {
+        // Structured JSON response from network search
+        _renderStructuredResult(result, msg);
+      } else if (result.discovered && result.people?.length > 0) {
+        // Web discovery results — summary + cards
+        _addMessage('assistant', result.text.split('\n')[0], false);
         _addDiscoveryResults(result.people, result.query);
+      } else if (result.enriched && result.profile && result.person) {
+        _addMessage('assistant', _formatMarkdown(result.text), true);
+        _addEnrichedProfile(result.person, result.profile);
+      } else if (result.batchEnriched && result.results?.length > 0) {
+        _addMessage('assistant', _formatMarkdown(result.text), true);
+        _addBatchEnrichCards(result.results, result.query);
+      } else {
+        // Plain text fallback (clarification, followup, errors)
+        _addMessage('assistant', _formatMarkdown(result.text), true);
       }
 
-      // For non-discovery results: render cards for people mentioned in text
-      if (!result.enriched && !result.discovered) {
-        const cardsRendered = _addMentionedPeopleCards(result.text);
-        // If cards were rendered, trim the text to just the summary line
-        if (cardsRendered) {
-          const lastMsg = container.querySelector('.chat-page-msg.assistant:last-of-type');
-          if (lastMsg) {
-            const firstLine = result.text.split('\n')[0];
-            lastMsg.innerHTML = _formatMarkdown(Chat.formatResponse(firstLine, _data));
-          }
-        }
-      }
       _updateTokenCounter();
-      // Save session after each response
       if (_activeChatId) _saveChatSession(_activeChatId);
     } else {
       // Local search
@@ -281,6 +235,124 @@ const ChatUI = (() => {
   }
 
   /**
+   * Render a structured result from the network search AI.
+   * No regex, no text reformatting — deterministic from JSON.
+   */
+  function _renderStructuredResult(result, originalMsg) {
+    const container = document.getElementById('chatPageMessages');
+
+    if (result.action === 'message') {
+      _addMessage('assistant', result.message || result.text, false);
+      return;
+    }
+
+    if (result.action === 'suggest_scope') {
+      // AI suggests refining the search — show suggestions as clickable options
+      _addMessage('assistant', result.message || result.text, false);
+      if (result.suggestions?.length > 0) {
+        _addScopeSuggestions(result.suggestions, originalMsg);
+      }
+      return;
+    }
+
+    // Show summary
+    if (result.text) {
+      _addMessage('assistant', result.text, false);
+    }
+
+    // Render people as cards
+    if (result.people?.length > 0) {
+      const cardPeople = result.people.map(p => ({
+        name: p.name,
+        title: p.title || '',
+        company: p.company || '',
+        context: p.relevance || '',
+        linkedin: '',
+        source: '',
+        inNetwork: !!p._networkPerson,
+        _networkPerson: p._networkPerson,
+      }));
+      _addDiscoveryResults(cardPeople, originalMsg);
+    }
+
+    // Show web search form if suggested — deterministic, not regex
+    if (result.suggestWebSearch && Enricher.isConfigured()) {
+      const webQuery = result._webQuery || originalMsg;
+      const form = document.createElement('div');
+      form.className = 'chat-web-search-form';
+      form.innerHTML = `
+        <div class="chat-wsf-label">Search the web for more results?</div>
+        <div class="chat-wsf-row">
+          <input type="number" class="chat-wsf-count" value="25" min="5" max="200" step="5" placeholder="# people">
+          <button class="chat-wsf-go">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Find people online
+          </button>
+        </div>
+      `;
+      form.querySelector('.chat-wsf-go').addEventListener('click', () => {
+        const count = parseInt(form.querySelector('.chat-wsf-count').value) || 25;
+        form.querySelector('.chat-wsf-go').disabled = true;
+        form.querySelector('.chat-wsf-go').textContent = 'Searching...';
+        form.querySelector('.chat-wsf-count').disabled = true;
+        _triggerWebDiscovery(webQuery, count);
+      });
+      container.appendChild(form);
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+
+  /**
+   * Show clickable scope suggestions from the AI.
+   */
+  function _addScopeSuggestions(suggestions, originalMsg) {
+    const container = document.getElementById('chatPageMessages');
+    const wrapper = document.createElement('div');
+    wrapper.className = 'chat-scope-suggestions';
+
+    suggestions.forEach(s => {
+      const btn = document.createElement('button');
+      btn.className = 'chat-scope-btn';
+      btn.textContent = s;
+      btn.addEventListener('click', () => {
+        // Disable all suggestion buttons
+        wrapper.querySelectorAll('.chat-scope-btn').forEach(b => {
+          b.disabled = true;
+          b.classList.add('used');
+        });
+        btn.classList.add('selected');
+        // Send the suggestion as a new message
+        const input = document.getElementById('chatPageInput');
+        input.value = s;
+        handleSend();
+      });
+      wrapper.appendChild(btn);
+    });
+
+    // Also add a "Search all" button if there are multiple suggestions
+    if (suggestions.length > 1) {
+      const allBtn = document.createElement('button');
+      allBtn.className = 'chat-scope-btn chat-scope-all';
+      allBtn.textContent = 'Search for all of these';
+      allBtn.addEventListener('click', () => {
+        wrapper.querySelectorAll('.chat-scope-btn').forEach(b => {
+          b.disabled = true;
+          b.classList.add('used');
+        });
+        allBtn.classList.add('selected');
+        const combined = suggestions.join('. ');
+        const input = document.getElementById('chatPageInput');
+        input.value = combined;
+        handleSend();
+      });
+      wrapper.appendChild(allBtn);
+    }
+
+    container.appendChild(wrapper);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  /**
    * Trigger web discovery directly — bypasses classifier and AI extraction.
    * Takes the raw user query and an explicit count.
    */
@@ -290,14 +362,12 @@ const ChatUI = (() => {
     _showTyping(false);
     _hideEnrichProgress();
 
-    // Show only summary line when cards will be rendered
-    let displayText = result.text;
     if (result.discovered && result.people?.length > 0) {
-      displayText = displayText.split('\n')[0];
-    }
-    _addMessage('assistant', _formatMarkdown(Chat.formatResponse(displayText, _data)), true);
-    if (result.discovered && result.people?.length > 0) {
+      // Summary line + cards only
+      _addMessage('assistant', result.text.split('\n')[0], false);
       _addDiscoveryResults(result.people, result.query);
+    } else {
+      _addMessage('assistant', result.text || 'No results found.', false);
     }
     _updateTokenCounter();
     if (_activeChatId) _saveChatSession(_activeChatId);
