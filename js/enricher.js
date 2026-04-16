@@ -344,7 +344,7 @@ Rules:
    */
   async function _parallelDiscovery(query, targetCount = 50, onProgress, extractionHint = '') {
     // Generate search queries from the full brief/query — one AI call
-    const numQueries = Math.min(Math.max(Math.ceil(targetCount / 2), 10), 30);
+    const numQueries = Math.max(Math.ceil(targetCount * 1.2), 10);
 
     // Pass the full brief as user message, but inject structured filters into the system prompt
     const { text: queryText } = await AIProvider.aiCall(
