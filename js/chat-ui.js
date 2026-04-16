@@ -87,6 +87,30 @@ const ChatUI = (() => {
     });
 
     sendBtn.addEventListener('click', () => handleSend());
+    _updateToolbarChips();
+  }
+
+  function _updateToolbarChips() {
+    const aiChip = document.getElementById('toolbarAiChip');
+    const searchChip = document.getElementById('toolbarSearchChip');
+    if (!aiChip || !searchChip) return;
+
+    const provider = AIProvider.getProvider();
+    if (provider) {
+      const names = { openai: 'OpenAI', claude: 'Claude', deepseek: 'DeepSeek' };
+      // Sparkle icon for AI provider
+      aiChip.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2L13.09 8.26L18 6L14.74 10.91L21 12L14.74 13.09L18 18L13.09 15.74L12 22L10.91 15.74L6 18L9.26 13.09L3 12L9.26 10.91L6 6L10.91 8.26L12 2Z"/></svg>${names[provider] || provider}`;
+      aiChip.classList.add('active');
+    } else {
+      aiChip.classList.remove('active');
+    }
+
+    if (Enricher.isConfigured()) {
+      searchChip.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>Web`;
+      searchChip.classList.add('active');
+    } else {
+      searchChip.classList.remove('active');
+    }
   }
 
   // ─── Classify Button ───
@@ -165,7 +189,7 @@ const ChatUI = (() => {
   }
 
   // ─── AI Status Pill (removed — was annoying) ───
-  function _renderAIStatus() {}
+  function _renderAIStatus() { _updateToolbarChips(); }
   function _updateAIStatus() {}
 
   function updateClassificationStatus(done, total) {
@@ -1018,6 +1042,7 @@ const ChatUI = (() => {
     _saveChatHistory();
     _saveChatSession(_activeChatId);
     _renderChatHistory();
+    _updateBreadcrumb();
   }
 
   function _markChatDone() {
@@ -1057,6 +1082,14 @@ const ChatUI = (() => {
     }
 
     _renderChatHistory();
+    _updateBreadcrumb();
+  }
+
+  function _updateBreadcrumb() {
+    const el = document.getElementById('chatBreadcrumbTitle');
+    if (!el) return;
+    const chat = _chatHistory.find(c => c.id === _activeChatId);
+    el.textContent = chat?.title || 'New chat';
   }
 
   function _renderChatHistory() {

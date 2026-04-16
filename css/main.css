@@ -1,19 +1,19 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;450;500;600;700&display=swap');
 
 :root {
-  --bg: #F5F0E8;
+  --bg: #F3F2EE;
   --surface: #FFFFFF;
-  --surface2: #FAF8F4;
+  --surface2: #F4F3EE;
   --text: #1A1A19;
   --text2: #6B6B5E;
   --text3: #A3A295;
-  --border: #EAE6DD;
-  --border2: #F2EFE8;
+  --border: #E8E6DF;
+  --border2: #EEECEA;
   --accent: #1A1A19;
   --accent2: #8B7355;
   --gradient: linear-gradient(135deg, #C0785C 0%, #B8956E 50%, #A3A295 100%);
   --gradient-soft: linear-gradient(135deg, rgba(192,120,92,0.1) 0%, rgba(139,126,200,0.08) 50%, rgba(155,107,138,0.06) 100%);
-  --hover: #F8F5EF;
+  --hover: #F0EFEA;
   --tag-founder: #C0785C;
   --tag-investor: #8B7EC8;
   --tag-exec: #3E7B97;
@@ -22,9 +22,9 @@
   --tag-ops: #7E8EA6;
   --tag-research: #9B6B8A;
   --tag-other: #A0A090;
-  --radius: 12px;
-  --radius-sm: 8px;
-  --radius-lg: 16px;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-lg: 14px;
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
   --shadow-md: 0 4px 16px rgba(0,0,0,0.06);
   --shadow-lg: 0 12px 40px rgba(0,0,0,0.1);

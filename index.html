@@ -10,10 +10,10 @@
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 
 <!-- Styles -->
-<link rel="stylesheet" href="css/main.css?v=15">
+<link rel="stylesheet" href="css/main.css?v=17">
 <link rel="stylesheet" href="css/modal.css?v=16">
 <link rel="stylesheet" href="css/person-modal.css?v=16">
-<link rel="stylesheet" href="css/chat.css?v=16">
+<link rel="stylesheet" href="css/chat.css?v=17">
 </head>
 <body>
 
@@ -90,8 +90,16 @@
   <!-- Full-page Chat View -->
   <div class="chat-page" id="chatPage" style="display:flex">
     <div class="chat-page-inner">
-      <div class="chat-page-messages" id="chatPageMessages">
-        <!-- welcome + messages rendered here -->
+      <div class="chat-page-breadcrumb" id="chatBreadcrumb">
+        <span class="chat-breadcrumb-parent">Network Map</span>
+        <span class="chat-breadcrumb-sep">/</span>
+        <span class="chat-breadcrumb-current" id="chatBreadcrumbTitle">New chat</span>
+      </div>
+      <div class="chat-page-messages-wrap">
+        <div class="chat-page-fade-top"></div>
+        <div class="chat-page-messages" id="chatPageMessages">
+          <!-- welcome + messages rendered here -->
+        </div>
       </div>
       <div class="chat-page-typing" id="chatPageTyping">
         <span></span><span></span><span></span>
@@ -99,11 +107,17 @@
       <div class="chat-page-input-wrap">
         <div class="chat-page-input-area">
           <textarea class="chat-page-input" id="chatPageInput" placeholder="Describe who you're looking for..." rows="1"></textarea>
-          <button class="chat-page-send" id="chatPageSend" title="Send">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
-            </svg>
-          </button>
+          <div class="chat-page-input-toolbar">
+            <div class="chat-page-input-toolbar-left">
+              <span class="chat-toolbar-chip" id="toolbarAiChip" title="AI provider"></span>
+              <span class="chat-toolbar-chip" id="toolbarSearchChip" title="Web search"></span>
+            </div>
+            <button class="chat-page-send" id="chatPageSend" title="Send">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>
+              </svg>
+            </button>
+          </div>
         </div>
         <div class="chat-page-disclaimer">Results may be incomplete. Always verify on LinkedIn.</div>
       </div>
