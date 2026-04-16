@@ -202,9 +202,10 @@ ${candidateContext || 'No matching candidates found.'}`;
 
         const allData = ChatState.getAllData();
         const matchedPeople = (parsed.people || []).map(p => {
+          const pName = (p.name || '').toLowerCase().trim();
           const networkPerson = allData.find(np => {
             const full = `${np.f} ${np.l}`.toLowerCase();
-            return full === (p.name || '').toLowerCase();
+            return full === pName || full.includes(pName) || pName.includes(full);
           });
           return { ...p, _networkPerson: networkPerson || null };
         });

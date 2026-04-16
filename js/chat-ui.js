@@ -302,8 +302,8 @@ const ChatUI = (() => {
           source: '',
           inNetwork: np || false,
           _networkPerson: np,
-          email: p.email || np?.e || '',
-          phone: p.phone || np?.ph || '',
+          email: np?.e || p.email || '',
+          phone: np?.ph || p.phone || '',
         };
       });
       _addDiscoveryResults(cardPeople, originalMsg);
@@ -939,7 +939,7 @@ const ChatUI = (() => {
         if (p.inNetwork) {
           // In-network person — use full enrichment
           const cached = Enricher.getCached(p.inNetwork);
-          PersonModal.show(p.inNetwork, cached, { relevance: p.context || '' });
+          PersonModal.show(p.inNetwork, cached, { relevance: p.context || '', avatarColor: '#4A8F72' });
         } else {
           // Discovered person — show what we have, enrich if possible
           PersonModal.showDiscovered(p);

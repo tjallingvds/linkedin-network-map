@@ -83,7 +83,7 @@
 }
 
 .pm-relevance {
-  padding: 0 24px;
+  padding: 12px 24px 0;
 }
 .pm-relevance:empty { display: none; }
 .pm-relevance-text {

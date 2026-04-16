@@ -26,6 +26,7 @@ const PersonModal = (() => {
     close();
 
     const cat = Categorizer.CATEGORIES[person._cat];
+    const avatarColor = opts.avatarColor || cat?.color || '#999';
     const initials = (person.f[0] || '') + (person.l[0] || '');
 
     _overlay = document.createElement('div');
@@ -33,7 +34,7 @@ const PersonModal = (() => {
     _overlay.id = 'personModal';
 
     // Render immediately with loading or data
-    _render(person, profile, cat, initials);
+    _render(person, profile, cat, initials, avatarColor);
     document.body.appendChild(_overlay);
 
     // Bind close events
@@ -127,11 +128,12 @@ Output ONLY the relevance note, nothing else.`,
     }
   }
 
-  function _render(person, profile, cat, initials) {
+  function _render(person, profile, cat, initials, avatarColor) {
     if (!_overlay) return;
 
     const linkedinUrl = profile?.linkedinUrl || person.u || '';
     const isLoading = !profile;
+    const bgColor = avatarColor || cat?.color || '#999';
 
     _overlay.innerHTML = `
       <div class="pm-card">
@@ -140,7 +142,7 @@ Output ONLY the relevance note, nothing else.`,
         </button>
 
         <div class="pm-header">
-          <div class="pm-avatar" style="background:${cat?.color || '#999'}">${initials}</div>
+          <div class="pm-avatar" style="background:${bgColor}">${initials}</div>
           <div class="pm-header-info">
             <div class="pm-name">${_esc(person.f)} ${_esc(person.l)}</div>
             <div class="pm-role">${_esc(person.p || '')}</div>
