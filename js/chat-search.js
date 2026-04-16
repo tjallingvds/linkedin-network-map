@@ -136,7 +136,9 @@ Respond ONLY with the JSON object. No explanation.`;
     const allData = ChatState.getAllData();
     const intent = filters?.intent || 'find relevant people';
     const hasWebSearch = Enricher.isConfigured();
-    return `You help a user explore their LinkedIn network of ${allData.length} connections.${hasWebSearch ? ' Web search is also available.' : ''}
+    const contactFilter = (filters?.requireEmail || filters?.requirePhone) ?
+      `\nCONTACT FILTER ACTIVE: Only include people who have ${filters.requireEmail && filters.requirePhone ? 'an email OR phone number' : filters.requireEmail ? 'an email address' : 'a phone number'} in the CANDIDATES list. Do NOT include anyone without the required contact info. If no candidates have it, return "no_matches".` : '';
+    return `You help a user explore their LinkedIn network of ${allData.length} connections.${hasWebSearch ? ' Web search is also available.' : ''}${contactFilter}
 
 USER'S INTENT: ${intent}
 

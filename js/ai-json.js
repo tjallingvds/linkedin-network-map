@@ -15,7 +15,7 @@ const AIJSON = (() => {
     },
     decomposeQuery: {
       required: {},
-      defaults: { roles: [], industries: [], keywords: [], intent: '', searchStrategy: 'broad' },
+      defaults: { roles: [], industries: [], keywords: [], intent: '', searchStrategy: 'broad', requireEmail: false, requirePhone: false },
     },
     normalSearch: {
       required: { action: 'string' },
