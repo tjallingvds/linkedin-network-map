@@ -94,7 +94,7 @@
   align-self: flex-end; max-width: 70%;
   background: var(--surface2); color: var(--text);
   padding: 12px 18px; border-radius: 20px 20px 4px 20px;
-  font-weight: 400; border: 1px solid var(--border);
+  font-weight: 400;
 }
 
 .chat-page-msg.assistant {
