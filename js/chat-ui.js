@@ -421,11 +421,35 @@ const ChatUI = (() => {
     const welcome = document.querySelector('.chat-page-welcome');
     if (welcome) welcome.remove();
 
+    // Track the last user message for context in structured results
+    let lastUserMsg = '';
+
     for (const msg of messages) {
       if (msg.role === 'user') {
+        lastUserMsg = msg.content;
         _addMessage('user', msg.content);
       } else if (msg.role === 'assistant') {
         let content = msg.content;
+
+        // Try to parse as structured JSON result (network search, no_matches, etc.)
+        const parsed = _tryParseStructured(content);
+        if (parsed && parsed.action) {
+          // Re-render as proper cards/UI instead of raw JSON
+          const matchedPeople = (parsed.people || []).map(p => {
+            const np = _data.find(d => `${d.f} ${d.l}`.toLowerCase() === (p.name || '').toLowerCase());
+            return { ...p, _networkPerson: np || null };
+          });
+          _renderStructuredResult({
+            text: parsed.summary || '',
+            action: parsed.action,
+            people: matchedPeople,
+            suggestWebSearch: parsed.suggest_web_search || false,
+            message: parsed.message || '',
+            suggestions: parsed.suggestions || [],
+          }, lastUserMsg);
+          continue;
+        }
+
         // If discovery cards will be rendered, strip the bullet-point people list
         // from the message (keep only the summary line)
         if (hasDiscovery && content.includes('\n- ')) {
@@ -434,6 +458,20 @@ const ChatUI = (() => {
         _addMessage('assistant', _formatMarkdown(Chat.formatResponse(content, _data)), true);
       }
     }
+  }
+
+  /**
+   * Try to parse an assistant message as a structured JSON result.
+   * Returns the parsed object if it looks like a valid action, null otherwise.
+   */
+  function _tryParseStructured(content) {
+    try {
+      const trimmed = content.trim();
+      if (!trimmed.startsWith('{')) return null;
+      const obj = JSON.parse(trimmed);
+      if (obj && obj.action && typeof obj.action === 'string') return obj;
+    } catch { /* not JSON */ }
+    return null;
   }
 
   // ─── Render Helpers ───
@@ -1044,13 +1082,36 @@ const ChatUI = (() => {
     // Create new session on first message or after previous was marked done
     if (!_activeChatId || !_chatHistory.length || _chatHistory[_chatHistory.length - 1].done) {
       const id = _genChatId();
-      _chatHistory.push({ id, title: msg.slice(0, 50), time: Date.now(), done: false });
+      _chatHistory.push({ id, title: msg.slice(0, 40), time: Date.now(), done: false });
       _activeChatId = id;
+      // Generate a nice short title asynchronously
+      _generateChatTitle(id, msg);
     }
     _saveChatHistory();
     _saveChatSession(_activeChatId);
     _renderChatHistory();
     _updateBreadcrumb();
+  }
+
+  async function _generateChatTitle(chatId, userMessage) {
+    try {
+      const { text } = await AIProvider.aiCall(
+        'Generate a very short chat title (2-5 words, no quotes, no punctuation) that summarizes this networking query. Just output the title, nothing else.',
+        userMessage,
+        { temperature: 0.3, maxTokens: 20 }
+      );
+      const title = (text || '').trim().replace(/^["']|["']$/g, '').slice(0, 40);
+      if (!title) return;
+      const chat = _chatHistory.find(c => c.id === chatId);
+      if (chat) {
+        chat.title = title;
+        _saveChatHistory();
+        _renderChatHistory();
+        _updateBreadcrumb();
+      }
+    } catch (e) {
+      console.warn('Title generation failed:', e);
+    }
   }
 
   function _markChatDone() {
