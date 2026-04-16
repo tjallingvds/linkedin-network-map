@@ -19,8 +19,12 @@ Given a query about someone's LinkedIn network, output a JSON object with these 
   "industries": [],      // industry keywords: "ai", "fintech", "climate", "health", "software", "consumer", etc.
   "keywords": [],        // specific keywords to match in position/company (e.g. "YC", "Series A", "machine learning")
   "intent": "",          // one line: what the user actually needs (e.g. "find investors for climate startup")
-  "searchStrategy": ""   // "role" if role matters most, "industry" if industry matters, "keyword" if specific terms, "broad" if general
+  "searchStrategy": "",  // "role" if role matters most, "industry" if industry matters, "keyword" if specific terms, "broad" if general
+  "requireEmail": false, // true ONLY if user explicitly asks for people with email addresses
+  "requirePhone": false  // true ONLY if user explicitly asks for people with phone numbers
 }
+
+IMPORTANT: "requireEmail" and "requirePhone" should be true ONLY when the user specifically asks for contacts with email/phone (e.g. "who has an email", "people with phone numbers", "contacts with email or phone"). Do NOT set them for normal searches.
 
 Be precise. If user says "I'm building a fintech startup and need fundraising help", roles should be ["investor_vc", "founder_ceo"] (investors to pitch, founders who've raised), industries ["fintech"], keywords ["fundraising", "seed", "series"].
 
@@ -90,6 +94,7 @@ Respond ONLY with the JSON object. No explanation.`;
       }
 
       if (p.e && score > 0) score += 5;
+      if (p.ph && score > 0) score += 5;
 
       const ds = window.discoveryScore ? window.discoveryScore(p) : 0;
       score += ds * 0.2;
@@ -97,8 +102,18 @@ Respond ONLY with the JSON object. No explanation.`;
       return { person: p, score, reasons };
     });
 
-    return scored
-      .filter(r => r.score > 10)
+    let filtered = scored.filter(r => r.score > 10);
+
+    // Hard filter: if user asked for email/phone, exclude people without them
+    if (filters.requireEmail && filters.requirePhone) {
+      filtered = filtered.filter(r => r.person.e || r.person.ph);
+    } else if (filters.requireEmail) {
+      filtered = filtered.filter(r => r.person.e);
+    } else if (filters.requirePhone) {
+      filtered = filtered.filter(r => r.person.ph);
+    }
+
+    return filtered
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);
   }
