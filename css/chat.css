@@ -34,13 +34,13 @@
   z-index: 2; pointer-events: none;
 }
 .chat-page-fade-bottom {
-  position: absolute; bottom: 0; left: 0; right: 0; height: 48px;
+  position: absolute; bottom: 0; left: 0; right: 0; height: 64px;
   background: linear-gradient(to top, var(--surface) 0%, transparent 100%);
   z-index: 2; pointer-events: none;
 }
 
 .chat-page-messages {
-  height: 100%; overflow-y: auto; overflow-x: hidden; padding: 32px 0 48px;
+  height: 100%; overflow-y: auto; overflow-x: hidden; padding: 32px 0 80px;
   display: flex; flex-direction: column; gap: 16px;
   scroll-behavior: smooth;
 }
