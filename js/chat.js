@@ -1171,6 +1171,8 @@ Return ONLY the JSON object.`,
   let _parsedBrief = null;
 
   function getLastDiscovery() { return _lastDiscoveryResults; }
+  function setLastDiscovery(d) { _lastDiscoveryResults = d; }
+  function restoreMessages(msgs) { _messages = msgs; }
 
   return {
     buildNetworkSummary,
@@ -1180,6 +1182,8 @@ Return ONLY the JSON object.`,
     clearHistory,
     getMessages,
     getLastDiscovery,
+    setLastDiscovery,
+    restoreMessages,
     getData,
     formatResponse,
     setEnrichProgressCallback,

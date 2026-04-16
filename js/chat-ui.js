@@ -914,14 +914,17 @@ const ChatUI = (() => {
   }
 
   function _saveChatSession(chatId) {
-    // Save current messages + discovery results under this chat ID
+    if (!chatId) return;
+    // Save a SNAPSHOT of current messages + discovery (deep copy, not reference)
     try {
+      const messages = JSON.parse(JSON.stringify(Chat.getMessages()));
+      const discovery = Chat.getLastDiscovery();
       const session = {
-        messages: Chat.getMessages(),
-        discovery: Chat.getLastDiscovery(),
+        messages,
+        discovery: discovery ? JSON.parse(JSON.stringify(discovery)) : null,
       };
       localStorage.setItem('chat_session_' + chatId, JSON.stringify(session));
-    } catch { /* ignore */ }
+    } catch (e) { console.warn('Failed to save chat session:', e); }
   }
 
   function _loadChatSession(chatId) {
@@ -963,14 +966,11 @@ const ChatUI = (() => {
     const container = document.getElementById('chatPageMessages');
     if (container) container.innerHTML = '';
 
-    // Clear Chat module state without saving (we don't want to overwrite stored sessions)
-    Chat.getMessages().length = 0;
+    // Restore Chat module state from the saved session
+    Chat.restoreMessages(session?.messages || []);
+    Chat.setLastDiscovery(session?.discovery || null);
 
     if (session?.messages?.length) {
-      // Rebuild _messages in Chat module
-      for (const msg of session.messages) {
-        Chat.getMessages().push(msg);
-      }
       const hasDisc = session.discovery?.people?.length > 0;
       _restoreSavedMessages(session.messages, hasDisc);
 
@@ -979,7 +979,6 @@ const ChatUI = (() => {
         _addDiscoveryResults(session.discovery.people, session.discovery.query);
       }
     } else {
-      // No saved session data — show welcome
       _renderWelcome();
     }
 
