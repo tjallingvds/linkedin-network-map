@@ -247,7 +247,7 @@
 
 /* Typing */
 .chat-page-typing {
-  padding: 4px 0; display: none; gap: 4px; align-items: center; width: fit-content;
+  padding: 4px 0; margin-bottom: 8px; display: none; gap: 4px; align-items: center; width: fit-content;
 }
 .chat-page-typing.visible { display: flex; }
 .chat-page-typing span {
