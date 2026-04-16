@@ -191,6 +191,7 @@ const ChatUI = (() => {
     input.value = '';
     input.style.height = 'auto';
     input.placeholder = 'Follow up or start a new search...';
+    document.getElementById('chatPageSend')?.classList.remove('visible');
 
     // Remove welcome screen on first message
     const welcome = document.querySelector('.chat-page-welcome');
