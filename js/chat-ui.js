@@ -61,8 +61,9 @@ const ChatUI = (() => {
     const welcome = document.createElement('div');
     welcome.className = 'chat-page-welcome';
     welcome.innerHTML = `
+      <img src="img/logo.svg" alt="" class="welcome-logo">
       <h3>Discover people</h3>
-      <p>Search your ${_data.length.toLocaleString()} connections or find new people on the web.</p>
+      <p>Surface non-obvious insights from your ${_data.length.toLocaleString()} connections.</p>
     `;
     container.appendChild(welcome);
   }
@@ -290,16 +291,21 @@ const ChatUI = (() => {
 
     // Render people as cards
     if (result.people?.length > 0) {
-      const cardPeople = result.people.map(p => ({
-        name: p.name,
-        title: p.title || '',
-        company: p.company || '',
-        context: p.relevance || '',
-        linkedin: '',
-        source: '',
-        inNetwork: !!p._networkPerson,
-        _networkPerson: p._networkPerson,
-      }));
+      const cardPeople = result.people.map(p => {
+        const np = p._networkPerson;
+        return {
+          name: p.name,
+          title: p.title || '',
+          company: p.company || '',
+          context: p.relevance || '',
+          linkedin: np?.u || '',
+          source: '',
+          inNetwork: np || false,
+          _networkPerson: np,
+          email: p.email || np?.e || '',
+          phone: np?.ph || '',
+        };
+      });
       _addDiscoveryResults(cardPeople, originalMsg);
     }
 
@@ -872,6 +878,8 @@ const ChatUI = (() => {
           <div class="disc-card-body">
             <div class="disc-card-name">${_esc(p.name)}${p.inNetwork ? '<span class="disc-network-tag">In network</span>' : ''}${p.confidence ? `<span class="disc-confidence-tag" style="color:${confidenceColor}">${_esc(p.confidence)}</span>` : ''}</div>
             <div class="disc-card-role">${_esc(p.title || '')}${p.company ? ` at ${_esc(p.company)}` : ''}</div>
+            ${p.email ? `<div class="disc-card-contact"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg><a href="mailto:${_esc(p.email)}">${_esc(p.email)}</a></div>` : ''}
+            ${p.phone ? `<div class="disc-card-contact"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg><a href="tel:${_esc(p.phone)}">${_esc(p.phone)}</a></div>` : ''}
             ${evidenceText ? `<div class="disc-card-context">${_esc(evidenceText)}</div>` : ''}
           </div>
           <div class="disc-card-links">

@@ -14,15 +14,35 @@
 <link rel="stylesheet" href="css/modal.css?v=16">
 <link rel="stylesheet" href="css/person-modal.css?v=16">
 <link rel="stylesheet" href="css/chat.css?v=17">
+<link rel="stylesheet" href="css/mobile.css?v=1">
 </head>
 <body>
 
 <!-- Main App -->
 <div class="app" id="app">
+  <!-- Mobile header (hidden on desktop via CSS) -->
+  <div class="mobile-header" id="mobileHeader">
+    <button class="mobile-menu-btn" id="mobileMenuBtn" title="Menu">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+      </svg>
+    </button>
+    <span class="mobile-header-title" id="mobileHeaderTitle">Network Map</span>
+    <button class="mobile-new-chat-btn" id="mobileNewChatBtn" title="New chat">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+      </svg>
+    </button>
+  </div>
+  <div class="mobile-backdrop" id="mobileBackdrop"></div>
+
   <div class="panel" id="sidePanel">
     <div class="panel-header">
       <div class="panel-header-top">
-        <div></div>
+        <div class="sidebar-logo">
+          <img src="img/logo.svg" alt="nontrivial" width="24" height="24">
+          <span>nontrivial</span>
+        </div>
         <div style="display:flex;align-items:center;gap:4px;">
           <button id="settingsBtn" title="AI Settings" class="header-icon-btn">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -90,6 +110,11 @@
   <!-- Full-page Chat View -->
   <div class="chat-page" id="chatPage" style="display:flex">
     <div class="chat-page-breadcrumb" id="chatBreadcrumb">
+      <button class="panel-expand-btn breadcrumb-expand" id="panelExpandBtn2" title="Show panel" style="display:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/>
+        </svg>
+      </button>
       <span class="chat-breadcrumb-parent">Network Map</span>
       <span class="chat-breadcrumb-sep">/</span>
       <span class="chat-breadcrumb-current" id="chatBreadcrumbTitle">New chat</span>
@@ -139,12 +164,7 @@
   </div>
 </div>
 
-<!-- Expand panel button (shown when collapsed) -->
-<button class="panel-expand-btn" id="panelExpandBtn" title="Show panel" style="display:none">
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="13 17 18 12 13 7"/><polyline points="6 17 11 12 6 7"/>
-  </svg>
-</button>
+<!-- (expand button moved inline into breadcrumb) -->
 
 <div class="tooltip" id="tooltip"></div>
 <div class="detail-panel" id="detailPanel"></div>
@@ -166,6 +186,7 @@
 <script src="js/chat.js?v=17"></script>
 <script src="js/chat-ui.js?v=17"></script>
 <script src="js/graph.js?v=17"></script>
+<script src="js/mobile.js?v=1"></script>
 
 </body>
 </html>

@@ -1042,14 +1042,14 @@ document.getElementById('settingsBtn')?.addEventListener('click', () => {
 // Panel collapse/expand
 document.getElementById('panelCollapseBtn')?.addEventListener('click', () => {
   const panel = document.getElementById('sidePanel');
-  const expandBtn = document.getElementById('panelExpandBtn');
+  const expandBtn = document.getElementById('panelExpandBtn2');
   panel.classList.add('collapsed');
   expandBtn.style.display = 'flex';
   setTimeout(() => onResize(), 300);
 });
-document.getElementById('panelExpandBtn')?.addEventListener('click', () => {
+document.getElementById('panelExpandBtn2')?.addEventListener('click', () => {
   const panel = document.getElementById('sidePanel');
-  const expandBtn = document.getElementById('panelExpandBtn');
+  const expandBtn = document.getElementById('panelExpandBtn2');
   panel.classList.remove('collapsed');
   expandBtn.style.display = 'none';
   setTimeout(() => onResize(), 300);

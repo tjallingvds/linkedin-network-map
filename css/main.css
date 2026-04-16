@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;450;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;450;500;600;700&family=Playfair+Display:wght@400;500&display=swap');
 
 :root {
   --bg: #F3F2EE;
@@ -59,23 +59,34 @@ body {
   width: 0; min-width: 0; opacity: 0; border: none; overflow: hidden; pointer-events: none;
 }
 
-.panel-expand-btn {
-  position: fixed; top: 18px; left: 18px;
-  width: 28px; height: 28px; border-radius: 6px;
+.panel-expand-btn.breadcrumb-expand {
+  position: static;
+  width: 24px; height: 24px; border-radius: 6px;
   background: transparent; border: none;
-  cursor: pointer; z-index: 20; display: flex; align-items: center; justify-content: center;
-  color: var(--text3); transition: all 0.1s;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  color: var(--text3); transition: all 0.1s; flex-shrink: 0;
+  margin-right: 2px;
 }
-.panel-expand-btn:hover { color: var(--text); }
+.panel-expand-btn.breadcrumb-expand:hover { color: var(--text); }
 
 /* Header */
 .panel-header {
-  padding: 14px 14px 4px;
+  padding: 23px 14px 4px;
   display: flex; flex-direction: column; gap: 8px;
 }
 .panel-header h1 { display: none; }
 .panel-header-top {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
+}
+.sidebar-logo {
+  display: flex; align-items: center; gap: 6px;
+  text-decoration: none; user-select: none;
+}
+.sidebar-logo img { height: 15px; width: auto; }
+.sidebar-logo span {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 15px; font-weight: 400; letter-spacing: 0;
+  color: var(--text);
 }
 .panel-header h1 {
   font-size: 13px; font-weight: 600; letter-spacing: -0.2px;
