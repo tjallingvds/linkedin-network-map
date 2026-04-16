@@ -1086,7 +1086,11 @@ const ChatUI = (() => {
         _addDiscoveryResults(session.discovery.people, session.discovery.query);
       }
     } else {
-      _renderWelcome();
+      // Only show welcome on truly new chats, not on empty saved sessions
+      const chat = _chatHistory.find(c => c.id === chatId);
+      if (!chat || chat.title === 'New chat') {
+        _renderWelcome();
+      }
     }
 
     _renderChatHistory();
