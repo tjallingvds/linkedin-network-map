@@ -939,7 +939,7 @@ const ChatUI = (() => {
         if (p.inNetwork) {
           // In-network person — use full enrichment
           const cached = Enricher.getCached(p.inNetwork);
-          PersonModal.show(p.inNetwork, cached);
+          PersonModal.show(p.inNetwork, cached, { relevance: p.context || '' });
         } else {
           // Discovered person — show what we have, enrich if possible
           PersonModal.showDiscovered(p);

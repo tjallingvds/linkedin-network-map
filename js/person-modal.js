@@ -21,7 +21,7 @@ const PersonModal = (() => {
    * Show the enrichment modal for a person.
    * If profile is null, shows loading state and fetches enrichment.
    */
-  async function show(person, profile) {
+  async function show(person, profile, opts = {}) {
     // Close any existing modal
     close();
 
@@ -41,12 +41,16 @@ const PersonModal = (() => {
     _overlay.addEventListener('click', (e) => { if (e.target === _overlay) close(); });
     document.addEventListener('keydown', _onEscape);
 
-    // Generate relevance rationale if we have search context
-    if (_searchContext) {
+    // If we have pre-computed relevance text, show it immediately
+    if (opts.relevance) {
+      _lastRelevanceHtml = `<div class="pm-section-title">Why Relevant</div><p class="pm-relevance-text">${_esc(opts.relevance)}</p>`;
+      _injectRelevance(_lastRelevanceHtml);
+    } else if (_searchContext) {
+      // Generate relevance rationale via AI if we have search context
       _generateRelevance(person, profile, _searchContext);
     }
 
-    // Show "Enrich" button if no rich profile data (instead of auto-fetching)
+    // Clear body placeholder if no rich profile data
     const hasRichData = profile && (profile.bio || profile.previousRoles?.length || profile.talkingPoints?.length);
     if (!hasRichData && Enricher.isConfigured()) {
       _showEnrichButton(person, cat, initials);
@@ -54,13 +58,14 @@ const PersonModal = (() => {
   }
 
   /**
-   * Show an "Enrich" button in the modal body instead of auto-fetching.
+   * Show relevance context in the modal body when no enrichment is loaded.
    */
   function _showEnrichButton(person, cat, initials) {
     if (!_overlay) return;
     const body = _overlay.querySelector('.pm-body');
     if (!body) return;
-    body.innerHTML = `<div class="pm-empty">No background info loaded yet.</div>`;
+    // Body is empty until relevance loads — the .pm-relevance slot above will show it
+    body.innerHTML = '';
   }
 
   let _lastRelevanceHtml = ''; // cached so we can re-inject after re-render
