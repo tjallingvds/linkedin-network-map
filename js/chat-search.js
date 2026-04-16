@@ -110,7 +110,7 @@ Respond ONLY with the JSON object. No explanation.`;
     if (!results.length) return '';
     return results.map(r => {
       const p = r.person;
-      return `${p.f} ${p.l}|${p.p || '?'}|${p.c || '?'}|${Categorizer.CATEGORIES[p._cat]?.short || p._cat}|${p._industry || '?'}${p.e ? '|' + p.e : ''}`;
+      return `${p.f} ${p.l}|${p.p || '?'}|${p.c || '?'}|${Categorizer.CATEGORIES[p._cat]?.short || p._cat}|${p._industry || '?'}${p.e ? '|email:' + p.e : ''}${p.ph ? '|phone:' + p.ph : ''}`;
     }).join('\n');
   }
 
@@ -128,7 +128,8 @@ USER'S INTENT: ${intent}
 You MUST respond with a JSON object. No other text. Choose ONE action:
 
 ACTION "results" — you found matching people in the network:
-{"action":"results", "summary":"What you found", "people":[{"name":"First Last","title":"Job Title","company":"Company","relevance":"Why they match","email":"email or null"}], "suggest_web_search":false}
+{"action":"results", "summary":"What you found", "people":[{"name":"First Last","title":"Job Title","company":"Company","relevance":"Why they match","email":"their@email.com or null","phone":"phone or null"}], "suggest_web_search":false}
+IMPORTANT: For each person, if their email or phone appears in the CANDIDATES list below, you MUST include it. Copy the exact value from the candidates. Only use null if not listed.
 
 ACTION "no_matches" — no good matches in network, suggest web search:
 {"action":"no_matches", "summary":"No strong matches in your network for X.", "people":[], "suggest_web_search":true}
@@ -145,13 +146,14 @@ DECISION RULES:
 - If the query is vague (no specific firms, roles, or industries) AND could mean very different things → "suggest_scope" with 2-4 concrete suggestions of what to search for
 - If the user is asking a conversational question, not searching → "message"
 - If matches exist but are weak, return them AND set suggest_web_search:true so the user can optionally search the web too
+- If the user explicitly asks about "my network", "my connections", "in my network", or "I know" → set suggest_web_search:false. They're clearly asking about local connections only.
 - If the user is asking a FILTERING question about previous results (e.g. "which ones have email", "who has a phone number"), check the candidates for that data. If none match, use "message" to say so directly — do NOT return the same people list without the requested data.
 - For each person in "people": use their EXACT name, title, and company from the CANDIDATES list. Don't infer.
 - Return ONLY the JSON object. No markdown, no wrapping.
 
 ${ChatState.getNetworkStats()}
 
-CANDIDATES (name|title|company|category|industry|email):
+CANDIDATES (name|title|company|category|industry|email:...|phone:...):
 ${candidateContext || 'No matching candidates found.'}`;
   }
 

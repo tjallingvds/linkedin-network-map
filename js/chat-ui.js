@@ -303,7 +303,7 @@ const ChatUI = (() => {
           inNetwork: np || false,
           _networkPerson: np,
           email: p.email || np?.e || '',
-          phone: np?.ph || '',
+          phone: p.phone || np?.ph || '',
         };
       });
       _addDiscoveryResults(cardPeople, originalMsg);
