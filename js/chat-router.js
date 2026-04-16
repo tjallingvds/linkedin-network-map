@@ -32,6 +32,11 @@ const ChatRouter = (() => {
       previousContext = `\nPREVIOUS ACTION: Network search for "${lastQuery}".`;
     }
 
+    // Detect if the last assistant message was a clarification — if so, never clarify again
+    const recentMsgs = ChatState.getMessages();
+    const lastAssistant = [...recentMsgs].reverse().find(m => m.role === 'assistant');
+    const justClarified = lastAssistant && !lastAssistant.content.trim().startsWith('{');
+
     const systemPrompt = `You classify a user's networking query into one of these actions. The user has a local LinkedIn network of ${networkSize} connections loaded (with name, current title, current company). ${hasWebSearch ? 'Web search is also available.' : 'Web search is NOT available — only local network.'}
 ${previousContext}
 
@@ -39,6 +44,7 @@ RECENT CONVERSATION:
 ${recentConvo || '(none)'}
 
 CURRENT MESSAGE: "${userMessage}"
+${justClarified ? '\nCRITICAL: You JUST asked a clarifying question and the user has answered it. Do NOT clarify again — NEVER pick "clarify". Use their answer combined with the conversation context to determine the search. Pick "network" or "discover". Set "query" to a clear description of what to search for, combining the original topic with the user\'s clarification (e.g. if they asked about "ib" and confirmed "investment banking", query should be "investment banking").' : ''}
 
 Return a JSON object with "action" and optional fields:
 
@@ -82,12 +88,11 @@ Return a JSON object with "action" and optional fields:
    - CRITICAL: If the previous search just returned results and the user asks about those results (filtering, sorting, contact info), this is ALWAYS a followup — do NOT re-run the search
    - Return: { "action": "followup" }
 
-7. "clarify" — You're not confident enough to search effectively. Use when ANY of these apply:
-   - The query is very short (1-2 words) and uses abbreviations, slang, or jargon (e.g. "ib", "pe", "vc", "mc", "mbb") — ALWAYS clarify these even if you think you know what they mean, because abbreviations can mean different things
-   - No specific companies, job titles, or industries are mentioned (e.g. "find me consultants", "people in tech", "AI people")
-   - The query is ambiguous — it could mean multiple very different types of people
-   - Missing key constraints that would make results useful: no geography, no seniority level, no firm size/type
-   - You're less than 80% confident you understand the exact person profile being requested
+7. "clarify" — You're not confident enough to search effectively. Use SPARINGLY and only when:
+   - The query is very short (1-2 words) and uses abbreviations, slang, or jargon (e.g. "ib", "pe", "vc", "mc", "mbb") — clarify these because abbreviations can mean different things
+   - The query is truly ambiguous — it could mean multiple very different types of people AND you can't make a reasonable guess
+   - IMPORTANT: Do NOT clarify just because the query lacks geography, seniority, or firm size. "Investment banking", "AI people", "consultants" are all searchable queries — just search for them. Only clarify if you genuinely don't know WHAT to search for.
+   - NEVER clarify more than once. If the conversation already contains a clarification exchange, ALWAYS search instead.
    - Return: { "action": "clarify", "question": "A specific clarifying question" }
    - Ask ONE focused question that would most improve search quality. Suggest concrete options. If you think you know what the abbreviation means, include that guess in your question.
    - Examples:
@@ -107,7 +112,13 @@ Respond ONLY with the JSON object.`;
       });
 
       const result = AIJSON.extractObject(text, 'classifyIntent');
-      if (result.ok) return result.data;
+      if (result.ok) {
+        // Hard limit: never clarify twice in a row
+        if (result.data.action === 'clarify' && justClarified) {
+          return { action: 'network', query: userMessage };
+        }
+        return result.data;
+      }
     } catch (e) {
       console.warn('Intent classification failed:', e);
     }
