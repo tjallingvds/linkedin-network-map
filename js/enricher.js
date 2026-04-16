@@ -176,7 +176,8 @@ After gathering search results, return a JSON object:
 Rules:
 - Only include information you're confident belongs to THIS specific person (${name} at ${company}).
 - If a field has no data, use an empty array or empty string.
-- Keep it factual. No speculation.
+- Keep it factual. No speculation. NEVER fabricate or invent information.
+- If web search returns no useful results about this person, return all empty fields. Do NOT guess.
 - previousRoles should NOT include their current role at ${company}.
 - For talkingPoints: suggest 1-3 specific, personalized conversation starters based on their background (e.g. shared education, career transitions, recent projects).
 - Return ONLY the JSON object as your final answer.`;

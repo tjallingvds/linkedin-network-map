@@ -259,7 +259,9 @@ ${enrichContext}`;
 - Show the relevant background detail (previous role or education)
 - Keep it concise — just the facts
 - If we found hidden connections, highlight that these weren't visible from the CSV alone
-- Note: I searched ${enrichedMatches.length > 0 ? 'the backgrounds of likely candidates' : 'but found no background matches'} using web search`;
+- Note: I searched ${enrichedMatches.length > 0 ? 'the backgrounds of likely candidates' : 'but found no background matches'} using web search
+
+CRITICAL: ONLY include people listed in the CURRENTLY AT or PREVIOUSLY AT sections above. Do NOT include anyone else. Do NOT fabricate or invent background information for people not listed above. If you don't have data about someone, leave them out entirely. NEVER make up affiliations, board memberships, or other connections.`;
 
     return context;
   }
