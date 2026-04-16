@@ -190,12 +190,11 @@ Rules:
         useTools: true,
       });
 
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const profile = JSON.parse(jsonMatch[0]);
-        profile.sources = _collectedSources.slice(0, 8);
-        _saveToCache(person, profile);
-        return profile;
+      const result = AIJSON.extractObject(text, 'enrichProfile');
+      if (result.ok) {
+        result.data.sources = _collectedSources.slice(0, 8);
+        _saveToCache(person, result.data);
+        return result.data;
       }
     } catch (e) {
       console.warn('Tool-based enrichment failed, trying fallback:', e);
@@ -222,12 +221,11 @@ Rules:
           searchContext,
           { temperature: 0.1, maxTokens: 600 },
         );
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const profile = JSON.parse(jsonMatch[0]);
-          profile.sources = _collectedSources.slice(0, 8);
-          _saveToCache(person, profile);
-          return profile;
+        const result = AIJSON.extractObject(text, 'enrichProfile');
+        if (result.ok) {
+          result.data.sources = _collectedSources.slice(0, 8);
+          _saveToCache(person, result.data);
+          return result.data;
         }
       }
     } catch (e2) {
@@ -374,12 +372,8 @@ Return ONLY a JSON array of strings.`,
     );
 
     let searchQueries;
-    try {
-      const m = queryText.match(/\[[\s\S]*\]/);
-      searchQueries = m ? JSON.parse(m[0]) : [];
-    } catch {
-      searchQueries = [];
-    }
+    const queryResult = AIJSON.extractArray(queryText);
+    searchQueries = queryResult.ok ? queryResult.data : [];
 
     if (searchQueries.length < 3) {
       searchQueries = [
@@ -468,8 +462,8 @@ Do NOT pad results. If only 2 people qualify, return 2. Return ONLY the JSON arr
           context,
           { temperature: 0.05, maxTokens: 4000 },
         );
-        const m = text.match(/\[[\s\S]*\]/);
-        return m ? JSON.parse(m[0]) : [];
+        const r = AIJSON.extractArray(text);
+        return r.ok ? r.data : [];
       } catch (e) {
         console.warn('Extraction chunk failed:', e);
         return [];
@@ -502,12 +496,8 @@ Do NOT pad results. If only 2 people qualify, return 2. Return ONLY the JSON arr
     );
 
     let searchQueries;
-    try {
-      const m = queryText.match(/\[[\s\S]*\]/);
-      searchQueries = m ? JSON.parse(m[0]) : [`${query} LinkedIn professionals`];
-    } catch {
-      searchQueries = [`${query} LinkedIn professionals`];
-    }
+    const fbQueryResult = AIJSON.extractArray(queryText);
+    searchQueries = fbQueryResult.ok ? fbQueryResult.data : [`${query} LinkedIn professionals`];
 
     // Run ALL searches in parallel
     const queriesToRun = searchQueries.slice(0, numQueries);
@@ -550,10 +540,8 @@ Rules: Full first AND last name required. Do NOT pad results — if only 3 quali
       { temperature: 0.05, maxTokens: isLarge ? 8000 : 3000 },
     );
 
-    try {
-      const m = extractText.match(/\[[\s\S]*\]/);
-      return m ? JSON.parse(m[0]) : [];
-    } catch { return []; }
+    const fbExtractResult = AIJSON.extractArray(extractText);
+    return fbExtractResult.ok ? fbExtractResult.data : [];
   }
 
   /**
@@ -617,15 +605,8 @@ Rules:
 
       if (onProgress) onProgress('extracting', 0, 0);
 
-      const match = text.match(/\[[\s\S]*\]/);
-      let people = [];
-      if (match) {
-        try {
-          people = JSON.parse(match[0]);
-        } catch (parseErr) {
-          console.warn('Failed to parse discovery JSON:', parseErr);
-        }
-      }
+      const arrResult = AIJSON.extractArray(text);
+      let people = arrResult.ok ? arrResult.data : [];
 
       // If tool calling returned no people, fall back to parallel search
       if (!people.length) {
