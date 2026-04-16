@@ -32,7 +32,7 @@ const ChatRouter = (() => {
       previousContext = `\nPREVIOUS ACTION: Network search for "${lastQuery}".`;
     }
 
-    // Detect if the last assistant message was a clarification — if so, never clarify again
+    // Detect if the last assistant message was a clarification — bias strongly toward searching
     const recentMsgs = ChatState.getMessages();
     const lastAssistant = [...recentMsgs].reverse().find(m => m.role === 'assistant');
     const justClarified = lastAssistant && !lastAssistant.content.trim().startsWith('{');
@@ -44,7 +44,7 @@ RECENT CONVERSATION:
 ${recentConvo || '(none)'}
 
 CURRENT MESSAGE: "${userMessage}"
-${justClarified ? '\nCRITICAL: You JUST asked a clarifying question and the user has answered it. Do NOT clarify again — NEVER pick "clarify". Use their answer combined with the conversation context to determine the search. Pick "network" or "discover". Set "query" to a clear description of what to search for, combining the original topic with the user\'s clarification (e.g. if they asked about "ib" and confirmed "investment banking", query should be "investment banking").' : ''}
+${justClarified ? '\nIMPORTANT: You just asked a clarifying question and the user has responded. Strongly prefer searching now — use their answer combined with the conversation context. Only clarify again if the response is truly incomprehensible. Set "query" to a clear description combining the original topic with the user\'s answer (e.g. if they asked about "ib" and said "yes investment banking", query should be "investment banking").' : ''}
 
 Return a JSON object with "action" and optional fields:
 
@@ -112,13 +112,7 @@ Respond ONLY with the JSON object.`;
       });
 
       const result = AIJSON.extractObject(text, 'classifyIntent');
-      if (result.ok) {
-        // Hard limit: never clarify twice in a row
-        if (result.data.action === 'clarify' && justClarified) {
-          return { action: 'network', query: userMessage };
-        }
-        return result.data;
-      }
+      if (result.ok) return result.data;
     } catch (e) {
       console.warn('Intent classification failed:', e);
     }
