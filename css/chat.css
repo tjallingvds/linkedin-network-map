@@ -11,7 +11,7 @@
 }
 
 .chat-page-inner {
-  display: flex; flex-direction: column; height: 100%;
+  display: flex; flex-direction: column; flex: 1; min-height: 0;
   max-width: 720px; width: 100%; margin: 0 auto; padding: 0 24px;
   position: relative;
 }
@@ -34,13 +34,13 @@
   z-index: 2; pointer-events: none;
 }
 .chat-page-fade-bottom {
-  position: absolute; bottom: 0; left: 0; right: 0; height: 32px;
+  position: absolute; bottom: 0; left: 0; right: 0; height: 48px;
   background: linear-gradient(to top, var(--surface) 0%, transparent 100%);
   z-index: 2; pointer-events: none;
 }
 
 .chat-page-messages {
-  height: 100%; overflow-y: auto; overflow-x: hidden; padding: 32px 0 32px;
+  height: 100%; overflow-y: auto; overflow-x: hidden; padding: 32px 0 48px;
   display: flex; flex-direction: column; gap: 16px;
   scroll-behavior: smooth;
 }
@@ -263,7 +263,7 @@
    ═══════════════════════════════════════════ */
 
 .chat-page-input-wrap {
-  flex-shrink: 0; padding: 0 0 16px;
+  flex-shrink: 0; padding: 0 0 10px;
 }
 .chat-page-input-area {
   display: flex; flex-direction: column;
@@ -317,7 +317,7 @@
 
 .chat-page-disclaimer {
   text-align: center; font-size: 11px; color: var(--text3);
-  padding: 6px 0 0; letter-spacing: -0.1px;
+  padding: 4px 0 0; letter-spacing: -0.1px;
 }
 
 .chat-page-token-counter { display: none; }

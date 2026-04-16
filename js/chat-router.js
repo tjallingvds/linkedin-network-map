@@ -74,20 +74,24 @@ Return a JSON object with "action" and optional fields:
    - This triggers a NEW web search for the same topic
    - Return: { "action": "discover_more" }
 
-6. "followup" — The user is asking a QUESTION about previous results (NOT asking for more). Use when:
+6. "followup" — The user is asking a QUESTION about previous results or filtering them (NOT asking for more people). Use when:
    - User says "the rest", "show remaining", "what about the others" (referring to results already found but not yet shown)
    - User asks a question about a previously found person
    - User wants to refine, filter, or understand previous results
+   - User asks about contact info of previously shown people (e.g. "which ones have email?", "do any have a phone number?", "who has their email listed?")
+   - CRITICAL: If the previous search just returned results and the user asks about those results (filtering, sorting, contact info), this is ALWAYS a followup — do NOT re-run the search
    - Return: { "action": "followup" }
 
 7. "clarify" — You're not confident enough to search effectively. Use when ANY of these apply:
+   - The query is very short (1-2 words) and uses abbreviations, slang, or jargon (e.g. "ib", "pe", "vc", "mc", "mbb") — ALWAYS clarify these even if you think you know what they mean, because abbreviations can mean different things
    - No specific companies, job titles, or industries are mentioned (e.g. "find me consultants", "people in tech", "AI people")
    - The query is ambiguous — it could mean multiple very different types of people
    - Missing key constraints that would make results useful: no geography, no seniority level, no firm size/type
    - You're less than 80% confident you understand the exact person profile being requested
    - Return: { "action": "clarify", "question": "A specific clarifying question" }
-   - Ask ONE focused question that would most improve search quality. Suggest concrete options.
+   - Ask ONE focused question that would most improve search quality. Suggest concrete options. If you think you know what the abbreviation means, include that guess in your question.
    - Examples:
+     "ib" → { "action": "clarify", "question": "Do you mean investment banking? What specifically — people working in IB, IB coverage groups, or something else?" }
      "find me consultants" → { "action": "clarify", "question": "What type of consulting? (e.g. management, IT, strategy) And any target firms or industries?" }
      "I need people in AI" → { "action": "clarify", "question": "What kind of AI roles? (e.g. AI strategy leaders, ML engineers, AI product managers) And at what type of company?" }
      "help me find leads" → { "action": "clarify", "question": "What kind of leads? What industry, role type, and company size are you targeting?" }

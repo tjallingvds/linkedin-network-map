@@ -85,12 +85,21 @@ const Chat = (() => {
     let contextBlock = '';
     const lastDiscovery = ChatState.getLastDiscovery();
     const lastBatch = ChatState.getLastBatchResults();
+    const lastNetwork = ChatState.getLastNetworkResults();
 
     if (lastDiscovery) {
       contextBlock = `PREVIOUS WEB DISCOVERY for "${lastDiscovery.query}":\n` +
         lastDiscovery.people.map(p =>
-          `- ${p.name} — ${p.title || '?'} at ${p.company || '?'}${p.linkedin ? ' [LinkedIn: ' + p.linkedin + ']' : ''}${p.context ? ' (' + p.context + ')' : ''}`
+          `- ${p.name} — ${p.title || '?'} at ${p.company || '?'}${p.linkedin ? ' [LinkedIn: ' + p.linkedin + ']' : ''}${p.email ? ' [Email: ' + p.email + ']' : ' [No email]'}${p.context ? ' (' + p.context + ')' : ''}`
         ).join('\n');
+    } else if (lastNetwork) {
+      contextBlock = `PREVIOUS NETWORK SEARCH for "${lastNetwork.query}":\n` +
+        lastNetwork.people.map(p => {
+          const np = p._networkPerson;
+          const email = p.email || np?.e || '';
+          const phone = np?.ph || '';
+          return `- ${p.name} — ${p.title || '?'} at ${p.company || '?'}${email ? ' [Email: ' + email + ']' : ' [No email]'}${phone ? ' [Phone: ' + phone + ']' : ' [No phone]'}`;
+        }).join('\n');
     } else if (lastBatch) {
       contextBlock = `PREVIOUS BATCH ENRICHMENT for "${lastBatch.query}":\n`;
       if (lastBatch.directMatches?.length) {
@@ -114,6 +123,11 @@ const Chat = (() => {
 The user previously searched and got results. They're now asking a follow-up. Answer based on the data below. Format names as **FirstName LastName**.
 
 If they ask for "more" or "the rest", present the people from the previous results that weren't yet discussed in the conversation. If they ask about a specific person from the results, give their details.
+
+IMPORTANT — Filtering/contact questions:
+- If the user asks which people have an email, phone number, or other contact info, check the data below carefully. If none of them have that data, just say so directly (e.g. "None of them have an email address listed in their profile."). Do NOT re-list all the people.
+- If some have the info and some don't, only list the ones who have it. If none match the filter, say "none" — don't show the full list again.
+- Be honest about what data is and isn't available. Don't show people cards when the answer is simply "none".
 
 ${contextBlock}
 

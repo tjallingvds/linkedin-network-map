@@ -14,6 +14,7 @@ const ChatState = (() => {
   let _lastDiscoveryResults = _loadDiscoveryResults();
   let _lastBatchResults = null;
   let _lastQuery = null;
+  let _lastNetworkResults = null;
   let _currentBrief = null;
   let _parsedBrief = null;
 
@@ -84,6 +85,9 @@ const ChatState = (() => {
   function getLastQuery() { return _lastQuery; }
   function setLastQuery(q) { _lastQuery = q; }
 
+  function getLastNetworkResults() { return _lastNetworkResults; }
+  function setLastNetworkResults(r) { _lastNetworkResults = r; }
+
   // ─── Brief ─────────────────────────────────────────────────
 
   function getCurrentBrief() { return _currentBrief; }
@@ -140,6 +144,7 @@ INDUSTRIES: ${topIndustries}`;
     getLastDiscovery, setLastDiscovery,
     getLastBatchResults, setLastBatchResults,
     getLastQuery, setLastQuery,
+    getLastNetworkResults, setLastNetworkResults,
     getCurrentBrief, setCurrentBrief,
     getParsedBrief, setParsedBrief,
     getAllData, setAllData,

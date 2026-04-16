@@ -145,6 +145,7 @@ DECISION RULES:
 - If the query is vague (no specific firms, roles, or industries) AND could mean very different things → "suggest_scope" with 2-4 concrete suggestions of what to search for
 - If the user is asking a conversational question, not searching → "message"
 - If matches exist but are weak, return them AND set suggest_web_search:true so the user can optionally search the web too
+- If the user is asking a FILTERING question about previous results (e.g. "which ones have email", "who has a phone number"), check the candidates for that data. If none match, use "message" to say so directly — do NOT return the same people list without the requested data.
 - For each person in "people": use their EXACT name, title, and company from the CANDIDATES list. Don't infer.
 - Return ONLY the JSON object. No markdown, no wrapping.
 
@@ -205,6 +206,11 @@ ${candidateContext || 'No matching candidates found.'}`;
           });
           return { ...p, _networkPerson: networkPerson || null };
         });
+
+        // Store network results for followup questions
+        if (matchedPeople.length > 0) {
+          ChatState.setLastNetworkResults({ people: matchedPeople, query: userMessage });
+        }
 
         return {
           text: parsed.summary || '',
