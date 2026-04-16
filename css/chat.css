@@ -17,7 +17,7 @@
 }
 
 .chat-page-breadcrumb {
-  flex-shrink: 0; padding: 14px 20px 0;
+  flex-shrink: 0; padding: 16px 20px 8px;
   display: flex; align-items: center; gap: 6px;
   font-size: 13px; font-weight: 500; letter-spacing: -0.1px;
 }
@@ -28,10 +28,19 @@
 .chat-page-messages-wrap {
   flex: 1; position: relative; overflow: hidden;
 }
-.chat-page-fade-top { display: none; }
+.chat-page-fade-top {
+  position: absolute; top: 0; left: 0; right: 0; height: 32px;
+  background: linear-gradient(to bottom, var(--surface) 0%, transparent 100%);
+  z-index: 2; pointer-events: none;
+}
+.chat-page-fade-bottom {
+  position: absolute; bottom: 0; left: 0; right: 0; height: 32px;
+  background: linear-gradient(to top, var(--surface) 0%, transparent 100%);
+  z-index: 2; pointer-events: none;
+}
 
 .chat-page-messages {
-  height: 100%; overflow-y: auto; overflow-x: hidden; padding: 24px 0 24px;
+  height: 100%; overflow-y: auto; overflow-x: hidden; padding: 32px 0 32px;
   display: flex; flex-direction: column; gap: 16px;
   scroll-behavior: smooth;
 }
@@ -254,7 +263,7 @@
    ═══════════════════════════════════════════ */
 
 .chat-page-input-wrap {
-  flex-shrink: 0; padding: 0 0 8px;
+  flex-shrink: 0; padding: 0 0 16px;
 }
 .chat-page-input-area {
   display: flex; flex-direction: column;
