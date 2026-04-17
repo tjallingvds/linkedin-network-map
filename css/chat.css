@@ -249,6 +249,50 @@
 .chat-page-typing {
   padding: 4px 0; margin-bottom: 8px; display: none; gap: 4px; align-items: center; width: fit-content;
 }
+
+/* Researching indicator — richer than typing dots */
+.chat-research-indicator {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 14px; margin: 4px 0;
+  background: linear-gradient(135deg, rgba(139,126,200,0.06) 0%, rgba(155,107,138,0.06) 100%);
+  border: 1px solid rgba(139,126,200,0.15);
+  border-radius: 12px; width: fit-content; max-width: 100%;
+  animation: msgIn 0.18s ease;
+}
+.chat-research-orbit {
+  position: relative; width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; color: #8B7EC8;
+}
+.chat-research-orbit svg {
+  position: relative; z-index: 1;
+  animation: researchSearchSpin 2.2s ease-in-out infinite;
+}
+.chat-research-pulse {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: rgba(139,126,200,0.25);
+  animation: researchPulse 1.6s ease-out infinite;
+}
+@keyframes researchSearchSpin {
+  0%, 100% { transform: translate(0, 0); }
+  25%      { transform: translate(2px, -1px); }
+  50%      { transform: translate(-1px, 2px); }
+  75%      { transform: translate(-2px, -1px); }
+}
+@keyframes researchPulse {
+  0%   { transform: scale(0.6); opacity: 0.6; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+.chat-research-text { min-width: 0; }
+.chat-research-label {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  letter-spacing: -0.1px; line-height: 1.2;
+}
+.chat-research-sub {
+  font-size: 11px; color: var(--text3); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 480px;
+}
 .chat-page-typing.visible { display: flex; }
 .chat-page-typing span {
   width: 5px; height: 5px; border-radius: 50%; background: var(--text3);

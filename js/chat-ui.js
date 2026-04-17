@@ -230,6 +230,7 @@ const ChatUI = (() => {
       const result = await Chat.send(msg);
       _showTyping(false);
       _hideEnrichProgress();
+      _hideResearching();
 
       // ─── Deterministic rendering from structured results ───
       if (result.structured) {
@@ -771,13 +772,18 @@ const ChatUI = (() => {
   // ─── Per-search tick (fires each time Tavily is called via tool use) ───
   function _updateSearchTick(count, query) {
     const bar = document.getElementById('discoveryProgressBar');
-    if (!bar) return;
-    const sub = bar.querySelector('.disc-progress-sub');
-    if (sub) {
-      sub.textContent = `Search ${count}: ${query}`;
+    if (bar) {
+      const sub = bar.querySelector('.disc-progress-sub');
+      if (sub) sub.textContent = `Search ${count}: ${query}`;
+      const container = document.getElementById('chatPageMessages');
+      if (container) container.scrollTop = container.scrollHeight;
+      return;
     }
-    const container = document.getElementById('chatPageMessages');
-    if (container) container.scrollTop = container.scrollHeight;
+    // No discovery bar — must be single enrichment. Show research indicator.
+    if (!document.getElementById('chatResearchIndicator')) {
+      _showResearching('Researching');
+    }
+    _updateResearchSub(`Search ${count}: ${query}`);
   }
 
   // ─── Batch Enrichment Cards ───
@@ -990,6 +996,51 @@ const ChatUI = (() => {
   function _showTyping(show) {
     const el = document.getElementById('chatPageTyping');
     if (el) el.classList.toggle('visible', show);
+  }
+
+  /**
+   * Show a richer "researching" indicator in chat with an animated icon
+   * and a sub-label that updates as web searches fire.
+   */
+  function _showResearching(label) {
+    _showTyping(false);
+    let el = document.getElementById('chatResearchIndicator');
+    const container = document.getElementById('chatPageMessages');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'chatResearchIndicator';
+      el.className = 'chat-research-indicator';
+      el.innerHTML = `
+        <div class="chat-research-orbit">
+          <span class="chat-research-pulse"></span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+        </div>
+        <div class="chat-research-text">
+          <div class="chat-research-label"></div>
+          <div class="chat-research-sub"></div>
+        </div>
+      `;
+      container.appendChild(el);
+    }
+    el.querySelector('.chat-research-label').textContent = label || 'Researching…';
+    el.querySelector('.chat-research-sub').textContent = 'Gathering background info';
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function _updateResearchSub(text) {
+    const el = document.getElementById('chatResearchIndicator');
+    if (!el) return;
+    const sub = el.querySelector('.chat-research-sub');
+    if (sub) sub.textContent = text;
+    const container = document.getElementById('chatPageMessages');
+    if (container) container.scrollTop = container.scrollHeight;
+  }
+
+  function _hideResearching() {
+    const el = document.getElementById('chatResearchIndicator');
+    if (el) el.remove();
   }
 
   function _updateTokenCounter() {
