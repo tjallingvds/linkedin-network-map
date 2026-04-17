@@ -299,6 +299,7 @@ const ChatUI = (() => {
             isResult: true,
             addedColumns: result.addedColumns,
             filledColumns: result.filledColumns,
+            filledCounts: result.filledCounts,
           });
         } else {
           _addMessage('system', 'No changes. Try a more specific request like "find emails" or "add LinkedIn URLs".');
@@ -311,8 +312,8 @@ const ChatUI = (() => {
         _addMessage('assistant', result.text.split('\n')[0], false);
         _addDiscoveryResults(result.people, result.query);
       } else if (result.enriched && result.profile && result.person) {
+        // Markdown already contains all the structured info — no duplicate profile card
         _addMessage('assistant', _formatMarkdown(result.text), true);
-        _addEnrichedProfile(result.person, result.profile);
       } else if (result.batchEnriched && result.results?.length > 0) {
         _addMessage('assistant', _formatMarkdown(result.text), true);
         _addBatchEnrichCards(result.results, result.query);
@@ -1078,8 +1079,16 @@ const ChatUI = (() => {
     let subText;
     if (opts.isResult) {
       const parts = [];
-      if (opts.addedColumns?.length) parts.push(`Added ${opts.addedColumns.map(c => _esc(c.name)).join(', ')}`);
-      if (opts.filledColumns?.length) parts.push(`Filled ${opts.filledColumns.map(c => _esc(c.name)).join(', ')}`);
+      const counts = opts.filledCounts || {};
+      (opts.filledColumns || []).forEach(c => {
+        const k = counts[c.name];
+        if (k && k.attempted > 0) parts.push(`${k.found}/${k.attempted} ${_esc(c.name)} filled`);
+        else parts.push(`${_esc(c.name)}: nothing missing`);
+      });
+      (opts.addedColumns || []).forEach(c => {
+        const k = counts[c.name];
+        if (k && k.attempted > 0) parts.push(`${k.found}/${k.attempted} ${_esc(c.name)} found`);
+      });
       parts.push(`${rowCount} rows`);
       subText = parts.join(' · ');
     } else {

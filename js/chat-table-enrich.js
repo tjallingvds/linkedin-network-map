@@ -188,6 +188,18 @@ Example return for [Email, Phone, LinkedIn]: ["jane@acme.com", "", "linkedin.com
       return padded;
     });
 
+    // Track how many values we successfully wrote per column name
+    const filledCounts = {}; // { colName: { found: N, attempted: N, rowsAlreadyHad: N } }
+    [...fillOps, ...addOps].forEach(op => {
+      filledCounts[op.name] = { found: 0, attempted: 0, alreadyHad: 0 };
+    });
+    // Pre-count rows that already had data for fill ops (for accurate reporting)
+    fillOps.forEach(op => {
+      rows.forEach(r => {
+        if ((r[op.colIdx] || '').trim()) filledCounts[op.name].alreadyHad++;
+      });
+    });
+
     // Enrich rows with limited concurrency
     const CONCURRENCY = 4;
     let cursor = 0;
@@ -209,25 +221,31 @@ Example return for [Email, Phone, LinkedIn]: ["jane@acme.com", "", "linkedin.com
           const cell = (row[op.colIdx] || '').trim();
           if (!cell) {
             fieldsToResearch.push({ name: op.name, description: op.description });
-            fieldTargets.push({ type: 'fill', colIdx: op.colIdx });
+            fieldTargets.push({ type: 'fill', colIdx: op.colIdx, opName: op.name });
           }
         });
         addOps.forEach((op, k) => {
           fieldsToResearch.push({ name: op.name, description: op.description });
-          fieldTargets.push({ type: 'add', addOffset: k });
+          fieldTargets.push({ type: 'add', addOffset: k, opName: op.name });
+        });
+
+        // Count attempts
+        fieldsToResearch.forEach((f, idx) => {
+          filledCounts[fieldTargets[idx].opName].attempted++;
         });
 
         if (fieldsToResearch.length && person.name) {
           const values = await _enrichRow(person, fieldsToResearch);
           for (let v = 0; v < fieldsToResearch.length; v++) {
             const tgt = fieldTargets[v];
-            const val = values[v] || '';
+            const val = (values[v] || '').trim();
             if (!val) continue;
             if (tgt.type === 'fill') {
               row[tgt.colIdx] = val;
             } else {
               row[headers.length + tgt.addOffset] = val;
             }
+            filledCounts[tgt.opName].found++;
           }
         }
 
@@ -242,16 +260,24 @@ Example return for [Email, Phone, LinkedIn]: ["jane@acme.com", "", "linkedin.com
 
     if (_onProgress) _onProgress('done', done, totalRows, allFields);
 
-    const summary = [];
-    if (addOps.length) summary.push(`Added: ${addOps.map(c => c.name).join(', ')}`);
-    if (fillOps.length) summary.push(`Filled missing: ${fillOps.map(c => c.name).join(', ')}`);
+    // Build a precise summary: "Filled 12 of 54 missing Email · Added Phone (3 of 77 found)"
+    const summaryParts = [];
+    fillOps.forEach(op => {
+      const c = filledCounts[op.name];
+      summaryParts.push(`Filled ${c.found} of ${c.attempted} missing ${op.name}`);
+    });
+    addOps.forEach(op => {
+      const c = filledCounts[op.name];
+      summaryParts.push(`Added ${op.name} (${c.found} of ${c.attempted} found)`);
+    });
 
     return {
       headers: newHeaders,
       rows: enrichedRows,
       addedColumns: addOps,
       filledColumns: fillOps,
-      intent: plan.intent || summary.join(' · ') || 'Done.',
+      filledCounts,
+      intent: summaryParts.join(' · ') || plan.intent || 'Done.',
     };
   }
 
