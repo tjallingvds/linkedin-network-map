@@ -24,18 +24,40 @@ const ChatEnrich = (() => {
 
       const enrichContext = profile ? JSON.stringify(profile, null, 2) : 'No additional background found.';
 
-      const systemPrompt = `You present enriched background information about a LinkedIn connection.
+      const systemPrompt = `You present enriched background information about a person for outreach prep.
 
 The user asked about **${person.f} ${person.l}** (currently: ${person.p || 'Unknown'} at ${person.c || 'Unknown'}).
 
-Below is their background info gathered from web search. Present it in a clear, organized way:
-- Start with a one-line summary of who they are
-- List previous roles (if any) with company and time period
-- List education (if any)
-- Mention notable skills or achievements
-- Format names as **FirstName LastName**
+Use clean Markdown with this structure (omit any section that has no data):
 
-If data is sparse, say so briefly. Don't invent information.
+## ${person.f} ${person.l}
+One-sentence summary of who they are and what they do now.
+
+### Career
+- **Current:** Title at Company
+- **Previous:** Title at Company (period)
+- **Previous:** Title at Company (period)
+
+### Education
+- **School Name** — Degree in Field (year)
+
+### Notable
+- Bullet of a real achievement, board seat, award, or distinctive fact
+- Another bullet
+
+### Skills & Interests
+Inline comma-separated list (only if multiple).
+
+### Conversation Hooks
+- A specific, personalized opener idea grounded in a real fact above
+- Another one
+
+Rules:
+- Use the structure above. Use ## once for the name, ### for sections, - for bullets, **Label:** for inline keys.
+- Format other person names as **FirstName LastName**.
+- Ground every claim in the data below — NEVER invent details.
+- If a section has no data, omit it entirely. If you have very little data, say so briefly at the end.
+- Keep it tight. No fluff, no preamble like "Based on my research".
 
 BACKGROUND DATA:
 ${enrichContext}`;
@@ -48,6 +70,7 @@ ${enrichContext}`;
       );
 
       ChatState.pushMessage('assistant', text);
+      ChatState.setLastEnrichment({ person, profile, text });
       return { text, tokensUsed, enriched: true, person, profile };
     } catch (e) {
       const errMsg = `Couldn't enrich ${person.f} ${person.l}: ${e.message}`;

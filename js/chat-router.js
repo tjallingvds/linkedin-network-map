@@ -20,11 +20,15 @@ const ChatRouter = (() => {
       .map(m => `${m.role}: ${m.content.slice(0, 150)}`).join('\n');
 
     let previousContext = '';
+    const lastEnrichment = ChatState.getLastEnrichment();
     const lastDiscovery = ChatState.getLastDiscovery();
     const lastBatch = ChatState.getLastBatchResults();
     const lastQuery = ChatState.getLastQuery();
 
-    if (lastDiscovery) {
+    if (lastEnrichment?.person) {
+      const p = lastEnrichment.person;
+      previousContext = `\nPREVIOUS ACTION: Just researched ${p.f} ${p.l} (${p.p || 'unknown role'}${p.c ? ' at ' + p.c : ''}). Detailed profile is in memory. Treat any follow-up question or pronoun ("him", "her", "they", "this person", "the guy", etc.) as referring to ${p.f} ${p.l}.`;
+    } else if (lastDiscovery) {
       previousContext = `\nPREVIOUS ACTION: Web discovery found ${lastDiscovery.people.length} people for "${lastDiscovery.query}".`;
     } else if (lastBatch) {
       previousContext = `\nPREVIOUS ACTION: Batch enrichment search for "${lastBatch.query}".`;
@@ -85,10 +89,12 @@ Return a JSON object with "action" and optional fields:
 
 6. "followup" — The user is asking a QUESTION about previous results or filtering them (NOT asking for more people). Use when:
    - User says "the rest", "show remaining", "what about the others" (referring to results already found but not yet shown)
-   - User asks a question about a previously found person
+   - User asks a question about a previously found/researched person
    - User wants to refine, filter, or understand previous results
    - User asks about contact info of previously shown people (e.g. "which ones have email?", "do any have a phone number?", "who has their email listed?")
-   - CRITICAL: If the previous search just returned results and the user asks about those results (filtering, sorting, contact info), this is ALWAYS a followup — do NOT re-run the search
+   - User asks for advice / drafting / opinions about a previously researched person ("what should I say to him?", "draft an opener", "best compliment to start an email", "what would you ask him?")
+   - The user uses pronouns ("him", "her", "they", "this person", "the guy") that refer to someone from the previous action
+   - CRITICAL: If the previous search/enrichment just returned results and the user asks anything related (filtering, sorting, contact info, drafting messages, opinions), this is ALWAYS a followup — do NOT re-run the search and do NOT clarify
    - Return: { "action": "followup" }
 
 7. "clarify" — You're not confident enough to search effectively. Use SPARINGLY and only when:

@@ -512,75 +512,98 @@ const ChatUI = (() => {
    * Handles: headers, lists, horizontal rules, line breaks.
    */
   function _formatMarkdown(html) {
-    // First pass: convert remaining **bold** and *italic* that formatResponse didn't handle
-    // (formatResponse only converts **Name** to chips for known people)
+    // Inline conversions: **bold** and *italic*
+    // Italic must avoid matching the second * of bold — require non-* characters inside
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    html = html.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+
+    // Inline links: [text](url)
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" class="chat-md-link">$1</a>');
+
+    // Inline code: `code`
+    html = html.replace(/`([^`\n]+)`/g, '<code class="chat-md-code">$1</code>');
 
     // Split into lines, process each
     const lines = html.split('\n');
     const out = [];
     let inUl = false;
     let inOl = false;
+    let inDl = false; // definition list for **Label:** value
+
+    const closeBlocks = () => {
+      if (inUl) { out.push('</ul>'); inUl = false; }
+      if (inOl) { out.push('</ol>'); inOl = false; }
+      if (inDl) { out.push('</dl>'); inDl = false; }
+    };
 
     for (const line of lines) {
       const trimmed = line.trim();
 
-      // Skip empty lines — close any open list
+      // Skip empty lines — close any open block
       if (!trimmed) {
-        if (inUl) { out.push('</ul>'); inUl = false; }
-        if (inOl) { out.push('</ol>'); inOl = false; }
+        closeBlocks();
         continue;
       }
 
-      // Headers
-      if (/^### /.test(trimmed)) {
-        if (inUl) { out.push('</ul>'); inUl = false; }
-        if (inOl) { out.push('</ol>'); inOl = false; }
-        out.push(`<div class="chat-md-h4">${trimmed.slice(4)}</div>`);
-        continue;
-      }
-      if (/^## /.test(trimmed)) {
-        if (inUl) { out.push('</ul>'); inUl = false; }
-        if (inOl) { out.push('</ol>'); inOl = false; }
-        out.push(`<div class="chat-md-h3">${trimmed.slice(3)}</div>`);
+      // Headers (#### → h5, ### → h4, ## → h3, # → h2)
+      const hMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+      if (hMatch) {
+        closeBlocks();
+        const level = hMatch[1].length; // 1..4
+        const cls = level === 1 ? 'chat-md-h2' : level === 2 ? 'chat-md-h3' : level === 3 ? 'chat-md-h4' : 'chat-md-h5';
+        out.push(`<div class="${cls}">${hMatch[2]}</div>`);
         continue;
       }
 
       // Horizontal rule
       if (/^---+$/.test(trimmed)) {
-        if (inUl) { out.push('</ul>'); inUl = false; }
-        if (inOl) { out.push('</ol>'); inOl = false; }
+        closeBlocks();
         out.push('<hr class="chat-md-hr">');
         continue;
       }
 
-      // Unordered list item
-      if (/^[-*] /.test(trimmed)) {
+      // Unordered list item — handle nested **Label:** value styling
+      if (/^[-*]\s+/.test(trimmed)) {
         if (inOl) { out.push('</ol>'); inOl = false; }
+        if (inDl) { out.push('</dl>'); inDl = false; }
         if (!inUl) { out.push('<ul class="chat-md-ul">'); inUl = true; }
-        out.push(`<li>${trimmed.slice(2)}</li>`);
+        const itemContent = trimmed.replace(/^[-*]\s+/, '');
+        // Detect "<strong>Label:</strong> value" pattern in list items
+        const kv = itemContent.match(/^<strong>([^<]+):<\/strong>\s*(.+)$/);
+        if (kv) {
+          out.push(`<li class="chat-md-li-kv"><span class="chat-md-li-key">${kv[1]}</span><span class="chat-md-li-val">${kv[2]}</span></li>`);
+        } else {
+          out.push(`<li>${itemContent}</li>`);
+        }
         continue;
       }
 
       // Ordered list item
       if (/^\d+\.\s/.test(trimmed)) {
         if (inUl) { out.push('</ul>'); inUl = false; }
+        if (inDl) { out.push('</dl>'); inDl = false; }
         if (!inOl) { out.push('<ol class="chat-md-ol">'); inOl = true; }
         out.push(`<li>${trimmed.replace(/^\d+\.\s/, '')}</li>`);
         continue;
       }
 
+      // Definition-list-like: paragraph that starts with "<strong>Label:</strong> value"
+      // Render as a clean two-column row
+      const kvPara = trimmed.match(/^<strong>([^<]+):<\/strong>\s*(.+)$/);
+      if (kvPara) {
+        if (inUl) { out.push('</ul>'); inUl = false; }
+        if (inOl) { out.push('</ol>'); inOl = false; }
+        if (!inDl) { out.push('<dl class="chat-md-dl">'); inDl = true; }
+        out.push(`<dt>${kvPara[1]}</dt><dd>${kvPara[2]}</dd>`);
+        continue;
+      }
+
       // Regular text
-      if (inUl) { out.push('</ul>'); inUl = false; }
-      if (inOl) { out.push('</ol>'); inOl = false; }
+      closeBlocks();
       out.push(`<p class="chat-md-p">${trimmed}</p>`);
     }
 
-    // Close any open lists
-    if (inUl) out.push('</ul>');
-    if (inOl) out.push('</ol>');
-
+    closeBlocks();
     return out.join('');
   }
 

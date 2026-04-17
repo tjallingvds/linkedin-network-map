@@ -97,11 +97,38 @@ const Chat = (() => {
    */
   async function _handleFollowup(userMessage) {
     let contextBlock = '';
+    const lastEnrichment = ChatState.getLastEnrichment();
     const lastDiscovery = ChatState.getLastDiscovery();
     const lastBatch = ChatState.getLastBatchResults();
     const lastNetwork = ChatState.getLastNetworkResults();
 
-    if (lastDiscovery) {
+    // Single enrichment takes priority — it's typically the most recent and detailed context
+    if (lastEnrichment?.person) {
+      const p = lastEnrichment.person;
+      const prof = lastEnrichment.profile || {};
+      contextBlock = `PREVIOUSLY RESEARCHED PERSON: ${p.f} ${p.l}\n`;
+      contextBlock += `Current role: ${p.p || 'Unknown'}${p.c ? ' at ' + p.c : ''}\n`;
+      if (prof.bio) contextBlock += `Bio: ${prof.bio}\n`;
+      if (prof.previousRoles?.length) {
+        contextBlock += `Previous roles:\n` + prof.previousRoles.map(r =>
+          `- ${r.title || '?'} at ${r.company || '?'}${r.period ? ' (' + r.period + ')' : ''}`
+        ).join('\n') + '\n';
+      }
+      if (prof.education?.length) {
+        contextBlock += `Education:\n` + prof.education.map(e =>
+          `- ${e.school || '?'}${e.degree ? ', ' + e.degree : ''}${e.field ? ' in ' + e.field : ''}${e.year ? ' (' + e.year + ')' : ''}`
+        ).join('\n') + '\n';
+      }
+      if (prof.skills?.length) contextBlock += `Skills: ${prof.skills.join(', ')}\n`;
+      if (prof.notableAchievements?.length) {
+        contextBlock += `Notable: ${prof.notableAchievements.join('; ')}\n`;
+      }
+      if (prof.interests?.length) contextBlock += `Interests: ${prof.interests.join(', ')}\n`;
+      if (prof.location) contextBlock += `Location: ${prof.location}\n`;
+      if (lastEnrichment.text) {
+        contextBlock += `\nFull research summary:\n${lastEnrichment.text}\n`;
+      }
+    } else if (lastDiscovery) {
       contextBlock = `PREVIOUS WEB DISCOVERY for "${lastDiscovery.query}":\n` +
         lastDiscovery.people.map(p =>
           `- ${p.name} — ${p.title || '?'} at ${p.company || '?'}${p.linkedin ? ' [LinkedIn: ' + p.linkedin + ']' : ''}${p.email ? ' [Email: ' + p.email + ']' : ' [No email]'}${p.context ? ' (' + p.context + ')' : ''}`
@@ -132,24 +159,26 @@ const Chat = (() => {
       return ChatSearch.handleNormalSearch(userMessage);
     }
 
-    const systemPrompt = `You help a user with follow-up questions about previously found people.
+    const systemPrompt = `You help a user with follow-up questions about people they previously researched or searched.
 
-The user previously searched and got results. They're now asking a follow-up. Answer based on the data below. Format names as **FirstName LastName**.
+The data below contains the most recently relevant context. ALL pronouns in the user's question ("him", "her", "they", "this person", "the guy", "the person") refer to whoever is in the data below — do not ask who they mean.
 
-If they ask for "more" or "the rest", present the people from the previous results that weren't yet discussed in the conversation. If they ask about a specific person from the results, give their details.
+If the user asks for advice, opinions, drafting (e.g. "what should I say", "best compliment to start an email", "draft an opener", "how should I approach him"), use the background details to give a specific, personalized answer grounded in the actual facts (their roles, education, achievements, interests). Do NOT give generic advice.
+
+If they ask for "more" or "the rest", present the people from the previous results that weren't yet discussed.
 
 IMPORTANT — Filtering/contact questions:
-- If the user asks which people have an email, phone number, or other contact info, check the data below carefully. If none of them have that data, just say so directly (e.g. "None of them have an email address listed in their profile."). Do NOT re-list all the people.
-- If some have the info and some don't, only list the ones who have it. If none match the filter, say "none" — don't show the full list again.
-- Be honest about what data is and isn't available. Don't show people cards when the answer is simply "none".
+- If the user asks which people have an email, phone number, or other contact info, check the data below carefully. If none of them have that data, just say so directly. Do NOT re-list all the people.
+- If some have the info and some don't, only list the ones who have it.
 
 ${contextBlock}
 
 STYLE:
 - Format names as **Full Name** so they become clickable
-- Be concise and directly answer the follow-up
-- Don't re-introduce yourself or the search — just answer
-- If the data doesn't contain what they need, say so briefly`;
+- Use clean Markdown structure: ## for sections, ### for subsections, - for bullets, **Label:** value for key facts
+- Be concise and directly answer the follow-up — no preamble
+- Ground every claim in the data above; never invent
+- If suggesting compliments/openers, propose 3-5 specific options each grounded in a unique fact from their background`;
 
     const recentMessages = ChatState.getMessages().slice(-20);
 
