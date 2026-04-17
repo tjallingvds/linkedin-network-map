@@ -11,7 +11,7 @@ const AIJSON = (() => {
   const SCHEMAS = {
     classifyIntent: {
       required: { action: 'string' },
-      defaults: { action: 'network', person: null, query: null, type: null, count: null, question: null },
+      defaults: { action: 'network', person: null, query: null, type: null, count: null, question: null, company: null, title: null },
     },
     decomposeQuery: {
       required: {},

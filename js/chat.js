@@ -43,6 +43,20 @@ const Chat = (() => {
     if (route.action === 'enrich' && route.person) {
       const person = ChatRouter.matchPersonByName(route.person);
       if (person) return ChatEnrich.handleSingleEnrichment(person, userMessage);
+      // Person not in network — build a stub from router-extracted info and enrich via web
+      if (Enricher.isConfigured()) {
+        const nameParts = route.person.split(/\s+/);
+        const stub = {
+          f: nameParts[0] || '',
+          l: nameParts.slice(1).join(' ') || '',
+          p: route.title || '',
+          c: route.company || '',
+          e: '',
+          u: '',
+          _cat: 'other',
+        };
+        return ChatEnrich.handleSingleEnrichment(stub, userMessage);
+      }
     }
 
     if (route.action === 'batch_enrich' && route.query) {

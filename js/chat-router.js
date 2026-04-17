@@ -66,10 +66,13 @@ Return a JSON object with "action" and optional fields:
    - Default count is 15. Set higher for detailed briefs (50+) or if user explicitly asks (e.g. "find 50", "find 100", "a lot", "as many as possible" = 50)
    ${!hasWebSearch ? '- NOT AVAILABLE (no web search configured) — use "network" instead' : ''}
 
-3. "enrich" — Look up detailed background of a specific person. Use when:
+3. "enrich" — Look up detailed background of a specific NAMED person. Use when:
    - User names a specific person and wants to know more ("tell me about John Smith", "what's Sarah's background?")
    - User says "enrich person X", "enrich John Smith", "prep for call with X", "research X"
-   - Return: { "action": "enrich", "person": "Full Name" }
+   - User pastes info about ONE person and asks to research them (e.g. "Julien Trouillet COO at Macquarie, find out everything")
+   - The person can be EITHER in the network OR external — both cases use enrich
+   - Return: { "action": "enrich", "person": "Full Name", "company": "Company Name or empty", "title": "Title or empty" }
+   - Always extract company and title if mentioned in the query. They're needed for web search if the person isn't in the network.
 
 4. "batch_enrich" — Search backgrounds of network connections for hidden links. Use when:
    - User asks about previous employers, education, or history ("who went to Stanford?", "anyone ex-McKinsey?")
