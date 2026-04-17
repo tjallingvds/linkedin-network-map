@@ -155,16 +155,20 @@ body {
 .sidebar-chat-item > svg { flex-shrink: 0; opacity: 0.3; }
 .sidebar-chat-item .sidebar-chat-title { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 
-.sidebar-chat-rename {
+.sidebar-chat-rename,
+.sidebar-chat-delete {
   flex-shrink: 0; width: 20px; height: 20px; border-radius: 4px;
   background: transparent; border: none; padding: 0;
   display: flex; align-items: center; justify-content: center;
   color: var(--text3); cursor: pointer; opacity: 0;
-  transition: opacity 0.12s, background 0.12s;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
 }
-.sidebar-chat-item:hover .sidebar-chat-rename { opacity: 1; }
+.sidebar-chat-item:hover .sidebar-chat-rename,
+.sidebar-chat-item:hover .sidebar-chat-delete { opacity: 1; }
 .sidebar-chat-rename:hover { background: rgba(0,0,0,0.06); color: var(--text1); }
-.sidebar-chat-rename svg { opacity: 0.7; }
+.sidebar-chat-delete:hover { background: rgba(220,60,60,0.08); color: #c0392b; }
+.sidebar-chat-rename svg,
+.sidebar-chat-delete svg { opacity: 0.7; }
 
 .sidebar-chat-edit {
   flex: 1; min-width: 0; padding: 2px 6px; border: 1px solid var(--border);
