@@ -16,6 +16,7 @@ const ChatState = (() => {
   let _lastQuery = null;
   let _lastNetworkResults = null;
   let _lastEnrichment = null; // { person, profile, text }
+  let _currentTable = null; // { headers, rows, filename, source: 'paste'|'upload' }
   let _currentBrief = null;
   let _parsedBrief = null;
 
@@ -92,6 +93,10 @@ const ChatState = (() => {
   function getLastEnrichment() { return _lastEnrichment; }
   function setLastEnrichment(e) { _lastEnrichment = e; }
 
+  function getCurrentTable() { return _currentTable; }
+  function setCurrentTable(t) { _currentTable = t; }
+  function clearCurrentTable() { _currentTable = null; }
+
   // ─── Brief ─────────────────────────────────────────────────
 
   function getCurrentBrief() { return _currentBrief; }
@@ -150,6 +155,7 @@ INDUSTRIES: ${topIndustries}`;
     getLastQuery, setLastQuery,
     getLastNetworkResults, setLastNetworkResults,
     getLastEnrichment, setLastEnrichment,
+    getCurrentTable, setCurrentTable, clearCurrentTable,
     getCurrentBrief, setCurrentBrief,
     getParsedBrief, setParsedBrief,
     getAllData, setAllData,

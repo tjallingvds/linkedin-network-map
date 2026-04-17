@@ -618,3 +618,116 @@
   color: var(--text3); text-decoration: none; transition: all 0.08s;
 }
 .disc-link:hover { color: var(--text2); background: var(--surface); }
+
+/* ═══════════════════════════════════════════
+   ATTACH BUTTON + TABLE IMPORT/RESULT
+   ═══════════════════════════════════════════ */
+
+.chat-page-attach {
+  width: 26px; height: 26px; border-radius: 6px;
+  background: transparent; border: none;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text3); cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.chat-page-attach:hover { color: var(--text); background: rgba(0,0,0,0.05); }
+.chat-page-attach svg { transform: rotate(-45deg); }
+
+/* Table card — used for both imported and enriched tables */
+.chat-table-card {
+  align-self: stretch; max-width: 100%;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 12px;
+  overflow: hidden; animation: msgIn 0.2s ease;
+}
+.chat-table-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.chat-table-info { flex: 1; min-width: 0; }
+.chat-table-label {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; color: var(--text);
+  letter-spacing: -0.1px;
+}
+.chat-table-label svg { color: var(--text3); flex-shrink: 0; }
+.chat-table-sub {
+  font-size: 11px; color: var(--text3); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-table-actions {
+  display: flex; gap: 6px; flex-shrink: 0;
+}
+.chat-table-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 10px; border-radius: 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--text2); font-size: 11.5px; font-weight: 500;
+  font-family: inherit; cursor: pointer;
+  transition: all 0.12s;
+}
+.chat-table-btn:hover { color: var(--text); border-color: var(--text3); background: var(--surface); }
+.chat-table-btn.copied { color: #2f7a4f; border-color: #2f7a4f; }
+.chat-table-btn svg { flex-shrink: 0; }
+.chat-table-copy { background: var(--text); color: var(--surface); border-color: var(--text); }
+.chat-table-copy:hover { background: var(--text); opacity: 0.85; color: var(--surface); }
+.chat-table-clear { color: var(--text3); }
+
+.chat-table-scroll {
+  overflow-x: auto; max-height: 320px; overflow-y: auto;
+}
+.chat-table-scroll::-webkit-scrollbar { height: 8px; width: 8px; }
+.chat-table-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.chat-table-data {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+.chat-table-data thead th {
+  position: sticky; top: 0; background: var(--surface);
+  text-align: left; padding: 8px 12px; font-weight: 600;
+  color: var(--text2); border-bottom: 1px solid var(--border);
+  white-space: nowrap; font-size: 11px; letter-spacing: 0.1px;
+}
+.chat-table-data tbody td {
+  padding: 7px 12px; border-bottom: 1px solid var(--border);
+  color: var(--text); vertical-align: top;
+  max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-table-data tbody tr:last-child td { border-bottom: none; }
+.chat-table-data tbody tr:hover td { background: var(--hover); }
+
+.chat-table-more {
+  padding: 8px 14px; font-size: 11px; color: var(--text3);
+  border-top: 1px solid var(--border); background: var(--surface);
+  text-align: center;
+}
+
+/* Table enrichment progress bar */
+.chat-table-progress {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; margin: 4px 0;
+  background: var(--surface2); border: 1px solid var(--border); border-radius: 12px;
+  animation: msgIn 0.18s ease;
+}
+.chat-table-progress-icon {
+  width: 28px; height: 28px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text2); flex-shrink: 0;
+}
+.chat-table-progress-body { flex: 1; min-width: 0; }
+.chat-table-progress-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  letter-spacing: -0.1px; line-height: 1.2;
+}
+.chat-table-progress-detail {
+  font-size: 11px; color: var(--text3); margin-top: 2px;
+}
+.chat-table-progress-track {
+  height: 3px; background: var(--border); border-radius: 2px;
+  overflow: hidden; margin-top: 6px;
+}
+.chat-table-progress-fill {
+  height: 100%; background: linear-gradient(90deg, #8B7EC8 0%, #9B6B8A 100%);
+  border-radius: 2px; transition: width 0.3s ease;
+}

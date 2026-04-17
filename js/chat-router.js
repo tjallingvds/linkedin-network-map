@@ -20,12 +20,15 @@ const ChatRouter = (() => {
       .map(m => `${m.role}: ${m.content.slice(0, 150)}`).join('\n');
 
     let previousContext = '';
+    const currentTable = ChatState.getCurrentTable();
     const lastEnrichment = ChatState.getLastEnrichment();
     const lastDiscovery = ChatState.getLastDiscovery();
     const lastBatch = ChatState.getLastBatchResults();
     const lastQuery = ChatState.getLastQuery();
 
-    if (lastEnrichment?.person) {
+    if (currentTable) {
+      previousContext = `\nPREVIOUS ACTION: A spreadsheet of ${currentTable.rows.length} people is currently loaded with columns [${currentTable.headers.join(', ')}]. ANY request to find/add/lookup/verify info about these people (e.g. "find emails", "add LinkedIn URLs", "verify their titles", "fill in missing data", "what are their phone numbers") MUST be classified as "enrich_table". Use clarify only if the user clearly is NOT asking about the table.`;
+    } else if (lastEnrichment?.person) {
       const p = lastEnrichment.person;
       previousContext = `\nPREVIOUS ACTION: Just researched ${p.f} ${p.l} (${p.p || 'unknown role'}${p.c ? ' at ' + p.c : ''}). Detailed profile is in memory. Treat any follow-up question or pronoun ("him", "her", "they", "this person", "the guy", etc.) as referring to ${p.f} ${p.l}.`;
     } else if (lastDiscovery) {
@@ -96,6 +99,12 @@ Return a JSON object with "action" and optional fields:
    - The user uses pronouns ("him", "her", "they", "this person", "the guy") that refer to someone from the previous action
    - CRITICAL: If the previous search/enrichment just returned results and the user asks anything related (filtering, sorting, contact info, drafting messages, opinions), this is ALWAYS a followup — do NOT re-run the search and do NOT clarify
    - Return: { "action": "followup" }
+
+8. "enrich_table" — A spreadsheet/table of people is loaded and the user wants to add or fill in columns. Use when:
+   - A table is loaded (see PREVIOUS ACTION) AND the user asks to find/add/lookup/verify info about its rows
+   - Examples: "find emails", "add their LinkedIn URLs", "what's their current title", "fill in phone numbers", "verify they still work there"
+   - Return: { "action": "enrich_table" }
+   - Do NOT use this if no table is loaded.
 
 7. "clarify" — You're not confident enough to search effectively. Use SPARINGLY and only when:
    - The query is very short (1-2 words) and uses abbreviations, slang, or jargon (e.g. "ib", "pe", "vc", "mc", "mbb") — clarify these because abbreviations can mean different things

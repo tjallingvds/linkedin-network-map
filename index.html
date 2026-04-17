@@ -135,6 +135,12 @@
           <textarea class="chat-page-input" id="chatPageInput" placeholder="Describe who you're looking for..." rows="1"></textarea>
           <div class="chat-page-input-toolbar">
             <div class="chat-page-input-toolbar-left">
+              <button class="chat-page-attach" id="chatPageAttach" title="Upload CSV with people to enrich">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                </svg>
+              </button>
+              <input type="file" id="chatPageFileInput" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" style="display:none">
               <span class="chat-toolbar-chip" id="toolbarAiChip" title="AI provider"></span>
               <span class="chat-toolbar-chip" id="toolbarSearchChip" title="Web search"></span>
             </div>
@@ -180,10 +186,12 @@
 <script src="js/network-search.js?v=17"></script>
 <script src="js/modal.js?v=17"></script>
 <script src="js/chat-state.js?v=17"></script>
+<script src="js/table-import.js?v=17"></script>
 <script src="js/chat-router.js?v=17"></script>
 <script src="js/chat-search.js?v=17"></script>
 <script src="js/chat-discovery.js?v=17"></script>
 <script src="js/chat-enrich.js?v=17"></script>
+<script src="js/chat-table-enrich.js?v=17"></script>
 <script src="js/chat.js?v=17"></script>
 <script src="js/chat-ui.js?v=17"></script>
 <script src="js/graph.js?v=17"></script>

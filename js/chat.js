@@ -13,7 +13,19 @@ const Chat = (() => {
   async function send(userMessage) {
     ChatState.pushMessage('user', userMessage);
 
+    // If there's a currently loaded table, all messages first try table enrichment
+    // unless the user explicitly cancels it. Router still classifies for fallback.
     const route = await ChatRouter.classifyIntent(userMessage);
+
+    if (route.action === 'enrich_table' || (ChatState.getCurrentTable() && route.action === 'enrich_table')) {
+      const table = ChatState.getCurrentTable();
+      if (table) {
+        const result = await ChatTableEnrich.enrichTable(table, userMessage);
+        ChatState.pushMessage('assistant', `Enriched table: ${result.intent}`);
+        ChatState.setCurrentTable(result); // promote enriched result to be the new active table
+        return { tableEnriched: true, ...result };
+      }
+    }
 
     if (route.action === 'clarify' && route.question) {
       const text = route.question;

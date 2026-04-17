@@ -33,6 +33,10 @@ const AIJSON = (() => {
         linkedinUrl: '', interests: [], talkingPoints: [], sources: [],
       },
     },
+    tablePlan: {
+      required: {},
+      defaults: { columns: [], intent: '' },
+    },
   };
 
   // ─── Balanced-brace extraction ─────────────────────────────

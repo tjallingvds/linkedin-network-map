@@ -45,6 +45,13 @@ const ChatUI = (() => {
     Enricher.setSearchProgressCallback((count, query) => {
       _updateSearchTick(count, query);
     });
+
+    // Table enrichment progress
+    if (typeof ChatTableEnrich !== 'undefined') {
+      ChatTableEnrich.setProgressCallback((stage, done, total, columns) => {
+        _showTableEnrichProgress(stage, done, total, columns);
+      });
+    }
   }
 
   // ─── Welcome Message ───
@@ -72,6 +79,8 @@ const ChatUI = (() => {
   function _bindInputEvents() {
     const input = document.getElementById('chatPageInput');
     const sendBtn = document.getElementById('chatPageSend');
+    const attachBtn = document.getElementById('chatPageAttach');
+    const fileInput = document.getElementById('chatPageFileInput');
 
     input.addEventListener('input', () => {
       input.style.height = 'auto';
@@ -87,8 +96,56 @@ const ChatUI = (() => {
       }
     });
 
+    // Detect paste of TSV/CSV → import as a table instead of plain text
+    input.addEventListener('paste', (e) => {
+      const pasted = e.clipboardData?.getData('text/plain');
+      if (!pasted) return;
+      if (TableImport.looksLikeTable(pasted)) {
+        e.preventDefault();
+        const table = TableImport.parse(pasted);
+        if (table.headers.length && table.rows.length) {
+          _importTable({ ...table, source: 'paste' });
+        }
+      }
+    });
+
+    // Attach button → open file picker
+    if (attachBtn && fileInput) {
+      attachBtn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const table = TableImport.parse(text, { filename: file.name });
+          if (table.headers.length && table.rows.length) {
+            _importTable({ ...table, source: 'upload', filename: file.name });
+          } else {
+            _addMessage('system', 'Could not parse table from that file.');
+          }
+        } catch (err) {
+          _addMessage('system', `Failed to read file: ${err.message}`);
+        }
+        fileInput.value = ''; // allow re-uploading same file
+      });
+    }
+
     sendBtn.addEventListener('click', () => handleSend());
     _updateToolbarChips();
+  }
+
+  /**
+   * Import a parsed table into chat state and render a preview card.
+   */
+  function _importTable(table) {
+    ChatState.setCurrentTable(table);
+    // Remove welcome screen if present
+    const welcome = document.querySelector('.chat-page-welcome');
+    if (welcome) welcome.remove();
+    _addTableCard(table, { isImport: true });
+    // Update placeholder to hint table mode
+    const input = document.getElementById('chatPageInput');
+    if (input) input.placeholder = 'Ask what to add to the table — e.g. "find emails for everyone"';
   }
 
   function _updateToolbarChips() {
@@ -233,7 +290,15 @@ const ChatUI = (() => {
       _hideResearching();
 
       // ─── Deterministic rendering from structured results ───
-      if (result.structured) {
+      if (result.tableEnriched) {
+        // Enriched table — render as a copy/download-able table card
+        if (result.intent) _addMessage('assistant', _esc(result.intent), false);
+        if (result.addedColumns?.length) {
+          _addTableCard(result, { isResult: true, addedColumns: result.addedColumns });
+        } else {
+          _addMessage('system', 'No new columns added. Try a more specific request like "find emails" or "add LinkedIn URLs".');
+        }
+      } else if (result.structured) {
         // Structured JSON response from network search
         _renderStructuredResult(result, msg);
       } else if (result.discovered && result.people?.length > 0) {
@@ -986,6 +1051,140 @@ const ChatUI = (() => {
   function _esc(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /**
+   * Render a table card in chat. Shows preview rows + actions.
+   * opts: { isImport, isResult, addedColumns }
+   */
+  function _addTableCard(table, opts = {}) {
+    const container = document.getElementById('chatPageMessages');
+    const card = document.createElement('div');
+    card.className = 'chat-table-card';
+
+    const rowCount = table.rows.length;
+    const colCount = table.headers.length;
+    const previewRows = table.rows.slice(0, 5);
+
+    const labelText = opts.isImport
+      ? (table.source === 'upload' ? `Loaded ${_esc(table.filename || 'file')}` : 'Loaded pasted table')
+      : (opts.isResult ? 'Enriched table' : 'Table');
+
+    const subText = opts.isResult && opts.addedColumns?.length
+      ? `Added: ${opts.addedColumns.map(c => _esc(c.name)).join(', ')} · ${rowCount} rows`
+      : `${rowCount} rows · ${colCount} columns`;
+
+    const headerRow = table.headers.map(h => `<th>${_esc(h)}</th>`).join('');
+    const dataRows = previewRows.map(r =>
+      `<tr>${table.headers.map((_, i) => `<td>${_esc(r[i] || '')}</td>`).join('')}</tr>`
+    ).join('');
+
+    const moreRows = rowCount > previewRows.length
+      ? `<div class="chat-table-more">+ ${rowCount - previewRows.length} more rows</div>`
+      : '';
+
+    const actions = opts.isResult
+      ? `<button class="chat-table-btn chat-table-copy" title="Copy as TSV (paste straight into Excel)">
+           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+           Copy
+         </button>
+         <button class="chat-table-btn chat-table-download" title="Download as CSV">
+           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+           Download CSV
+         </button>`
+      : `<button class="chat-table-btn chat-table-clear" title="Clear loaded table">
+           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+           Clear
+         </button>`;
+
+    card.innerHTML = `
+      <div class="chat-table-header">
+        <div class="chat-table-info">
+          <div class="chat-table-label">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+            ${_esc(labelText)}
+          </div>
+          <div class="chat-table-sub">${subText}</div>
+        </div>
+        <div class="chat-table-actions">${actions}</div>
+      </div>
+      <div class="chat-table-scroll">
+        <table class="chat-table-data">
+          <thead><tr>${headerRow}</tr></thead>
+          <tbody>${dataRows}</tbody>
+        </table>
+      </div>
+      ${moreRows}
+    `;
+
+    // Bind action handlers
+    if (opts.isResult) {
+      card.querySelector('.chat-table-copy')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        try {
+          const tsv = TableImport.toTsv(table.headers, table.rows);
+          await navigator.clipboard.writeText(tsv);
+          btn.classList.add('copied');
+          const orig = btn.innerHTML;
+          btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Copied';
+          setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = orig; }, 1800);
+        } catch {
+          btn.textContent = 'Copy failed';
+        }
+      });
+      card.querySelector('.chat-table-download')?.addEventListener('click', () => {
+        const csv = TableImport.toCsv(table.headers, table.rows);
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.href = url; a.download = `enriched_${stamp}.csv`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      });
+    } else {
+      card.querySelector('.chat-table-clear')?.addEventListener('click', () => {
+        ChatState.clearCurrentTable();
+        card.remove();
+        const input = document.getElementById('chatPageInput');
+        if (input) input.placeholder = 'Follow up or start a new search...';
+      });
+    }
+
+    container.appendChild(card);
+    container.scrollTop = container.scrollHeight;
+  }
+
+  /**
+   * Show / update a progress bar while a table is being enriched per-row.
+   */
+  function _showTableEnrichProgress(stage, done, total, columns) {
+    const container = document.getElementById('chatPageMessages');
+    let bar = document.getElementById('tableEnrichProgress');
+    if (stage === 'done') { bar?.remove(); return; }
+
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'tableEnrichProgress';
+      bar.className = 'chat-table-progress';
+      bar.innerHTML = `
+        <div class="chat-table-progress-icon">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></svg>
+        </div>
+        <div class="chat-table-progress-body">
+          <div class="chat-table-progress-title"></div>
+          <div class="chat-table-progress-detail"></div>
+          <div class="chat-table-progress-track"><div class="chat-table-progress-fill"></div></div>
+        </div>
+      `;
+      container.appendChild(bar);
+    }
+    const cols = columns?.length ? columns.map(c => c.name).join(', ') : 'fields';
+    bar.querySelector('.chat-table-progress-title').textContent = `Enriching ${cols}`;
+    bar.querySelector('.chat-table-progress-detail').textContent = `${done} of ${total} rows`;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    bar.querySelector('.chat-table-progress-fill').style.width = `${pct}%`;
+    container.scrollTop = container.scrollHeight;
   }
 
   function _addEnrichedProfile(person, profile) {
