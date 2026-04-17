@@ -1163,6 +1163,44 @@ const ChatUI = (() => {
     if (!el) return;
     const chat = _chatHistory.find(c => c.id === _activeChatId);
     el.textContent = chat?.title || 'New chat';
+    el.title = chat ? 'Double-click to rename' : '';
+    // Remove any existing listener to avoid duplicates
+    el.ondblclick = chat ? () => _startRenameBreadcrumb(chat.id) : null;
+  }
+
+  function _startRenameBreadcrumb(chatId) {
+    const el = document.getElementById('chatBreadcrumbTitle');
+    if (!el) return;
+    const chat = _chatHistory.find(c => c.id === chatId);
+    if (!chat) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = chat.title;
+    input.className = 'chat-breadcrumb-edit';
+    el.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const finish = (save) => {
+      const newTitle = save ? input.value.trim() : chat.title;
+      if (save && newTitle && newTitle !== chat.title) {
+        chat.title = newTitle.slice(0, 60);
+        _saveChatHistory();
+        _renderChatHistory();
+      }
+      const span = document.createElement('span');
+      span.className = 'chat-breadcrumb-current';
+      span.id = 'chatBreadcrumbTitle';
+      span.textContent = chat.title;
+      input.replaceWith(span);
+      _updateBreadcrumb();
+    };
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
   }
 
   function _renderChatHistory() {
@@ -1176,13 +1214,51 @@ const ChatUI = (() => {
       item.className = `sidebar-chat-item${chat.id === _activeChatId ? ' active' : ''}`;
       item.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-        <span>${_esc(chat.title)}</span>
+        <span class="sidebar-chat-title">${_esc(chat.title)}</span>
+        <button class="sidebar-chat-rename" title="Rename chat">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+        </button>
       `;
-      item.addEventListener('click', () => {
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.sidebar-chat-rename')) return;
         if (chat.id !== _activeChatId) _switchToChat(chat.id);
+      });
+      item.querySelector('.sidebar-chat-rename').addEventListener('click', (e) => {
+        e.stopPropagation();
+        _startRenameSidebar(item, chat.id);
       });
       container.appendChild(item);
     });
+  }
+
+  function _startRenameSidebar(item, chatId) {
+    const chat = _chatHistory.find(c => c.id === chatId);
+    if (!chat) return;
+    const titleEl = item.querySelector('.sidebar-chat-title');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = chat.title;
+    input.className = 'sidebar-chat-edit';
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const finish = (save) => {
+      const newTitle = save ? input.value.trim() : chat.title;
+      if (save && newTitle && newTitle !== chat.title) {
+        chat.title = newTitle.slice(0, 60);
+        _saveChatHistory();
+      }
+      _renderChatHistory();
+      if (chat.id === _activeChatId) _updateBreadcrumb();
+    };
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+    input.addEventListener('click', (e) => e.stopPropagation());
   }
 
   function _newChat() {
