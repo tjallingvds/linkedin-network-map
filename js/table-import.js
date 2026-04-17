@@ -37,8 +37,30 @@ const TableImport = (() => {
     const rows = _parseDelimited(normalized, delim);
     if (!rows.length) return { headers: [], rows: [] };
 
-    const headers = rows[0].map(h => h.trim());
-    const dataRows = rows.slice(1).filter(r => r.some(cell => cell && cell.trim().length > 0));
+    // Find the actual header row — skip leading junk rows like:
+    // - single-cell rows (Excel formula errors like "#NAME?", "#REF!", titles)
+    // - all-empty rows
+    // - rows where 2+ cells have content count as headers
+    const headerIdx = _findHeaderRow(rows);
+    if (headerIdx === -1) return { headers: [], rows: [] };
+
+    const headerRow = rows[headerIdx].map(h => (h || '').trim());
+
+    // Trim trailing empty header cells (Excel often pastes extra tabs)
+    let lastReal = headerRow.length - 1;
+    while (lastReal >= 0 && !headerRow[lastReal]) lastReal--;
+    const headers = headerRow.slice(0, lastReal + 1);
+    const colCount = headers.length;
+
+    // Data rows: everything after the header, trimmed to header column count
+    const dataRows = rows.slice(headerIdx + 1)
+      .filter(r => r.some(cell => cell && cell.trim().length > 0))
+      .map(r => {
+        const trimmed = r.slice(0, colCount);
+        // Pad short rows with empty strings so column count is consistent
+        while (trimmed.length < colCount) trimmed.push('');
+        return trimmed;
+      });
 
     return {
       headers,
@@ -46,6 +68,23 @@ const TableImport = (() => {
       filename: opts.filename || null,
       delimiter: delim === '\t' ? 'tsv' : 'csv',
     };
+  }
+
+  /**
+   * Find the most likely header row in the parsed rows.
+   * Heuristic: first row with at least 2 non-empty cells AND no obvious Excel error markers.
+   * Falls back to row 0 if nothing matches.
+   */
+  function _findHeaderRow(rows) {
+    for (let i = 0; i < Math.min(rows.length, 5); i++) {
+      const r = rows[i];
+      const nonEmpty = r.filter(c => c && c.trim().length > 0);
+      if (nonEmpty.length < 2) continue; // skip single-cell rows
+      const looksLikeError = nonEmpty.length === 1 && /^#(NAME|REF|VALUE|DIV|N\/A|NULL)/i.test(nonEmpty[0]);
+      if (looksLikeError) continue;
+      return i;
+    }
+    return rows.length ? 0 : -1;
   }
 
   /**

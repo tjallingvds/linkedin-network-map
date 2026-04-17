@@ -293,10 +293,15 @@ const ChatUI = (() => {
       if (result.tableEnriched) {
         // Enriched table — render as a copy/download-able table card
         if (result.intent) _addMessage('assistant', _esc(result.intent), false);
-        if (result.addedColumns?.length) {
-          _addTableCard(result, { isResult: true, addedColumns: result.addedColumns });
+        const didWork = (result.addedColumns?.length || 0) + (result.filledColumns?.length || 0);
+        if (didWork) {
+          _addTableCard(result, {
+            isResult: true,
+            addedColumns: result.addedColumns,
+            filledColumns: result.filledColumns,
+          });
         } else {
-          _addMessage('system', 'No new columns added. Try a more specific request like "find emails" or "add LinkedIn URLs".');
+          _addMessage('system', 'No changes. Try a more specific request like "find emails" or "add LinkedIn URLs".');
         }
       } else if (result.structured) {
         // Structured JSON response from network search
@@ -1070,9 +1075,16 @@ const ChatUI = (() => {
       ? (table.source === 'upload' ? `Loaded ${_esc(table.filename || 'file')}` : 'Loaded pasted table')
       : (opts.isResult ? 'Enriched table' : 'Table');
 
-    const subText = opts.isResult && opts.addedColumns?.length
-      ? `Added: ${opts.addedColumns.map(c => _esc(c.name)).join(', ')} · ${rowCount} rows`
-      : `${rowCount} rows · ${colCount} columns`;
+    let subText;
+    if (opts.isResult) {
+      const parts = [];
+      if (opts.addedColumns?.length) parts.push(`Added ${opts.addedColumns.map(c => _esc(c.name)).join(', ')}`);
+      if (opts.filledColumns?.length) parts.push(`Filled ${opts.filledColumns.map(c => _esc(c.name)).join(', ')}`);
+      parts.push(`${rowCount} rows`);
+      subText = parts.join(' · ');
+    } else {
+      subText = `${rowCount} rows · ${colCount} columns`;
+    }
 
     const headerRow = table.headers.map(h => `<th>${_esc(h)}</th>`).join('');
     const dataRows = previewRows.map(r =>

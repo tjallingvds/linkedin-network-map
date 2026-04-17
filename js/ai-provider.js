@@ -82,17 +82,17 @@ const AIProvider = (() => {
    * @param {object} opts - { temperature, maxTokens, json, useTools }
    */
   async function aiCall(systemPrompt, userMessage, opts = {}) {
-    const { temperature = 0.3, maxTokens = 1024, json = false, useTools = false } = opts;
+    const { temperature = 0.3, maxTokens = 1024, json = false, useTools = false, forceFirstTool = null } = opts;
 
     if (_provider === 'claude') {
-      return _callClaude(systemPrompt, userMessage, temperature, maxTokens, json, useTools);
+      return _callClaude(systemPrompt, userMessage, temperature, maxTokens, json, useTools, forceFirstTool);
     } else {
       // OpenAI-compatible (works for both openai and deepseek)
-      return _callOpenAI(systemPrompt, userMessage, temperature, maxTokens, json, useTools);
+      return _callOpenAI(systemPrompt, userMessage, temperature, maxTokens, json, useTools, forceFirstTool);
     }
   }
 
-  async function _callOpenAI(systemPrompt, userMessage, temperature, maxTokens, json, useTools) {
+  async function _callOpenAI(systemPrompt, userMessage, temperature, maxTokens, json, useTools, forceFirstTool) {
     const endpoint = ENDPOINTS[_provider];
     const model = MODELS[_provider];
     const toolDefs = useTools && Object.keys(_tools).length ? _buildToolDefs() : null;
@@ -107,7 +107,13 @@ const AIProvider = (() => {
     for (let round = 0; round < MAX_ROUNDS; round++) {
       const body = { model, messages, temperature, max_tokens: maxTokens };
       if (json && !toolDefs) body.response_format = { type: 'json_object' };
-      if (toolDefs) body.tools = toolDefs;
+      if (toolDefs) {
+        body.tools = toolDefs;
+        // Force the model to call a specific tool on the first round
+        if (round === 0 && forceFirstTool) {
+          body.tool_choice = { type: 'function', function: { name: forceFirstTool } };
+        }
+      }
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -161,7 +167,7 @@ const AIProvider = (() => {
     throw new Error('Tool call loop exceeded maximum rounds');
   }
 
-  async function _callClaude(systemPrompt, userMessage, temperature, maxTokens, json, useTools) {
+  async function _callClaude(systemPrompt, userMessage, temperature, maxTokens, json, useTools, forceFirstTool) {
     const toolDefs = useTools && Object.keys(_tools).length ? _buildClaudeToolDefs() : null;
     const messages = [{ role: 'user', content: userMessage }];
 
@@ -174,7 +180,12 @@ const AIProvider = (() => {
         messages,
         temperature,
       };
-      if (toolDefs) body.tools = toolDefs;
+      if (toolDefs) {
+        body.tools = toolDefs;
+        if (round === 0 && forceFirstTool) {
+          body.tool_choice = { type: 'tool', name: forceFirstTool };
+        }
+      }
 
       const res = await fetch(ENDPOINTS.claude, {
         method: 'POST',

@@ -35,7 +35,7 @@ const AIJSON = (() => {
     },
     tablePlan: {
       required: {},
-      defaults: { columns: [], intent: '' },
+      defaults: { operations: [], columns: [], intent: '' },
     },
   };
 
