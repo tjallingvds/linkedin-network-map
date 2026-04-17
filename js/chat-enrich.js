@@ -20,10 +20,7 @@ const ChatEnrich = (() => {
   async function handleSingleEnrichment(person, userMessage) {
     try {
       const cached = Enricher.getCached(person);
-      PersonModal.show(person, cached);
-
       const profile = cached || await Enricher.enrichPerson(person);
-      if (!cached && profile) PersonModal.show(person, profile);
 
       const enrichContext = profile ? JSON.stringify(profile, null, 2) : 'No additional background found.';
 

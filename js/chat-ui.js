@@ -1218,17 +1218,48 @@ const ChatUI = (() => {
         <button class="sidebar-chat-rename" title="Rename chat">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
         </button>
+        <button class="sidebar-chat-delete" title="Delete chat">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+        </button>
       `;
       item.addEventListener('click', (e) => {
         if (e.target.closest('.sidebar-chat-rename')) return;
+        if (e.target.closest('.sidebar-chat-delete')) return;
         if (chat.id !== _activeChatId) _switchToChat(chat.id);
       });
       item.querySelector('.sidebar-chat-rename').addEventListener('click', (e) => {
         e.stopPropagation();
         _startRenameSidebar(item, chat.id);
       });
+      item.querySelector('.sidebar-chat-delete').addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (confirm(`Delete "${chat.title}"? This can't be undone.`)) {
+          _deleteChat(chat.id);
+        }
+      });
       container.appendChild(item);
     });
+  }
+
+  function _deleteChat(chatId) {
+    if (!chatId) return;
+    // Remove from history list
+    const idx = _chatHistory.findIndex(c => c.id === chatId);
+    if (idx === -1) return;
+    _chatHistory.splice(idx, 1);
+    _saveChatHistory();
+    // Remove session storage
+    try { localStorage.removeItem('chat_session_' + chatId); } catch { /* ignore */ }
+    // If we deleted the active chat, reset to a new chat state
+    if (chatId === _activeChatId) {
+      _activeChatId = null;
+      Chat.clearHistory();
+      const container = document.getElementById('chatPageMessages');
+      if (container) container.innerHTML = '';
+      _renderWelcome();
+    }
+    _renderChatHistory();
+    _updateBreadcrumb();
   }
 
   function _startRenameSidebar(item, chatId) {
