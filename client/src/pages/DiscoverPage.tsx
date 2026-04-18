@@ -76,14 +76,10 @@ export function DiscoverPage() {
   const [boardMenuOpen, setBoardMenuOpen] = useState(false);
   const [boards, setBoards] = useState<CrmBoard[]>([]);
 
-  // Create a chat on first render.
-  useEffect(() => {
-    if (chatId) return;
-    api.post<{ id: string }>("/api/chats", { title: "New search" })
-      .then((c) => { setChatId(c.id); setActiveNav(c.id); refreshChatList(); })
-      .catch(() => { /* offline — errors surface on send */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId]);
+  // Chats are created LAZILY — only when the user actually sends a message.
+  // Previously we auto-created on mount AND inside handleNewChat, which meant
+  // clicking "New search" (and then never typing) left empty "New search"
+  // rows cluttering the sidebar. sendSearch/sendDraft now ensure a chat exists.
 
   // Load boards so the "Add to board" menu has options.
   useEffect(() => {
@@ -122,12 +118,22 @@ export function DiscoverPage() {
     setOpenProspect(null);
     setOutreachFor(null);
     setChatId(null);
+    setActiveNav("");
     setLastProspects([]);
     setLastBrief("");
-    api.post<{ id: string }>("/api/chats", { title: "New search" })
-      .then((c) => { setChatId(c.id); setActiveNav(c.id); refreshChatList(); })
-      .catch(() => { /* offline */ });
+    // Intentionally NO api.post here — the chat is created on first send.
   };
+
+  /** Ensure we have a chatId, creating one lazily on the user's first send. */
+  async function ensureChatId(seedTitle?: string): Promise<string> {
+    if (chatId) return chatId;
+    const title = (seedTitle ?? "New search").slice(0, 80) || "New search";
+    const c = await api.post<{ id: string }>("/api/chats", { title });
+    setChatId(c.id);
+    setActiveNav(c.id);
+    refreshChatList();
+    return c.id;
+  }
 
   // Let users click a saved search in the sidebar to re-enter that chat.
   const handleSelectNav = (id: string) => {
@@ -156,17 +162,10 @@ export function DiscoverPage() {
   async function sendSearch(override?: string) {
     const text = (override ?? draft).trim();
     if (!text || streaming) return;
-    if (!chatId) {
-      flash("Backend not connected — start the API server.");
-      return;
-    }
 
     setDraft("");
     setView("thread");
     setStreaming(true);
-    // If we already showed a prospect list, subsequent messages are follow-ups
-    // against that list (filter / ask a question) — the server's followup mode
-    // decides text-vs-filter. Clicking "New search" in the sidebar clears this.
     const isFollowup = lastProspects.length > 0;
     const mode: "find" | "network" | "followup" = isFollowup ? "followup" : searchMode;
     setThread((t) => [
@@ -176,7 +175,8 @@ export function DiscoverPage() {
     ]);
 
     try {
-      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${chatId}/completion`, {
+      const id = await ensureChatId(text);
+      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${id}/completion`, {
         content: text,
         mode,
         previousProspects: isFollowup ? lastProspects : undefined,
@@ -191,11 +191,12 @@ export function DiscoverPage() {
   }
 
   async function sendDiscoverMore() {
-    if (!chatId || streaming || lastProspects.length === 0) return;
+    if (streaming || lastProspects.length === 0) return;
     setStreaming(true);
     setThread((t) => [...t, { role: "ai", thinking: true, steps: SEARCH_STEPS }]);
     try {
-      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${chatId}/completion`, {
+      const id = await ensureChatId(lastBrief);
+      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${id}/completion`, {
         content: "Show me more matches beyond the ones already listed.",
         mode: "discover_more",
         previousProspects: lastProspects,
@@ -211,11 +212,11 @@ export function DiscoverPage() {
   }
 
   async function sendDraft(recipients: Prospect[]) {
-    if (!chatId) { flash("Backend not connected."); return; }
     setStreaming(true);
     setThread((t) => [...t, { role: "ai", thinking: true, steps: DRAFT_STEPS }]);
     try {
-      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${chatId}/completion`, {
+      const id = await ensureChatId(lastBrief || "Outreach drafts");
+      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${id}/completion`, {
         content: "Write personalised outreach for these recipients.",
         mode: "draft",
         recipients,
@@ -357,7 +358,7 @@ export function DiscoverPage() {
   return (
     <div className="stage">
       <div className="wallpaper light-bloom" />
-      <div className="app" style={collapsed ? { gridTemplateColumns: "56px 1fr" } : undefined}>
+      <div className={`app${collapsed ? " collapsed" : ""}`}>
         <Sidebar
           activeNav={activeNav}
           onSelect={handleSelectNav}

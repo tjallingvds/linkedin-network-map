@@ -63,6 +63,15 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
     linear-gradient(180deg, #15131a 0%, #0b0a10 100%);
 }
 
+/* Register --sidebar-w as an actual length so CSS can interpolate it
+   smoothly (without @property, custom properties animate as plain strings
+   which is why grid-template-columns transitions can look jumpy). */
+@property --sidebar-w {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 248px;
+}
+
 /* Shell — fullscreen, no inset wallpaper border */
 .app {
   position: absolute; inset: 0; z-index: 1;
@@ -73,11 +82,12 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   border-radius: 0;
   box-shadow: none;
   display: grid;
-  grid-template-columns: 248px 1fr;
+  --sidebar-w: 248px;
+  grid-template-columns: var(--sidebar-w) 1fr;
   overflow: hidden;
-  /* Smooth sidebar collapse — animate the column width. */
-  transition: grid-template-columns 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: --sidebar-w 360ms cubic-bezier(0.65, 0, 0.35, 1);
 }
+.app.collapsed { --sidebar-w: 56px; }
 [data-theme="dark"] .app { box-shadow: none; }
 
 /* Kanban drag & drop. */
@@ -147,13 +157,44 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 /* Sidebar */
 .sidebar {
-  padding: 16px 12px;
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; flex-direction: column;
   border-right: 1px solid var(--hairline);
   background: rgba(255,255,255,0.3);
   min-height: 0;
+  overflow: hidden;
+  /* Content hides overflow gracefully while collapsing. */
 }
 [data-theme="dark"] .sidebar { background: rgba(255,255,255,0.015); }
+
+/* Sidebar header — matches .topbar exactly (14px vertical padding + 1px
+   border-bottom) so the top divider is a continuous line across the app. */
+.sidebar-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 12px;
+  border-bottom: 1px solid var(--hairline);
+  min-height: 54px;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  transition: padding 320ms cubic-bezier(0.65, 0, 0.35, 1);
+}
+.sidebar.collapsed .sidebar-header { padding: 14px 6px; justify-content: center; }
+.sidebar.collapsed .brand-l { justify-content: center; }
+
+.sidebar-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  padding: 14px 12px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.sidebar.collapsed .sidebar-body { padding: 14px 8px; align-items: center; }
+
+/* Text labels fade as the sidebar collapses. */
+.sidebar.collapsed .brand-name,
+.sidebar.collapsed .new-chat span,
+.sidebar.collapsed .search-input,
+.sidebar.collapsed .nav-section,
+.sidebar.collapsed .sidebar-spacer,
+.sidebar.collapsed .upgrade { display: none; }
+
 .brand { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 4px; }
 .brand-l { display: flex; align-items: center; gap: 10px; }
 .brand-mark {
@@ -236,7 +277,8 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; position: relative; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 22px; border-bottom: 1px solid var(--hairline);
+  padding: 11px 24px; border-bottom: 1px solid var(--hairline);
+  min-height: 54px; box-sizing: border-box;
 }
 .crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
 .crumbs .cur { color: var(--text); font-weight: 500; }
@@ -1020,3 +1062,264 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   animation: toast-in 250ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 12px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* ============================================================
+   Microinteractions layer.
+   Consolidates hover/active/focus feedback so every interactive
+   surface has clear, consistent motion. Appended last so these
+   rules win over earlier, simpler ones without needing !important.
+   ============================================================ */
+
+/* Global: keyboard focus ring — subtle accent glow, no ugly browser default. */
+:focus-visible {
+  outline: 2px solid oklch(0.72 0.14 155 / 0.55);
+  outline-offset: 2px;
+  border-radius: 6px;
+  transition: outline-offset 120ms ease;
+}
+button:focus-visible { outline-offset: 3px; }
+
+/* ---- Pill buttons ---- */
+.pill-btn {
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 160ms ease;
+}
+.pill-btn:hover:not(:disabled) {
+  background: var(--panel-2);
+  border-color: var(--hairline-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(20,14,40,0.06);
+}
+.pill-btn:active:not(:disabled) { transform: translateY(0) scale(0.98); box-shadow: none; }
+.pill-btn.primary:hover:not(:disabled) {
+  opacity: 1;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(20,14,40,0.18);
+}
+.pill-btn.primary:active:not(:disabled) { transform: translateY(0) scale(0.98); box-shadow: 0 2px 6px rgba(20,14,40,0.15); }
+
+/* ---- Icon buttons ---- */
+.icon-btn {
+  transition: background 140ms ease, color 140ms ease, transform 120ms ease;
+}
+.icon-btn:hover { background: var(--hairline); color: var(--text); transform: scale(1.08); }
+.icon-btn:active { transform: scale(0.92); }
+
+/* ---- Sidebar nav items — left accent bar that slides in. ---- */
+.nav-item {
+  position: relative;
+  transition: background 160ms ease, color 160ms ease, padding 180ms ease;
+}
+.nav-item::before {
+  content: "";
+  position: absolute; left: 4px; top: 8px; bottom: 8px;
+  width: 2px; border-radius: 2px;
+  background: var(--accent);
+  transform: scaleY(0);
+  transform-origin: center;
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 180ms;
+  opacity: 0;
+}
+.nav-item:hover { background: rgba(20,14,40,0.05); color: var(--text); padding-left: 14px; }
+.nav-item:hover::before { transform: scaleY(1); opacity: 0.5; }
+.nav-item.active { color: var(--text); background: var(--accent-soft); padding-left: 14px; }
+.nav-item.active::before { transform: scaleY(1); opacity: 1; }
+
+/* ---- New-chat button — subtle glow on hover. ---- */
+.new-chat {
+  transition: transform 140ms ease, box-shadow 180ms ease, opacity 140ms ease;
+}
+.new-chat:hover { opacity: 1; transform: translateY(-1px); box-shadow: 0 6px 18px rgba(20,14,40,0.22); }
+.new-chat:active { transform: translateY(0) scale(0.98); box-shadow: 0 2px 6px rgba(20,14,40,0.18); }
+
+/* ---- Upgrade / get-credits button ---- */
+.upgrade-btn {
+  transition: transform 140ms ease, box-shadow 180ms ease, filter 140ms ease;
+}
+.upgrade-btn:hover { transform: translateY(-1px); filter: brightness(1.03); box-shadow: 0 6px 18px rgba(20,14,40,0.18); }
+.upgrade-btn:active { transform: translateY(0) scale(0.98); }
+
+/* ---- Send button — scale up + glow on hover, press on active. ---- */
+.send {
+  transition:
+    background 160ms ease,
+    transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 200ms ease;
+}
+.send:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.05);
+  box-shadow: 0 8px 22px oklch(0.55 0.07 165 / 0.5), 0 0 0 3px oklch(0.72 0.12 165 / 0.15);
+}
+.send:active:not(:disabled) { transform: translateY(0) scale(0.94); box-shadow: 0 2px 6px oklch(0.5 0.07 165 / 0.4); }
+
+/* ---- Composer tool buttons (Attach list, mode switch) ---- */
+.tool {
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+.tool:hover { background: var(--hairline); color: var(--text); transform: translateY(-0.5px); }
+.tool:active { transform: translateY(0) scale(0.97); }
+
+/* ---- Mode switch (Discover/CRM, Web/My network) — active chip glides. ---- */
+.mode-switch button {
+  transition: background 220ms cubic-bezier(0.2, 0.8, 0.2, 1), color 160ms, box-shadow 220ms;
+}
+.mode-switch button:not(.active):hover { color: var(--text); background: rgba(20,14,40,0.03); }
+.mode-switch button:active { transform: scale(0.97); }
+.view-toggle button { transition: background 180ms, color 180ms, transform 140ms; }
+.view-toggle button:not(.active):hover { color: var(--text); transform: translateY(-0.5px); }
+.view-toggle button:active { transform: scale(0.97); }
+
+/* ---- Avatar mini — ring on hover. ---- */
+.avatar-mini {
+  transition: transform 150ms ease, box-shadow 200ms ease;
+}
+.avatar-mini:hover { transform: scale(1.08); box-shadow: 0 0 0 3px var(--accent-soft); }
+.avatar-mini:active { transform: scale(0.96); }
+
+/* ---- Search input — accent ring on focus. ---- */
+.search-input {
+  transition: border-color 160ms ease, box-shadow 200ms ease;
+}
+.search-input:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px oklch(0.72 0.14 155 / 0.15);
+}
+
+/* ---- Composer shell lifts subtly when the textarea is focused. ---- */
+.composer {
+  transition: border-color 200ms ease, box-shadow 240ms ease;
+}
+.composer:focus-within {
+  border-color: var(--hairline-strong);
+  box-shadow: 0 10px 32px rgba(20,14,40,0.08);
+}
+
+/* ---- Prospect card — stronger lift + scale on hover, active press. ---- */
+.prospect-card {
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 240ms ease;
+}
+.prospect-card:hover {
+  transform: translateY(-3px) scale(1.005);
+  box-shadow: 0 14px 32px rgba(20,14,40,0.10);
+}
+.prospect-card:active { transform: translateY(-1px) scale(0.998); }
+.prospect-card.selected .pc-check { animation: check-pop 200ms cubic-bezier(0.2, 1.4, 0.4, 1); }
+@keyframes check-pop { 0% { transform: scale(0.6); } 60% { transform: scale(1.15); } 100% { transform: scale(1); } }
+
+/* ---- Kanban card — lift + tilt on hover (except while dragging). ---- */
+.kanban-card {
+  transition:
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 220ms ease,
+    border-color 160ms,
+    opacity 140ms;
+}
+.kanban-card:hover:not(.dragging) {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(20,14,40,0.10);
+  border-color: var(--stage-color);
+}
+.kanban-card:active:not(.dragging) { transform: translateY(0) scale(0.99); }
+
+/* ---- Kanban empty/add — dashed hover fill. ---- */
+.kanban-empty { transition: all 180ms ease; }
+.kanban-empty:hover { background: var(--accent-soft); transform: translateY(-1px); }
+.kanban-add { transition: background 140ms, color 140ms, transform 140ms; }
+.kanban-add:hover { transform: rotate(90deg); color: var(--accent); }
+
+/* ---- Table rows — soft left accent + shift on hover. ---- */
+.tbl-row:not(.tbl-head) {
+  position: relative;
+  transition: background 140ms ease;
+}
+.tbl-row:not(.tbl-head)::before {
+  content: "";
+  position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 2px; background: var(--accent);
+  transform: scaleX(0); transform-origin: left;
+  transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  border-radius: 2px;
+}
+.tbl-row:not(.tbl-head):hover::before { transform: scaleX(1); }
+
+/* ---- Editable cells — clearer "you can edit me" affordance. ---- */
+.ed-cell {
+  display: inline-block; min-height: 20px;
+  padding: 2px 6px; border-radius: 5px; margin: -2px -6px;
+  cursor: text;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+.ed-cell:hover { background: var(--accent-soft); box-shadow: inset 0 0 0 1px oklch(0.72 0.14 155 / 0.3); }
+.ed-input {
+  padding: 2px 6px; border-radius: 5px; margin: -2px -6px;
+  background: var(--shell); color: var(--text);
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  animation: ed-focus 160ms ease;
+}
+@keyframes ed-focus { from { box-shadow: inset 0 0 0 0 var(--accent); } to { box-shadow: inset 0 0 0 1.5px var(--accent); } }
+
+/* ---- Board switcher button & dropdown items ---- */
+.board-btn { transition: background 160ms, border-color 160ms, transform 140ms, box-shadow 180ms; }
+.board-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(20,14,40,0.06); }
+.board-btn:active { transform: translateY(0) scale(0.98); }
+.bm-item { transition: background 140ms, padding 160ms, color 140ms; }
+.bm-item:hover { padding-left: 14px; background: var(--panel-2); color: var(--text); }
+
+/* ---- Kanban temp dot & stage pill — gentle pulse on hover. ---- */
+.kc-temp { transition: transform 160ms ease, box-shadow 200ms ease; }
+.kc-temp:hover { transform: scale(1.25); box-shadow: 0 0 0 4px currentColor; filter: opacity(0.2); }
+.tbl-stage { transition: transform 160ms ease, box-shadow 200ms ease; cursor: pointer; }
+.tbl-stage:hover { transform: translateY(-0.5px); box-shadow: 0 2px 8px var(--stage-color); }
+
+/* ---- Balance / credit chip — pulse on balance changes. ---- */
+.balance-chip { transition: transform 160ms ease, background 180ms, border-color 180ms; }
+.balance-chip:hover { transform: scale(1.06); }
+
+/* ---- Brand mark — breathe slightly when a search is running (hook up via class). ---- */
+.brand-mark { transition: transform 200ms ease, box-shadow 240ms ease; }
+.brand-mark:hover { transform: scale(1.08) rotate(-2deg); }
+
+/* ---- Sparkle composer icon — subtle rotation when the composer is focused. ---- */
+.composer:focus-within .composer-spark svg { animation: spark-tick 2.6s ease-in-out infinite; }
+@keyframes spark-tick {
+  0%, 100% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(12deg) scale(1.12); }
+}
+
+/* ---- Drawer + modal entry ---- */
+.drawer { animation: drawer-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes drawer-in { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ---- Hero orb reacts to hover on the hero block itself. ---- */
+.hero:hover .orb { transform: translateY(-2px); }
+.orb { transition: transform 400ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+
+/* ---- Toast — subtle bounce on entrance ---- */
+.toast { animation: toast-bounce 340ms cubic-bezier(0.2, 1.3, 0.4, 1); }
+@keyframes toast-bounce {
+  0% { opacity: 0; transform: translate(-50%, 16px); }
+  70% { transform: translate(-50%, -3px); }
+  100% { opacity: 1; transform: translate(-50%, 0); }
+}
+
+/* Reduced motion — defer to the earlier rule which disables transitions
+   for known classes. Add the ones introduced above. */
+@media (prefers-reduced-motion: reduce) {
+  .pill-btn, .icon-btn, .nav-item, .nav-item::before, .new-chat, .upgrade-btn,
+  .send, .tool, .mode-switch button, .view-toggle button, .avatar-mini,
+  .search-input, .composer, .prospect-card, .pc-check, .kanban-card,
+  .kanban-empty, .kanban-add, .tbl-row, .tbl-row::before, .ed-cell, .ed-input,
+  .board-btn, .bm-item, .kc-temp, .tbl-stage, .balance-chip, .brand-mark,
+  .composer:focus-within .composer-spark svg, .drawer, .orb, .toast {
+    animation: none !important;
+    transition: none !important;
+  }
+}

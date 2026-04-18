@@ -46,83 +46,85 @@ export function Sidebar({
   );
   const filteredLists = useMemo(() => filterByQuery(lists, q), [lists, q]);
 
-  if (collapsed) {
-    // Ultra-minimal rail — just the brand mark + toggle + new button.
-    return (
-      <aside className="sidebar" style={{ width: 56, padding: "16px 8px" }}>
-        <div className="brand" style={{ justifyContent: "center", padding: 0 }}>
-          <div className="brand-mark" title="Nontrivial" />
-        </div>
-        <button className="icon-btn" style={{ margin: "8px auto" }} title="Expand sidebar" onClick={onToggleCollapse}>
-          <IconSidebar size={14} />
-        </button>
-        <button
-          className="icon-btn"
-          style={{ margin: "0 auto", background: "var(--text)", color: "var(--shell)" }}
-          title="New search"
-          onClick={onNewChat}
-        >
-          <IconNewChat size={14} />
-        </button>
-      </aside>
-    );
-  }
-
   return (
-    <aside className="sidebar">
-      <div className="brand">
+    <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
+      {/* Sidebar header — single 54px row in both states so the divider
+          lines up with the topbar's bottom border across the whole app. */}
+      <div className="sidebar-header">
         <div className="brand-l">
-          <div className="brand-mark" />
-          <span className="brand-name">Nontrivial</span>
+          <div className="brand-mark" title="Nontrivial" />
+          {!collapsed && <span className="brand-name">Nontrivial</span>}
         </div>
-        <button className="icon-btn" title="Collapse sidebar" onClick={onToggleCollapse}>
-          <IconSidebar size={14} />
-        </button>
+        {!collapsed && (
+          <button className="icon-btn" title="Collapse sidebar" onClick={onToggleCollapse}>
+            <IconSidebar size={14} />
+          </button>
+        )}
       </div>
 
-      <button className="new-chat" onClick={onNewChat}>
-        <IconNewChat size={14} />
-        <span>New search</span>
-        <span className="kbd">⌘N</span>
-      </button>
+      <div className="sidebar-body">
+        {collapsed ? (
+          <>
+            <button className="icon-btn" title="Expand sidebar" onClick={onToggleCollapse}>
+              <IconSidebar size={14} />
+            </button>
+            <button
+              className="icon-btn"
+              style={{ background: "var(--text)", color: "var(--shell)" }}
+              title="New search"
+              onClick={onNewChat}
+            >
+              <IconNewChat size={14} />
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="new-chat" onClick={onNewChat}>
+              <IconNewChat size={14} />
+              <span>New search</span>
+              <span className="kbd">⌘N</span>
+            </button>
 
-      <div className="search-input">
-        <IconSearch size={13} />
-        <input
-          placeholder="Search prospects, lists…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
+            <div className="search-input">
+              <IconSearch size={13} />
+              <input
+                placeholder="Search prospects, lists…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+            </div>
+
+            <NavSection
+              label="Saved searches"
+              addIcon={<IconBookmark size={11} />}
+              items={filteredSearches}
+              icon={<IconSearch size={13} />}
+              activeNav={activeNav}
+              onSelect={onSelect}
+              emptyMsg={q ? "No matches" : savedSearches.length === 0 ? "Your searches appear here" : undefined}
+            />
+
+            <NavSection
+              label="Lists & segments"
+              addIcon={<IconList size={11} />}
+              items={filteredLists}
+              icon={<IconUsers size={13} />}
+              activeNav={activeNav}
+              onSelect={onSelect}
+              emptyMsg={q ? "No matches" : lists.length === 0 ? "No lists yet" : undefined}
+            />
+
+            <div className="sidebar-spacer" />
+
+            <UsageCard
+              usage={usage}
+              balance={balance}
+              onOpenSettings={onOpenSettings}
+              onGetMoreUsage={onGetMoreUsage}
+            />
+          </>
+        )}
       </div>
-
-      <NavSection
-        label="Saved searches"
-        addIcon={<IconBookmark size={11} />}
-        items={filteredSearches}
-        icon={<IconSearch size={13} />}
-        activeNav={activeNav}
-        onSelect={onSelect}
-        emptyMsg={q ? "No matches" : undefined}
-      />
-
-      <NavSection
-        label="Lists & segments"
-        addIcon={<IconList size={11} />}
-        items={filteredLists}
-        icon={<IconUsers size={13} />}
-        activeNav={activeNav}
-        onSelect={onSelect}
-        emptyMsg={q ? "No matches" : lists.length === 0 ? "No lists yet" : undefined}
-      />
-
-      <div className="sidebar-spacer" />
-
-      <UsageCard
-        usage={usage}
-        balance={balance}
-        onOpenSettings={onOpenSettings}
-        onGetMoreUsage={onGetMoreUsage}
-      />
     </aside>
   );
 }
