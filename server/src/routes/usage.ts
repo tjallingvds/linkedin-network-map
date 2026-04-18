@@ -30,9 +30,9 @@ router.get("/", async (req: AuthedRequest, res) => {
   res.json({
     balance,
     buckets: [
-      { label: "Apollo match", used: apolloCredits, max: CAPS.apollo, unit: "" },
-      { label: "Tavily search", used: tavilyCredits, max: CAPS.tavily, unit: "" },
-      { label: "LLM tokens", used: llmTokens, max: CAPS.llm_tokens, unit: "" },
+      { label: "Search", used: tavilyCredits, max: CAPS.tavily, unit: "" },
+      { label: "Enrich", used: apolloCredits, max: CAPS.apollo, unit: "" },
+      { label: "LLM", used: llmTokens, max: CAPS.llm_tokens, unit: "" },
     ],
     byProvider: rows,
     costUsd: costMicros / 1_000_000,

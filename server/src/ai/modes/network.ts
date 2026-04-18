@@ -8,6 +8,7 @@ import type { AiProvider, CompletionResult, Prospect } from "@app/shared";
 import { env } from "../../env.js";
 import { db } from "../../db/index.js";
 import { aiJson } from "../json.js";
+import type { UserKeys } from "../user-keys.js";
 
 interface Filters {
   roleKeywords: string[];       // e.g. ["vp engineering", "cto", "head of ai"]
@@ -27,8 +28,9 @@ export async function runNetwork(
   provider: AiProvider,
   userInput: string,
   userId: string,
+  userKeys?: UserKeys,
 ): Promise<CompletionResult> {
-  assertLlmKey(provider);
+  assertLlmKey(provider, userKeys);
 
   // Step 1: decompose the brief into typed filters.
   let filters: Filters = EMPTY_FILTERS;
@@ -37,7 +39,7 @@ export async function runNetwork(
       provider,
       "You convert a prospecting brief into structured filters for searching a local LinkedIn connections table. Be concise: 1-4 keywords per bucket, lowercase.",
       `Brief: ${userInput}\n\nReturn {"roleKeywords": [...], "companyKeywords": [...], "industryKeywords": [...], "excludeCompanies": [...], "excludeRoles": [...], "notes": "<one line>"}.\nOnly include values explicitly implied. Empty arrays are fine.`,
-      { maxTokens: 400, userId },
+      { maxTokens: 400, userId, userKeys },
     );
     filters = {
       roleKeywords: normalize(raw.roleKeywords),
@@ -189,10 +191,10 @@ const STOP = new Set([
   "like", "love", "working", "work", "about", "into", "at", "in", "to", "of",
 ]);
 
-function assertLlmKey(provider: AiProvider) {
+function assertLlmKey(provider: AiProvider, userKeys?: UserKeys) {
   const ok =
-    provider === "openai" ? !!env.OPENAI_API_KEY :
-    provider === "anthropic" ? !!env.ANTHROPIC_API_KEY :
-    !!env.DEEPSEEK_API_KEY;
-  if (!ok) throw new Error(`${provider.toUpperCase()}_API_KEY not set — configure it in server .env.`);
+    provider === "openai" ? !!(userKeys?.openai ?? env.OPENAI_API_KEY) :
+    provider === "anthropic" ? !!(userKeys?.anthropic ?? env.ANTHROPIC_API_KEY) :
+    !!(userKeys?.deepseek ?? env.DEEPSEEK_API_KEY);
+  if (!ok) throw new Error(`${provider.toUpperCase()} key missing — add it in Settings → API keys.`);
 }

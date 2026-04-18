@@ -14,6 +14,7 @@ import type { AiProvider, CompletionResult, Prospect } from "@app/shared";
 import { env } from "../../env.js";
 import { aiJson } from "../json.js";
 import { apolloMatchPerson, apolloConfigured, type ApolloPerson } from "../../integrations/apollo.js";
+import type { UserKeys } from "../user-keys.js";
 
 interface Subject {
   firstName?: string;
@@ -25,13 +26,18 @@ interface Subject {
   linkedinUrl?: string;
 }
 
-export async function runEnrich(provider: AiProvider, userInput: string, userId: string): Promise<CompletionResult> {
-  if (!apolloConfigured()) {
-    throw new Error("APOLLO_API_KEY not set — Apollo is required for enrichment. Add it to server .env.");
+export async function runEnrich(
+  provider: AiProvider,
+  userInput: string,
+  userId: string,
+  userKeys?: UserKeys,
+): Promise<CompletionResult> {
+  if (!apolloConfigured(userKeys)) {
+    throw new Error("Apollo key missing — add it in Settings → API keys to enable enrichment.");
   }
 
   // 1. Parse input into identity subjects.
-  const subjects = await parseSubjects(provider, userInput, userId);
+  const subjects = await parseSubjects(provider, userInput, userId, userKeys);
   if (subjects.length === 0) {
     return {
       kind: "text",
@@ -43,7 +49,7 @@ export async function runEnrich(provider: AiProvider, userInput: string, userId:
   const matches = await Promise.all(
     subjects.slice(0, 8).map(async (s) => {
       try {
-        return await apolloMatchPerson({ ...s, userId });
+        return await apolloMatchPerson({ ...s, userId, userKeys });
       } catch (err) {
         console.warn("apollo match failed for", s, err);
         return null;
@@ -66,20 +72,20 @@ export async function runEnrich(provider: AiProvider, userInput: string, userId:
   return { kind: "prospects", summary, prospects };
 }
 
-async function parseSubjects(provider: AiProvider, userInput: string, userId: string): Promise<Subject[]> {
-  // Prefer AI-powered parsing when a key is available; it handles messy input
-  // (pasted email signatures, mixed lists) much better than regex.
+async function parseSubjects(
+  provider: AiProvider, userInput: string, userId: string, userKeys?: UserKeys,
+): Promise<Subject[]> {
   const hasAi =
-    provider === "openai" ? !!env.OPENAI_API_KEY :
-    provider === "anthropic" ? !!env.ANTHROPIC_API_KEY :
-    !!env.DEEPSEEK_API_KEY;
+    provider === "openai" ? !!(userKeys?.openai ?? env.OPENAI_API_KEY) :
+    provider === "anthropic" ? !!(userKeys?.anthropic ?? env.ANTHROPIC_API_KEY) :
+    !!(userKeys?.deepseek ?? env.DEEPSEEK_API_KEY);
 
   if (hasAi) {
     const parsed = await aiJson<{ subjects: Subject[] }>(
       provider,
       "You parse pasted text into identity objects for people lookup (Apollo.io match format).",
       `Input:\n${userInput}\n\nReturn {"subjects": [...]} where each subject has whatever identifiers you can extract: {firstName?, lastName?, name?, email?, domain?, organizationName?, linkedinUrl?}. Max 8 subjects. Include only what you can infer — don't guess.`,
-      { maxTokens: 700, userId },
+      { maxTokens: 700, userId, userKeys },
     );
     return parsed.subjects ?? [];
   }

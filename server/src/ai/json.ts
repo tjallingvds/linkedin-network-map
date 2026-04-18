@@ -6,6 +6,7 @@ import { env } from "../env.js";
 import type { AiProvider } from "@app/shared";
 import { recordUsage, refundCredits, reserveCredits } from "../usage/tracker.js";
 import { tokensToCredits } from "../billing/packs.js";
+import type { UserKeys } from "./user-keys.js";
 
 const MODELS: Record<AiProvider, string> = {
   openai: "gpt-4o-mini",
@@ -17,26 +18,38 @@ export async function aiJson<T = unknown>(
   provider: AiProvider,
   systemPrompt: string,
   userPrompt: string,
-  opts: { maxTokens?: number; userId?: string } = {},
+  opts: { maxTokens?: number; userId?: string; userKeys?: UserKeys } = {},
 ): Promise<T> {
   const maxTokens = opts.maxTokens ?? 3000;
   const model = MODELS[provider];
 
+  const userKey =
+    provider === "openai" ? opts.userKeys?.openai :
+    provider === "anthropic" ? opts.userKeys?.anthropic :
+    opts.userKeys?.deepseek;
+  const envKey =
+    provider === "openai" ? env.OPENAI_API_KEY :
+    provider === "anthropic" ? env.ANTHROPIC_API_KEY :
+    env.DEEPSEEK_API_KEY;
+  const apiKey = userKey ?? envKey;
+  const byok = !!userKey;
+  const chargeUserId = byok ? undefined : opts.userId;
+
   const estInput = Math.ceil((systemPrompt.length + userPrompt.length) / 4);
   const reserved = tokensToCredits(estInput + maxTokens);
-  if (opts.userId) await reserveCredits(opts.userId, reserved);
+  if (chargeUserId) await reserveCredits(chargeUserId, reserved);
 
   let raw = "";
   let inputTokens = 0;
   let outputTokens = 0;
 
   if (provider === "anthropic") {
-    if (!env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not set");
+    if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": env.ANTHROPIC_API_KEY,
+        "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
@@ -55,9 +68,8 @@ export async function aiJson<T = unknown>(
     inputTokens = data.usage.input_tokens ?? 0;
     outputTokens = data.usage.output_tokens ?? 0;
   } else {
-    const baseUrl = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
-    const apiKey = provider === "deepseek" ? env.DEEPSEEK_API_KEY : env.OPENAI_API_KEY;
     if (!apiKey) throw new Error(`${provider.toUpperCase()}_API_KEY not set`);
+    const baseUrl = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
 
     const r = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
@@ -82,11 +94,11 @@ export async function aiJson<T = unknown>(
     outputTokens = data.usage.completion_tokens ?? 0;
   }
 
-  if (opts.userId) {
+  if (chargeUserId) {
     const actual = tokensToCredits(inputTokens + outputTokens);
-    if (reserved > actual) await refundCredits(opts.userId, reserved - actual);
+    if (reserved > actual) await refundCredits(chargeUserId, reserved - actual);
     await recordUsage({
-      userId: opts.userId, provider, kind: "json",
+      userId: chargeUserId, provider, kind: "json",
       inputTokens, outputTokens, metadata: { model },
     });
   }

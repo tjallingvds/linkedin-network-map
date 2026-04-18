@@ -13,11 +13,12 @@
 import { env } from "../env.js";
 import { recordUsage, reserveCredits } from "../usage/tracker.js";
 import { CREDIT_COST } from "../billing/packs.js";
+import type { UserKeys } from "../ai/user-keys.js";
 
 const BASE = "https://api.apollo.io/api/v1";
 
-export function apolloConfigured(): boolean {
-  return !!env.APOLLO_API_KEY;
+export function apolloConfigured(userKeys?: UserKeys): boolean {
+  return !!(userKeys?.apollo ?? env.APOLLO_API_KEY);
 }
 
 /** Raw Apollo person shape (subset we care about). */
@@ -64,17 +65,21 @@ export async function apolloPeopleSearch(params: {
   title?: string;
   page?: number;
   userId?: string;
+  userKeys?: UserKeys;
 }): Promise<{ people: ApolloPerson[]; total: number }> {
-  if (!env.APOLLO_API_KEY) throw new Error("APOLLO_API_KEY not set");
+  const apiKey = params.userKeys?.apollo ?? env.APOLLO_API_KEY;
+  if (!apiKey) throw new Error("APOLLO_API_KEY not set");
+  const byok = !!params.userKeys?.apollo;
+  const chargeUserId = byok ? undefined : params.userId;
 
-  if (params.userId) await reserveCredits(params.userId, CREDIT_COST.apolloMatch);
+  if (chargeUserId) await reserveCredits(chargeUserId, CREDIT_COST.apolloMatch);
 
   const r = await fetch(`${BASE}/mixed_people/search`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-cache",
-      "X-Api-Key": env.APOLLO_API_KEY,
+      "X-Api-Key": apiKey,
     },
     body: JSON.stringify({
       q_keywords: params.q,
@@ -86,8 +91,8 @@ export async function apolloPeopleSearch(params: {
   });
   if (!r.ok) throw new Error(`apollo search ${r.status}: ${await r.text()}`);
   const data = (await r.json()) as ApolloSearchResponse;
-  if (params.userId) {
-    await recordUsage({ userId: params.userId, provider: "apollo", kind: "people_search", credits: 1 });
+  if (chargeUserId) {
+    await recordUsage({ userId: chargeUserId, provider: "apollo", kind: "people_search", credits: 1 });
   }
   return { people: data.people ?? [], total: data.pagination?.total_entries ?? 0 };
 }
@@ -105,8 +110,12 @@ export async function apolloMatchPerson(params: {
   organizationName?: string;
   linkedinUrl?: string;
   userId?: string;
+  userKeys?: UserKeys;
 }): Promise<ApolloPerson | null> {
-  if (!env.APOLLO_API_KEY) throw new Error("APOLLO_API_KEY not set");
+  const apiKey = params.userKeys?.apollo ?? env.APOLLO_API_KEY;
+  if (!apiKey) throw new Error("APOLLO_API_KEY not set");
+  const byok = !!params.userKeys?.apollo;
+  const chargeUserId = byok ? undefined : params.userId;
 
   const body: Record<string, unknown> = { reveal_personal_emails: false };
   if (params.firstName) body.first_name = params.firstName;
@@ -122,7 +131,7 @@ export async function apolloMatchPerson(params: {
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-cache",
-      "X-Api-Key": env.APOLLO_API_KEY,
+      "X-Api-Key": apiKey,
     },
     body: JSON.stringify(body),
   });
@@ -131,9 +140,8 @@ export async function apolloMatchPerson(params: {
     throw new Error(`apollo match ${r.status}: ${await r.text()}`);
   }
   const data = (await r.json()) as ApolloMatchResponse;
-  if (params.userId) {
-    // Reserve happened at the top — just log the event.
-    await recordUsage({ userId: params.userId, provider: "apollo", kind: "match", credits: 1 });
+  if (chargeUserId) {
+    await recordUsage({ userId: chargeUserId, provider: "apollo", kind: "match", credits: 1 });
   }
   return data.person ?? null;
 }

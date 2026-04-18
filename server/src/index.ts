@@ -24,7 +24,19 @@ const app = express();
 app.set("trust proxy", 1); // needed on Railway/Fly/etc. for secure cookies
 
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors({ origin: env.CLIENT_URL, credentials: true }));
+app.use(cors({
+  origin: env.CLIENT_URL,
+  credentials: true,
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-User-Openai-Key",
+    "X-User-Anthropic-Key",
+    "X-User-Deepseek-Key",
+    "X-User-Tavily-Key",
+    "X-User-Apollo-Key",
+  ],
+}));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
 // Stripe webhook needs raw body; mount BEFORE express.json().

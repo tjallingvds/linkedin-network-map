@@ -7,6 +7,7 @@
  * Real requests still go through for endpoints the mock doesn't handle.
  */
 import { isMockApiEnabled, mockDispatch } from "./mockApi";
+import { loadApiKeys } from "../components/SettingsDrawer";
 
 const API_BASE = import.meta.env.VITE_API_URL || "";
 
@@ -20,6 +21,21 @@ export class ApiError extends Error {
   }
 }
 
+/** Build the per-request headers. Reads the user's API keys from localStorage
+ *  and forwards them as X-User-{Provider}-Key — the server prefers these over
+ *  its own env vars AND skips credit accounting when they're used. */
+function buildHeaders(body?: unknown): HeadersInit {
+  const h: Record<string, string> = {};
+  if (body) h["Content-Type"] = "application/json";
+  const keys = loadApiKeys();
+  if (keys.openai) h["X-User-Openai-Key"] = keys.openai;
+  if (keys.anthropic) h["X-User-Anthropic-Key"] = keys.anthropic;
+  if (keys.deepseek) h["X-User-Deepseek-Key"] = keys.deepseek;
+  if (keys.tavily) h["X-User-Tavily-Key"] = keys.tavily;
+  if (keys.apollo) h["X-User-Apollo-Key"] = keys.apollo;
+  return h;
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   if (isMockApiEnabled()) {
     const mocked = await mockDispatch(method, path, body);
@@ -30,7 +46,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const r = await fetch(`${API_BASE}${path}`, {
     method,
     credentials: "include",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: buildHeaders(body),
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {

@@ -17,6 +17,7 @@ import { z } from "zod";
 import { db } from "../db/index.js";
 import type { AuthedRequest } from "../auth/session.js";
 import { apolloMatchPerson, apolloConfigured } from "../integrations/apollo.js";
+import { extractUserKeys } from "../ai/user-keys.js";
 
 const router = Router();
 
@@ -289,8 +290,12 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
  * Fills in missing email, phone, LinkedIn, title, and company.
  */
 router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
-  if (!apolloConfigured()) {
-    return res.status(501).json({ error: "apollo_not_configured" });
+  const userKeys = extractUserKeys(req);
+  if (!apolloConfigured(userKeys)) {
+    return res.status(501).json({
+      error: "apollo_not_configured",
+      message: "Apollo key missing — add it in Settings → API keys to enable enrichment.",
+    });
   }
   const board = await ensureBoard(req.user!.id, req.params.boardId);
   if (!board) return res.status(404).json({ error: "board_not_found" });
@@ -319,7 +324,7 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
 
     let person = null;
     try {
-      person = await apolloMatchPerson({ ...params, userId: req.user!.id });
+      person = await apolloMatchPerson({ ...params, userId: req.user!.id, userKeys });
     } catch (err) {
       console.warn("apollo match failed:", (err as Error).message);
     }

@@ -49,7 +49,7 @@ button { font: inherit; color: inherit; background: none; border: 0; cursor: poi
 input, textarea { font: inherit; color: inherit; background: none; border: 0; outline: 0; resize: none; }
 
 /* Wallpaper — fills the full viewport behind the shell */
-.stage { position: fixed; inset: 0; display: grid; place-items: stretch; overflow: hidden; }
+.stage { position: fixed; inset: 0; overflow: hidden; }
 .wallpaper { position: absolute; inset: 0; z-index: 0; }
 .wallpaper.light-bloom {
   background:
@@ -65,9 +65,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 /* Shell — fullscreen, no inset wallpaper border */
 .app {
-  position: relative; z-index: 1;
-  width: 100%;
-  height: 100%;
+  position: absolute; inset: 0; z-index: 1;
   background: var(--shell);
   backdrop-filter: blur(28px) saturate(1.2);
   -webkit-backdrop-filter: blur(28px) saturate(1.2);
@@ -77,8 +75,52 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: grid;
   grid-template-columns: 248px 1fr;
   overflow: hidden;
+  /* Smooth sidebar collapse — animate the column width. */
+  transition: grid-template-columns 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 [data-theme="dark"] .app { box-shadow: none; }
+
+/* Key-missing card — friendlier than a raw red error string. */
+.key-missing-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px; border-radius: 14px;
+  background: linear-gradient(180deg, oklch(0.97 0.04 155 / 0.6), oklch(0.95 0.03 155 / 0.4));
+  border: 1px solid oklch(0.7 0.12 155 / 0.25);
+  animation: kmc-rise 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.kmc-icon {
+  width: 32px; height: 32px; flex: 0 0 32px; border-radius: 10px;
+  background: oklch(0.72 0.14 155); color: white;
+  display: grid; place-items: center;
+}
+.kmc-title { font-size: 13px; font-weight: 600; color: var(--text); letter-spacing: -0.005em; }
+.kmc-body { font-size: 12px; color: var(--text-dim); margin-top: 2px; line-height: 1.45; }
+@keyframes kmc-rise {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* General motion polish — smooth transitions on common chrome. */
+.icon-btn, .nav-item, .new-chat, .upgrade-btn, .brand-mark, .tool, .send,
+.avatar-mini, .board-btn, .bm-item, .kanban-add, .crm-toolbar .pill-btn {
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease,
+              transform 160ms ease, box-shadow 160ms ease;
+}
+.nav-item:hover, .bm-item:hover { transform: translateX(1px); }
+.drawer { transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.drawer-bg { animation: fade-in 180ms ease; }
+.import-modal { animation: kmc-rise 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  .app, .drawer, .drawer-bg, .import-modal, .key-missing-card,
+  .icon-btn, .nav-item, .new-chat, .upgrade-btn, .brand-mark, .tool, .send,
+  .avatar-mini, .board-btn, .bm-item, .kanban-add, .crm-toolbar .pill-btn {
+    transition: none !important;
+    animation: none !important;
+  }
+}
 
 /* Sidebar */
 .sidebar {

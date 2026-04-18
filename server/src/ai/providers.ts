@@ -26,39 +26,57 @@ const MODELS: Record<AiProvider, string> = {
   deepseek: "deepseek-chat",
 };
 
-export function hasKey(provider: AiProvider): boolean {
+import type { UserKeys } from "./user-keys.js";
+
+export function hasKey(provider: AiProvider, userKeys?: UserKeys): boolean {
   switch (provider) {
     case "openai":
-      return !!env.OPENAI_API_KEY;
+      return !!(userKeys?.openai ?? env.OPENAI_API_KEY);
     case "anthropic":
-      return !!env.ANTHROPIC_API_KEY;
+      return !!(userKeys?.anthropic ?? env.ANTHROPIC_API_KEY);
     case "deepseek":
-      return !!env.DEEPSEEK_API_KEY;
+      return !!(userKeys?.deepseek ?? env.DEEPSEEK_API_KEY);
   }
 }
 
-export function availableProviders(): AiProvider[] {
-  return (["openai", "anthropic", "deepseek"] as AiProvider[]).filter(hasKey);
+export function availableProviders(userKeys?: UserKeys): AiProvider[] {
+  return (["openai", "anthropic", "deepseek"] as AiProvider[]).filter((p) => hasKey(p, userKeys));
+}
+
+function providerKey(provider: AiProvider, userKeys?: UserKeys): { key: string | undefined; byok: boolean } {
+  const user =
+    provider === "openai" ? userKeys?.openai :
+    provider === "anthropic" ? userKeys?.anthropic :
+    userKeys?.deepseek;
+  if (user) return { key: user, byok: true };
+  const fallback =
+    provider === "openai" ? env.OPENAI_API_KEY :
+    provider === "anthropic" ? env.ANTHROPIC_API_KEY :
+    env.DEEPSEEK_API_KEY;
+  return { key: fallback, byok: false };
 }
 
 export async function aiChat(
   provider: AiProvider,
   messages: AiMessage[],
-  opts: { maxTokens?: number; temperature?: number; userId?: string } = {},
+  opts: { maxTokens?: number; temperature?: number; userId?: string; userKeys?: UserKeys } = {},
 ): Promise<AiCallResult> {
   const maxTokens = opts.maxTokens ?? 2048;
   const temperature = opts.temperature ?? 0.2;
   const model = MODELS[provider];
+  const { key: apiKey, byok } = providerKey(provider, opts.userKeys);
+  // BYOK: skip credit accounting — the user pays their provider directly.
+  const chargeUserId = byok ? undefined : opts.userId;
 
   // Reserve a conservative upper bound: prompt length + max output tokens.
   const estInput = Math.ceil(messages.reduce((a, m) => a + m.content.length, 0) / 4);
   const reserved = tokensToCredits(estInput + maxTokens);
-  if (opts.userId) await reserveCredits(opts.userId, reserved);
+  if (chargeUserId) await reserveCredits(chargeUserId, reserved);
 
   let result: AiCallResult;
 
   if (provider === "anthropic") {
-    if (!env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not set");
+    if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
     const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
     const convo = messages.filter((m) => m.role !== "system");
 
@@ -66,7 +84,7 @@ export async function aiChat(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": env.ANTHROPIC_API_KEY,
+        "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
@@ -90,9 +108,8 @@ export async function aiChat(
       model,
     };
   } else {
-    const baseUrl = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
-    const apiKey = provider === "deepseek" ? env.DEEPSEEK_API_KEY : env.OPENAI_API_KEY;
     if (!apiKey) throw new Error(`${provider.toUpperCase()}_API_KEY not set`);
+    const baseUrl = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
 
     const r = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
@@ -116,12 +133,11 @@ export async function aiChat(
     };
   }
 
-  if (opts.userId) {
-    // Reconcile: refund the gap between reserved and actually used credits.
+  if (chargeUserId) {
     const actual = tokensToCredits(result.inputTokens + result.outputTokens);
-    if (reserved > actual) await refundCredits(opts.userId, reserved - actual);
+    if (reserved > actual) await refundCredits(chargeUserId, reserved - actual);
     await recordUsage({
-      userId: opts.userId,
+      userId: chargeUserId,
       provider,
       kind: "chat",
       inputTokens: result.inputTokens,

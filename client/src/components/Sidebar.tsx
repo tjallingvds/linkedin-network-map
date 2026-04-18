@@ -183,9 +183,9 @@ function UsageCard({
 }) {
   // Fallback buckets when the real fetch hasn't completed yet.
   const view = usage.length > 0 ? usage : [
-    { label: "Apollo match", used: 0, max: 5_000, unit: "" },
-    { label: "Tavily search", used: 0, max: 10_000, unit: "" },
-    { label: "LLM tokens", used: 0, max: 5_000_000, unit: "" },
+    { label: "Search", used: 0, max: 10_000, unit: "" },
+    { label: "Enrich", used: 0, max: 5_000, unit: "" },
+    { label: "LLM", used: 0, max: 5_000_000, unit: "" },
   ];
 
   const low = balance < 20;
@@ -199,7 +199,7 @@ function UsageCard({
           {balance.toLocaleString()}
         </span>
       </div>
-      <p style={{ marginBottom: 10 }}>1 credit = 1 Tavily search or Apollo match.</p>
+      <p style={{ marginBottom: 10 }}>1 credit = 1 search or enrichment call.</p>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {view.map((u) => {
           const pct = u.max > 0 ? Math.min(100, Math.round((u.used / u.max) * 100)) : 0;

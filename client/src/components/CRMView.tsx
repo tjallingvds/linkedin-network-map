@@ -401,7 +401,7 @@ function ImportModal({
                 className="im-textarea"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder={sample}
+                placeholder="Paste CSV or TSV here… (or click Load sample / Upload file below)"
                 autoFocus
               />
               <input
@@ -482,6 +482,92 @@ function ImportModal({
         )}
       </div>
     </>
+  );
+}
+
+function AddContactModal({
+  boardName, onClose, onAdd,
+}: {
+  boardName: string;
+  onClose: () => void;
+  onAdd: (d: { name: string; title?: string; company?: string; email?: string }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [title, setTitle] = useState("");
+  const [company, setCompany] = useState("");
+  const [email, setEmail] = useState("");
+  const [saving, setSaving] = useState(false);
+  const firstRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { firstRef.current?.focus(); }, []);
+
+  const canSave = name.trim().length > 0 && !saving;
+  const submit = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    try {
+      await onAdd({
+        name: name.trim(),
+        title: title.trim() || undefined,
+        company: company.trim() || undefined,
+        email: email.trim() || undefined,
+      });
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <>
+      <div className="drawer-bg" onClick={onClose} />
+      <div className="import-modal">
+        <div className="im-head">
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>Add contact</div>
+            <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>
+              New contact in <strong>{boardName}</strong>
+            </div>
+          </div>
+          <button className="icon-btn" onClick={onClose}><IconClose size={15} /></button>
+        </div>
+        <div className="im-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <Field label="Name" required>
+            <input ref={firstRef} value={name} onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && canSave) submit(); }}
+              placeholder="e.g. Maya Okafor" style={{ padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 12.5, color: "var(--text)" }}/>
+          </Field>
+          <Field label="Title">
+            <input value={title} onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && canSave) submit(); }}
+              placeholder="e.g. VP Engineering" style={{ padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 12.5, color: "var(--text)" }}/>
+          </Field>
+          <Field label="Company">
+            <input value={company} onChange={(e) => setCompany(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && canSave) submit(); }}
+              placeholder="e.g. Lumen AI" style={{ padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 12.5, color: "var(--text)" }}/>
+          </Field>
+          <Field label="Email">
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && canSave) submit(); }}
+              placeholder="maya@lumen.ai" style={{ padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 12.5, color: "var(--text)" }}/>
+          </Field>
+        </div>
+        <div className="im-foot">
+          <button className="pill-btn" onClick={onClose}>Cancel</button>
+          <button className="pill-btn primary" disabled={!canSave} onClick={submit}>
+            <IconCheck size={12} />{saving ? "Adding…" : "Add contact"}
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+      <span style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-mute)" }}>
+        {label}{required ? " *" : ""}
+      </span>
+      {children}
+    </label>
   );
 }
 
@@ -636,6 +722,7 @@ export function CRMView({
   const [activeId, setActiveId] = useState<string>("");
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [importOpen, setImportOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [openContact, setOpenContact] = useState<CrmContact | null>(null);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
@@ -764,14 +851,18 @@ export function CRMView({
     }
   };
 
-  const addContact = async () => {
+  const addContact = async (draft: { name: string; title?: string; company?: string; email?: string }) => {
     if (!activeId) return;
-    const name = window.prompt("Contact name:");
-    if (!name) return;
     try {
-      const c = await api.post<CrmContact>(`/api/crm/boards/${activeId}/contacts`, { name });
+      const c = await api.post<CrmContact>(`/api/crm/boards/${activeId}/contacts`, {
+        name: draft.name,
+        title: draft.title || null,
+        company: draft.company || null,
+        email: draft.email || null,
+      });
       setContacts((cs) => [...cs, c]);
       setBoards((bs) => bs.map((b) => b.id === activeId ? { ...b, contactCount: (b.contactCount ?? 0) + 1 } : b));
+      onFlash(`Added ${c.name}`);
     } catch (e) {
       onFlash(`Add contact failed: ${(e as Error).message}`);
     }
@@ -826,7 +917,7 @@ export function CRMView({
           <button className="pill-btn" onClick={() => setImportOpen(true)}>
             <IconUpload size={12} />Import CSV
           </button>
-          <button className="pill-btn primary" onClick={addContact}>
+          <button className="pill-btn primary" onClick={() => setAddOpen(true)}>
             <IconNewChat size={12} />Add contact
           </button>
         </div>
@@ -843,6 +934,14 @@ export function CRMView({
           boardName={active.name}
           onClose={() => setImportOpen(false)}
           onImport={doImport}
+        />
+      )}
+
+      {addOpen && (
+        <AddContactModal
+          boardName={active.name}
+          onClose={() => setAddOpen(false)}
+          onAdd={async (d) => { await addContact(d); setAddOpen(false); }}
         />
       )}
 

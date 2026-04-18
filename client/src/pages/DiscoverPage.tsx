@@ -24,12 +24,26 @@ type ThreadEntry =
   | { role: "user"; text: string }
   | { role: "ai"; thinking: true; steps: string[] }
   | { role: "ai"; summary: string; prospects: Prospect[] }
-  | { role: "ai"; text: string; isError?: boolean };
+  | { role: "ai"; text: string; isError?: boolean; keyMissing?: KeyErrorHint };
 
-const SAVED_SEARCHES = [
-  { id: "search-vpeng", label: "VPs of Eng · NYC AI seed", count: 142 },
-  { id: "search-design", label: "Design leads · Series A", count: 87 },
-];
+type KeyErrorHint = { providers: string[] };
+interface ChatListItem { id: string; title: string; updated_at: string; }
+
+/** Parse a server error message for missing-key mentions so we can render a
+ *  friendlier "Add your keys" card instead of a raw error string. */
+function detectMissingKeys(msg: string): KeyErrorHint | undefined {
+  const needle = msg.toLowerCase();
+  if (!needle.includes("key missing") && !needle.includes("_api_key not set") && !needle.includes("key not set")) {
+    return undefined;
+  }
+  const providers: string[] = [];
+  if (/tavily/i.test(msg)) providers.push("Tavily");
+  if (/apollo/i.test(msg)) providers.push("Apollo");
+  if (/openai/i.test(msg)) providers.push("OpenAI");
+  if (/anthropic/i.test(msg)) providers.push("Anthropic");
+  if (/deepseek/i.test(msg)) providers.push("DeepSeek");
+  return { providers: providers.length ? providers : ["an AI"] };
+}
 
 const SEARCH_STEPS = ["Parsing intent…", "Searching the web…", "Extracting candidates…", "Ranking by match signals…"];
 const NETWORK_STEPS = ["Parsing intent…", "Scanning your connections…", "Ranking matches…"];
@@ -40,8 +54,9 @@ export function DiscoverPage() {
   const { buckets: usage, balance, refresh: refreshUsage } = useUsage();
 
   const [chatId, setChatId] = useState<string | null>(null);
-  const [activeNav, setActiveNav] = useState("search-vpeng");
+  const [activeNav, setActiveNav] = useState<string>("");
   const [searchMode, setSearchMode] = useState<"find" | "network">("find");
+  const [chatList, setChatList] = useState<ChatListItem[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [appMode, setAppMode] = useState<"discover" | "crm">("discover");
   const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table">("kanban");
@@ -62,8 +77,9 @@ export function DiscoverPage() {
   useEffect(() => {
     if (chatId) return;
     api.post<{ id: string }>("/api/chats", { title: "New search" })
-      .then((c) => setChatId(c.id))
+      .then((c) => { setChatId(c.id); setActiveNav(c.id); refreshChatList(); })
       .catch(() => { /* offline — errors surface on send */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
   // Load boards so the "Add to board" menu has options.
@@ -72,6 +88,18 @@ export function DiscoverPage() {
       .then((r) => setBoards(r.boards))
       .catch(() => { /* offline */ });
   }, []);
+
+  const refreshChatList = () => {
+    api.get<{ chats: ChatListItem[] }>("/api/chats")
+      .then((r) => setChatList(r.chats ?? []))
+      .catch(() => { /* offline */ });
+  };
+  useEffect(() => { refreshChatList(); }, []);
+
+  const savedSearches = useMemo(
+    () => chatList.slice(0, 20).map((c) => ({ id: c.id, label: c.title || "Untitled", count: 0 })),
+    [chatList],
+  );
 
   const allProspects = useMemo(
     () => thread.flatMap((m) => ("prospects" in m ? m.prospects : [])),
@@ -92,8 +120,21 @@ export function DiscoverPage() {
     setOutreachFor(null);
     setChatId(null);
     api.post<{ id: string }>("/api/chats", { title: "New search" })
-      .then((c) => setChatId(c.id))
+      .then((c) => { setChatId(c.id); setActiveNav(c.id); refreshChatList(); })
       .catch(() => { /* offline */ });
+  };
+
+  // Let users click a saved search in the sidebar to re-enter that chat.
+  const handleSelectNav = (id: string) => {
+    setActiveNav(id);
+    if (!id || id === chatId) return;
+    // If it's a known chat, switch to it (UI is stateless per-chat for now,
+    // so clear the thread and let the user keep typing in the same chat).
+    if (chatList.some((c) => c.id === id)) {
+      setChatId(id);
+      setThread([]);
+      setView("hero");
+    }
   };
 
   const toggleSel = (id: string) => {
@@ -153,11 +194,14 @@ export function DiscoverPage() {
   }
 
   function appendError(err: unknown) {
+    const message = (err as Error).message ?? "Something went wrong.";
+    // Detect missing-key errors so we can render a nicer "Add your keys" card.
+    const keyHint = detectMissingKeys(message);
     setThread((t) => {
       const copy = t.slice();
       const last = copy[copy.length - 1];
       if (last && "thinking" in last && last.thinking) copy.pop();
-      copy.push({ role: "ai", text: `⚠️ ${(err as Error).message}`, isError: true });
+      copy.push({ role: "ai", text: message, isError: true, keyMissing: keyHint });
       return copy;
     });
   }
@@ -272,9 +316,9 @@ export function DiscoverPage() {
       <div className="app" style={collapsed ? { gridTemplateColumns: "56px 1fr" } : undefined}>
         <Sidebar
           activeNav={activeNav}
-          onSelect={setActiveNav}
+          onSelect={handleSelectNav}
           onNewChat={handleNewChat}
-          savedSearches={SAVED_SEARCHES}
+          savedSearches={savedSearches}
           lists={[]}
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed((c) => !c)}
@@ -351,9 +395,24 @@ export function DiscoverPage() {
                         />
                       )}
                       {"text" in m && m.text && (
-                        <div className="ai-summary" style={m.isError ? { color: "var(--danger)" } : undefined}>
-                          {m.text}
-                        </div>
+                        m.keyMissing ? (
+                          <div className="key-missing-card">
+                            <div className="kmc-icon"><IconSparkle size={14} /></div>
+                            <div style={{ flex: 1 }}>
+                              <div className="kmc-title">Add your {m.keyMissing.providers.join(" + ")} key to get started</div>
+                              <div className="kmc-body">
+                                Nontrivial uses your own API keys so your searches hit your own quota — nothing is stored on our servers.
+                              </div>
+                            </div>
+                            <button className="pill-btn primary" onClick={() => setSettingsOpen(true)}>
+                              Add keys
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="ai-summary" style={m.isError ? { color: "var(--danger)" } : undefined}>
+                            {m.text}
+                          </div>
+                        )
                       )}
                     </div>
                   );

@@ -16,6 +16,7 @@ import { runNetwork } from "../ai/modes/network.js";
 import { runEnrich } from "../ai/modes/enrich.js";
 import { runDraft } from "../ai/modes/draft.js";
 import { InsufficientCreditsError } from "../usage/tracker.js";
+import { extractUserKeys } from "../ai/user-keys.js";
 
 const router = Router();
 
@@ -89,8 +90,9 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     .executeTakeFirst();
   if (!chat) return res.status(404).json({ error: "not_found" });
 
+  const userKeys = extractUserKeys(req);
   const provider: AiProvider =
-    parsed.data.provider ?? availableProviders()[0] ?? ("openai" as AiProvider);
+    parsed.data.provider ?? availableProviders(userKeys)[0] ?? ("openai" as AiProvider);
 
   // Persist the user message so chat history is preserved.
   await db
@@ -102,13 +104,13 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   try {
     const userId = req.user!.id;
     if (parsed.data.mode === "find") {
-      result = await runFind(provider, parsed.data.content, userId);
+      result = await runFind(provider, parsed.data.content, userId, userKeys);
     } else if (parsed.data.mode === "network") {
-      result = await runNetwork(provider, parsed.data.content, userId);
+      result = await runNetwork(provider, parsed.data.content, userId, userKeys);
     } else if (parsed.data.mode === "enrich") {
-      result = await runEnrich(provider, parsed.data.content, userId);
+      result = await runEnrich(provider, parsed.data.content, userId, userKeys);
     } else {
-      result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId);
+      result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId, userKeys);
     }
   } catch (err) {
     if (err instanceof InsufficientCreditsError) {
