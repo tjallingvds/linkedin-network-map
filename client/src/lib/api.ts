@@ -36,10 +36,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!r.ok) {
     let payload: unknown = null;
     try { payload = await r.json(); } catch { /* ignore */ }
-    const msg =
-      (payload && typeof payload === "object" && "error" in payload
-        ? String((payload as { error: unknown }).error)
-        : r.statusText) || `HTTP ${r.status}`;
+    // Prefer the server's `message` (the human-readable reason) over `error`
+    // (the machine code), so the UI surfaces things like "TAVILY_API_KEY not
+    // set" instead of a generic "completion_failed".
+    const pick = (k: string): string | null => {
+      if (payload && typeof payload === "object" && k in payload) {
+        const v = (payload as Record<string, unknown>)[k];
+        return typeof v === "string" && v ? v : null;
+      }
+      return null;
+    };
+    const msg = pick("message") || pick("error") || r.statusText || `HTTP ${r.status}`;
     throw new ApiError(r.status, payload, msg);
   }
   if (r.status === 204) return undefined as T;

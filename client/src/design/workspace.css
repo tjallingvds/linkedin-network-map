@@ -48,8 +48,8 @@ body {
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 input, textarea { font: inherit; color: inherit; background: none; border: 0; outline: 0; resize: none; }
 
-/* Wallpaper */
-.stage { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; overflow: hidden; }
+/* Wallpaper — fills the full viewport behind the shell */
+.stage { position: fixed; inset: 0; display: grid; place-items: stretch; overflow: hidden; }
 .wallpaper { position: absolute; inset: 0; z-index: 0; }
 .wallpaper.light-bloom {
   background:
@@ -63,22 +63,22 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
     linear-gradient(180deg, #15131a 0%, #0b0a10 100%);
 }
 
-/* Shell */
+/* Shell — fullscreen, no inset wallpaper border */
 .app {
   position: relative; z-index: 1;
-  width: min(1380px, 100%);
-  height: min(900px, 100%);
+  width: 100%;
+  height: 100%;
   background: var(--shell);
   backdrop-filter: blur(28px) saturate(1.2);
   -webkit-backdrop-filter: blur(28px) saturate(1.2);
-  border: 1px solid var(--hairline-strong);
-  border-radius: 28px;
-  box-shadow: 0 30px 80px rgba(20,14,40,0.18), inset 0 1px 0 rgba(255,255,255,0.5);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   display: grid;
   grid-template-columns: 248px 1fr;
   overflow: hidden;
 }
-[data-theme="dark"] .app { box-shadow: 0 40px 100px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04); }
+[data-theme="dark"] .app { box-shadow: none; }
 
 /* Sidebar */
 .sidebar {
