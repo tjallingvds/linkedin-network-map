@@ -96,9 +96,28 @@ function rowsToContacts(rows: string[][]): CrmImportRow[] {
 
 // ========== Pieces ==========
 
-function KanbanCard({ p, idx, onOpen }: { p: CrmContact; idx: number; onOpen: (c: CrmContact) => void }) {
+function KanbanCard({
+  p, idx, onOpen, onDragStart, onDragEnd, dragging,
+}: {
+  p: CrmContact;
+  idx: number;
+  onOpen: (c: CrmContact) => void;
+  onDragStart: (id: string) => void;
+  onDragEnd: () => void;
+  dragging: boolean;
+}) {
   return (
-    <div className="kanban-card" onClick={() => onOpen(p)}>
+    <div
+      className={`kanban-card${dragging ? " dragging" : ""}`}
+      onClick={() => onOpen(p)}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", p.id);
+        onDragStart(p.id);
+      }}
+      onDragEnd={onDragEnd}
+    >
       <div className="kc-top">
         <div className="kc-avatar" style={{ background: avatarGrad(idx) }}>{initials(p.name)}</div>
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -122,16 +141,43 @@ function KanbanCard({ p, idx, onOpen }: { p: CrmContact; idx: number; onOpen: (c
   );
 }
 
-function KanbanBoard({ contacts, onOpen }: { contacts: CrmContact[]; onOpen: (c: CrmContact) => void }) {
+function KanbanBoard({
+  contacts, onOpen, onMoveStage,
+}: {
+  contacts: CrmContact[];
+  onOpen: (c: CrmContact) => void;
+  onMoveStage: (contactId: string, stage: CrmStage) => void;
+}) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [overStage, setOverStage] = useState<CrmStage | null>(null);
+
   return (
     <div className="kanban">
       {STAGES.map((stage) => {
         const items = contacts.filter((p) => p.stage === stage.id);
+        const isOver = overStage === stage.id && draggingId != null;
         return (
           <div
             key={stage.id}
-            className="kanban-col"
+            className={`kanban-col${isOver ? " drag-over" : ""}`}
             style={{ "--stage-tint": stage.tint, "--stage-color": stage.color } as React.CSSProperties}
+            onDragOver={(e) => {
+              if (!draggingId) return;
+              e.preventDefault();
+              e.dataTransfer.dropEffect = "move";
+              if (overStage !== stage.id) setOverStage(stage.id);
+            }}
+            onDragLeave={() => { if (overStage === stage.id) setOverStage(null); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const id = e.dataTransfer.getData("text/plain") || draggingId;
+              setOverStage(null);
+              setDraggingId(null);
+              if (id) {
+                const src = contacts.find((c) => c.id === id);
+                if (src && src.stage !== stage.id) onMoveStage(id, stage.id);
+              }
+            }}
           >
             <div className="kanban-head">
               <span className="kanban-bar" />
@@ -141,9 +187,21 @@ function KanbanBoard({ contacts, onOpen }: { contacts: CrmContact[]; onOpen: (c:
             </div>
             <div className="kanban-list">
               {items.map((p) => (
-                <KanbanCard key={p.id} p={p} idx={contacts.indexOf(p)} onOpen={onOpen} />
+                <KanbanCard
+                  key={p.id}
+                  p={p}
+                  idx={contacts.indexOf(p)}
+                  onOpen={onOpen}
+                  onDragStart={(id) => setDraggingId(id)}
+                  onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
+                  dragging={draggingId === p.id}
+                />
               ))}
-              {items.length === 0 && <button className="kanban-empty">+ Add contact</button>}
+              {items.length === 0 && (
+                <div className={`kanban-empty${isOver ? " drop-target" : ""}`}>
+                  {isOver ? "Drop to move here" : "— empty —"}
+                </div>
+              )}
             </div>
           </div>
         );
@@ -238,14 +296,16 @@ function TableView({
         <div className="tbl-row tbl-head">
           <div className="tbl-cell"></div>
           <div className="tbl-cell">Person</div>
+          <div className="tbl-cell">Title</div>
           <div className="tbl-cell">Company</div>
+          <div className="tbl-cell">Email</div>
+          <div className="tbl-cell">Phone</div>
           <div className="tbl-cell">Stage</div>
           <div className="tbl-cell">Temp</div>
           <div className="tbl-cell c-num">Sent</div>
           <div className="tbl-cell c-num">Opens</div>
           <div className="tbl-cell c-num">Replies</div>
           <div className="tbl-cell">Next step</div>
-          <div className="tbl-cell">Last touch</div>
           <div className="tbl-cell">Source</div>
         </div>
         {contacts.map((p, i) => (
@@ -256,28 +316,25 @@ function TableView({
                 {initials(p.name)}
               </div>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 500, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {p.name}
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {p.title ?? ""}
-                </div>
+                <EditableCell value={p.name} onSave={(v) => { if (v.trim()) onPatch(p.id, { name: v.trim() }); }} />
               </div>
             </div>
+            <div className="tbl-cell"><EditableCell value={p.title} onSave={(v) => onPatch(p.id, { title: v })} /></div>
             <div className="tbl-cell"><EditableCell value={p.company} onSave={(v) => onPatch(p.id, { company: v })} /></div>
+            <div className="tbl-cell"><EditableCell value={p.email} onSave={(v) => onPatch(p.id, { email: v })} /></div>
+            <div className="tbl-cell"><EditableCell value={p.phone} onSave={(v) => onPatch(p.id, { phone: v })} /></div>
             <div className="tbl-cell"><StageCell stage={p.stage} onChange={(v) => onPatch(p.id, { stage: v })} /></div>
             <div className="tbl-cell"><TempCell temp={p.temp} onChange={(v) => onPatch(p.id, { temp: v })} /></div>
             <div className="tbl-cell c-num"><EditableCell value={p.sent} align="center" onSave={(v) => onPatch(p.id, { sent: Number(v) || 0 })} /></div>
             <div className="tbl-cell c-num"><EditableCell value={p.opens} align="center" onSave={(v) => onPatch(p.id, { opens: Number(v) || 0 })} /></div>
             <div className="tbl-cell c-num"><EditableCell value={p.replies} align="center" onSave={(v) => onPatch(p.id, { replies: Number(v) || 0 })} /></div>
             <div className="tbl-cell"><EditableCell value={p.nextStep} onSave={(v) => onPatch(p.id, { nextStep: v })} /></div>
-            <div className="tbl-cell">{p.lastTouch ?? "—"}</div>
             <div className="tbl-cell"><span className="src-chip">{p.source ?? ""}</span></div>
           </div>
         ))}
         {contacts.length === 0 && (
           <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-mute)", fontSize: 13 }}>
-            No contacts yet. Click <strong>Import CSV</strong> to paste your spreadsheet.
+            No contacts yet. Click <strong>Import CSV</strong> to paste your spreadsheet, or <strong>Add contact</strong> to create one.
           </div>
         )}
       </div>
@@ -924,7 +981,11 @@ export function CRMView({
       </div>
 
       {viewMode === "kanban" ? (
-        <KanbanBoard contacts={contacts} onOpen={setOpenContact} />
+        <KanbanBoard
+          contacts={contacts}
+          onOpen={setOpenContact}
+          onMoveStage={(id, stage) => patchContact(id, { stage })}
+        />
       ) : (
         <TableView contacts={contacts} onOpen={setOpenContact} onPatch={patchContact} />
       )}

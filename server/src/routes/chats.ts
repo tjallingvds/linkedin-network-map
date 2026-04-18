@@ -15,6 +15,8 @@ import { runFind } from "../ai/modes/find.js";
 import { runNetwork } from "../ai/modes/network.js";
 import { runEnrich } from "../ai/modes/enrich.js";
 import { runDraft } from "../ai/modes/draft.js";
+import { runFollowup } from "../ai/modes/followup.js";
+import { runDiscoverMore } from "../ai/modes/discover-more.js";
 import { InsufficientCreditsError } from "../usage/tracker.js";
 import { extractUserKeys } from "../ai/user-keys.js";
 
@@ -72,10 +74,14 @@ router.delete("/:id", async (req: AuthedRequest, res) => {
 // ---- Typed completion ----
 const completionSchema = z.object({
   content: z.string().min(1).max(20000),
-  mode: z.enum(["find", "network", "enrich", "draft"]).default("find"),
+  mode: z.enum(["find", "network", "enrich", "draft", "followup", "discover_more"]).default("find"),
   provider: z.enum(["openai", "anthropic", "deepseek"]).optional(),
   /** Selected prospects the user is drafting to (or the latest result set). */
   recipients: z.array(z.any()).optional(),
+  /** Prior prospect list for followup / discover_more context. */
+  previousProspects: z.array(z.any()).optional(),
+  /** Original brief for discover_more re-runs. */
+  previousBrief: z.string().max(2000).optional(),
 });
 
 router.post("/:id/completion", async (req: AuthedRequest, res) => {
@@ -109,6 +115,19 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       result = await runNetwork(provider, parsed.data.content, userId, userKeys);
     } else if (parsed.data.mode === "enrich") {
       result = await runEnrich(provider, parsed.data.content, userId, userKeys);
+    } else if (parsed.data.mode === "followup") {
+      result = await runFollowup(
+        provider,
+        parsed.data.content,
+        (parsed.data.previousProspects ?? []) as Prospect[],
+        userId,
+        userKeys,
+      );
+    } else if (parsed.data.mode === "discover_more") {
+      const prev = (parsed.data.previousProspects ?? []) as Prospect[];
+      const excludeNames = prev.map((p) => p.name).filter(Boolean);
+      const brief = parsed.data.previousBrief?.trim() || parsed.data.content;
+      result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys);
     } else {
       result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId, userKeys);
     }

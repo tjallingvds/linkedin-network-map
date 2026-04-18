@@ -47,6 +47,7 @@ function detectMissingKeys(msg: string): KeyErrorHint | undefined {
 
 const SEARCH_STEPS = ["Parsing intent…", "Searching the web…", "Extracting candidates…", "Ranking by match signals…"];
 const NETWORK_STEPS = ["Parsing intent…", "Scanning your connections…", "Ranking matches…"];
+const FOLLOWUP_STEPS = ["Reading prior results…", "Interpreting your request…"];
 const DRAFT_STEPS = ["Reviewing recipient signals…", "Writing personalised drafts…"];
 
 export function DiscoverPage() {
@@ -57,6 +58,8 @@ export function DiscoverPage() {
   const [activeNav, setActiveNav] = useState<string>("");
   const [searchMode, setSearchMode] = useState<"find" | "network">("find");
   const [chatList, setChatList] = useState<ChatListItem[]>([]);
+  const [lastBrief, setLastBrief] = useState<string>("");
+  const [lastProspects, setLastProspects] = useState<Prospect[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [appMode, setAppMode] = useState<"discover" | "crm">("discover");
   const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table">("kanban");
@@ -119,6 +122,8 @@ export function DiscoverPage() {
     setOpenProspect(null);
     setOutreachFor(null);
     setChatId(null);
+    setLastProspects([]);
+    setLastBrief("");
     api.post<{ id: string }>("/api/chats", { title: "New search" })
       .then((c) => { setChatId(c.id); setActiveNav(c.id); refreshChatList(); })
       .catch(() => { /* offline */ });
@@ -134,6 +139,8 @@ export function DiscoverPage() {
       setChatId(id);
       setThread([]);
       setView("hero");
+      setLastProspects([]);
+      setLastBrief("");
     }
   };
 
@@ -157,15 +164,44 @@ export function DiscoverPage() {
     setDraft("");
     setView("thread");
     setStreaming(true);
-    const mode = searchMode;
-    setThread((t) => [...t, { role: "user", text }]);
-    setThread((t) => [...t, { role: "ai", thinking: true, steps: mode === "network" ? NETWORK_STEPS : SEARCH_STEPS }]);
+    // If we already showed a prospect list, subsequent messages are follow-ups
+    // against that list (filter / ask a question) — the server's followup mode
+    // decides text-vs-filter. Clicking "New search" in the sidebar clears this.
+    const isFollowup = lastProspects.length > 0;
+    const mode: "find" | "network" | "followup" = isFollowup ? "followup" : searchMode;
+    setThread((t) => [
+      ...t,
+      { role: "user", text },
+      { role: "ai", thinking: true, steps: mode === "network" ? NETWORK_STEPS : mode === "followup" ? FOLLOWUP_STEPS : SEARCH_STEPS },
+    ]);
 
     try {
       const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${chatId}/completion`, {
-        content: text, mode,
+        content: text,
+        mode,
+        previousProspects: isFollowup ? lastProspects : undefined,
       });
-      applyResult(resp.result);
+      applyResult(resp.result, text);
+    } catch (err) {
+      appendError(err);
+    } finally {
+      setStreaming(false);
+      refreshUsage();
+    }
+  }
+
+  async function sendDiscoverMore() {
+    if (!chatId || streaming || lastProspects.length === 0) return;
+    setStreaming(true);
+    setThread((t) => [...t, { role: "ai", thinking: true, steps: SEARCH_STEPS }]);
+    try {
+      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${chatId}/completion`, {
+        content: "Show me more matches beyond the ones already listed.",
+        mode: "discover_more",
+        previousProspects: lastProspects,
+        previousBrief: lastBrief,
+      });
+      applyResult(resp.result, lastBrief);
     } catch (err) {
       appendError(err);
     } finally {
@@ -206,7 +242,7 @@ export function DiscoverPage() {
     });
   }
 
-  function applyResult(result: CompletionResult) {
+  function applyResult(result: CompletionResult, brief?: string) {
     setThread((t) => {
       const copy = t.slice();
       const last = copy[copy.length - 1];
@@ -218,6 +254,14 @@ export function DiscoverPage() {
       }
       return copy;
     });
+    // Track the latest prospect result so follow-ups / discover_more have
+    // context. Keep the original brief around for discover_more to re-query.
+    if (result.kind === "prospects") {
+      setLastProspects(result.prospects);
+      if (brief && brief !== "Show me more matches beyond the ones already listed.") {
+        setLastBrief(brief);
+      }
+    }
     if (result.kind === "drafts") {
       const byId = new Map(allProspects.map((p) => [p.id, p]));
       const recipients = result.drafts.map((d) => byId.get(d.recipientId) ?? ({
@@ -387,12 +431,25 @@ export function DiscoverPage() {
                         <div className="ai-summary" dangerouslySetInnerHTML={{ __html: m.summary }} />
                       )}
                       {"prospects" in m && (
-                        <ProspectGrid
-                          prospects={m.prospects}
-                          selected={selected}
-                          onToggle={toggleSel}
-                          onOpen={setOpenProspect}
-                        />
+                        <>
+                          <ProspectGrid
+                            prospects={m.prospects}
+                            selected={selected}
+                            onToggle={toggleSel}
+                            onOpen={setOpenProspect}
+                          />
+                          {/* Show "More results" only on the latest prospect block + when we have a brief to re-query. */}
+                          {i === thread.length - 1 && lastBrief && m.prospects.length > 0 && !streaming && (
+                            <div className="result-actions">
+                              <button className="pill-btn" onClick={sendDiscoverMore}>
+                                <IconSearch size={12} />More results
+                              </button>
+                              <span className="result-hint">
+                                Ask a question or type a filter (e.g. "only those with email") to refine.
+                              </span>
+                            </div>
+                          )}
+                        </>
                       )}
                       {"text" in m && m.text && (
                         m.keyMissing ? (
