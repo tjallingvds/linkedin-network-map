@@ -32,6 +32,7 @@ const SAVED_SEARCHES = [
 ];
 
 const SEARCH_STEPS = ["Parsing intent…", "Searching the web…", "Extracting candidates…", "Ranking by match signals…"];
+const NETWORK_STEPS = ["Parsing intent…", "Scanning your connections…", "Ranking matches…"];
 const DRAFT_STEPS = ["Reviewing recipient signals…", "Writing personalised drafts…"];
 
 export function DiscoverPage() {
@@ -40,6 +41,7 @@ export function DiscoverPage() {
 
   const [chatId, setChatId] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState("search-vpeng");
+  const [searchMode, setSearchMode] = useState<"find" | "network">("find");
   const [collapsed, setCollapsed] = useState(false);
   const [appMode, setAppMode] = useState<"discover" | "crm">("discover");
   const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table">("kanban");
@@ -114,12 +116,13 @@ export function DiscoverPage() {
     setDraft("");
     setView("thread");
     setStreaming(true);
+    const mode = searchMode;
     setThread((t) => [...t, { role: "user", text }]);
-    setThread((t) => [...t, { role: "ai", thinking: true, steps: SEARCH_STEPS }]);
+    setThread((t) => [...t, { role: "ai", thinking: true, steps: mode === "network" ? NETWORK_STEPS : SEARCH_STEPS }]);
 
     try {
       const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${chatId}/completion`, {
-        content: text, mode: "find",
+        content: text, mode,
       });
       applyResult(resp.result);
     } catch (err) {
@@ -422,12 +425,28 @@ export function DiscoverPage() {
                         sendSearch();
                       }
                     }}
-                    placeholder="Describe your ideal prospect…"
+                    placeholder={searchMode === "network" ? "Who in your network…" : "Describe your ideal prospect…"}
                     rows={1}
                   />
                 </div>
                 <div className="composer-tools">
                   <div className="tool-group">
+                    <div className="mode-switch" style={{ marginRight: 8 }}>
+                      <button
+                        className={searchMode === "find" ? "active" : ""}
+                        onClick={() => setSearchMode("find")}
+                        title="Search the public web"
+                      >
+                        <IconSearch size={12} />Web
+                      </button>
+                      <button
+                        className={searchMode === "network" ? "active" : ""}
+                        onClick={() => setSearchMode("network")}
+                        title="Search your own LinkedIn connections"
+                      >
+                        <IconUsers size={12} />My network
+                      </button>
+                    </div>
                     <button className="tool"><IconAttach size={13} />Attach list</button>
                   </div>
                   <div className="send-group">

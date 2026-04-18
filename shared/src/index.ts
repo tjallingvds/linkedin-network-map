@@ -38,7 +38,7 @@ export type AiProvider = "openai" | "anthropic" | "deepseek";
 
 // ---------- Chat ----------
 
-export type ChatMode = "find" | "enrich" | "draft";
+export type ChatMode = "find" | "network" | "enrich" | "draft";
 
 export type SignalKind = "hot" | "fresh" | "match";
 export interface ProspectSignal {

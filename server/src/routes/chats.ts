@@ -12,6 +12,7 @@ import type { AuthedRequest } from "../auth/session.js";
 import { availableProviders } from "../ai/providers.js";
 import type { AiProvider, CompletionResult, Prospect } from "@app/shared";
 import { runFind } from "../ai/modes/find.js";
+import { runNetwork } from "../ai/modes/network.js";
 import { runEnrich } from "../ai/modes/enrich.js";
 import { runDraft } from "../ai/modes/draft.js";
 import { InsufficientCreditsError } from "../usage/tracker.js";
@@ -70,7 +71,7 @@ router.delete("/:id", async (req: AuthedRequest, res) => {
 // ---- Typed completion ----
 const completionSchema = z.object({
   content: z.string().min(1).max(20000),
-  mode: z.enum(["find", "enrich", "draft"]).default("find"),
+  mode: z.enum(["find", "network", "enrich", "draft"]).default("find"),
   provider: z.enum(["openai", "anthropic", "deepseek"]).optional(),
   /** Selected prospects the user is drafting to (or the latest result set). */
   recipients: z.array(z.any()).optional(),
@@ -102,6 +103,8 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     const userId = req.user!.id;
     if (parsed.data.mode === "find") {
       result = await runFind(provider, parsed.data.content, userId);
+    } else if (parsed.data.mode === "network") {
+      result = await runNetwork(provider, parsed.data.content, userId);
     } else if (parsed.data.mode === "enrich") {
       result = await runEnrich(provider, parsed.data.content, userId);
     } else {
