@@ -143,6 +143,9 @@ export interface CrmImportRow {
   title?: string;
   company?: string;
   email?: string;
+  phone?: string;
+  linkedin?: string;
+  notes?: string;
   stage?: string;
   temp?: string;
   source?: string;

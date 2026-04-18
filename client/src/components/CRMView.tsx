@@ -50,12 +50,19 @@ function tryParseTSV(text: string): string[][] {
   if (text.includes("\t")) return text.split(/\r?\n/).filter((l) => l.trim()).map((l) => l.split("\t"));
   return parseCSV(text);
 }
-function mapHeader(h: string): keyof CrmImportRow | null {
+// Columns that need special merging (e.g. LinkedIn's export has First/Last Name).
+type ColKey = keyof CrmImportRow | "firstName" | "lastName";
+function mapHeader(h: string): ColKey | null {
   const k = h.toLowerCase().trim();
   if (/^(name|full.?name|contact)$/.test(k)) return "name";
+  if (/^first.?name$/.test(k)) return "firstName";
+  if (/^last.?name$/.test(k)) return "lastName";
   if (/^(title|role|position|job)/.test(k)) return "title";
   if (/^(company|org|employer|account)/.test(k)) return "company";
   if (/^(email|e-mail)/.test(k)) return "email";
+  if (/^(phone|mobile|tel)/.test(k)) return "phone";
+  if (/^(linked[-_ ]?in|li[-_ ]?url|profile[-_ ]?url|url)$/.test(k)) return "linkedin";
+  if (/^(note|notes|comment)/.test(k)) return "notes";
   if (/^(stage|status)/.test(k)) return "stage";
   if (/^(temp|priority|rating)/.test(k)) return "temp";
   if (/^(source|list|from)/.test(k)) return "source";
@@ -67,16 +74,23 @@ function rowsToContacts(rows: string[][]): CrmImportRow[] {
   const header = rows[0]!.map((h) => mapHeader(h));
   const hasHeader = header.some(Boolean);
   const data = hasHeader ? rows.slice(1) : rows;
-  const fallback: (keyof CrmImportRow)[] = ["name", "title", "company", "email", "stage", "temp", "source"];
+  const fallback: ColKey[] = ["name", "title", "company", "email", "stage", "temp", "source"];
   const keys = hasHeader ? header : fallback.slice(0, rows[0]!.length);
   return data.map((r) => {
-    const o: CrmImportRow = { name: "" };
+    const bag: Record<string, string> = {};
     r.forEach((val, j) => {
       const k = keys[j];
-      if (k && val.trim()) (o as unknown as Record<string, string>)[k] = val.trim();
+      const v = (val ?? "").trim();
+      if (k && v) bag[k] = v;
     });
-    if (o.temp) o.temp = String(o.temp).toLowerCase();
-    return o;
+    // Merge first+last into name when the header split them.
+    if (!bag.name && (bag.firstName || bag.lastName)) {
+      bag.name = [bag.firstName, bag.lastName].filter(Boolean).join(" ").trim();
+    }
+    delete bag.firstName;
+    delete bag.lastName;
+    if (bag.temp) bag.temp = bag.temp.toLowerCase();
+    return bag as unknown as CrmImportRow;
   }).filter((r) => r.name);
 }
 
@@ -271,25 +285,55 @@ function TableView({
   );
 }
 
+export interface ImportOptions {
+  destination: "active" | "new";
+  newBoardName: string;
+  newBoardEmoji: string;
+  autoEnrich: boolean;
+}
+
 function ImportModal({
   boardName, onClose, onImport,
-}: { boardName: string; onClose: () => void; onImport: (rows: CrmImportRow[]) => Promise<void> }) {
+}: { boardName: string; onClose: () => void; onImport: (rows: CrmImportRow[], opts: ImportOptions) => Promise<void> }) {
   const [text, setText] = useState("");
   const [step, setStep] = useState<"paste" | "preview">("paste");
   const [saving, setSaving] = useState(false);
+  const [destination, setDestination] = useState<"active" | "new">("active");
+  const [newBoardName, setNewBoardName] = useState("");
+  const [newBoardEmoji, setNewBoardEmoji] = useState("📣");
+  const [autoEnrich, setAutoEnrich] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
   const preview = useMemo(() => {
     if (!text.trim()) return [];
     return rowsToContacts(tryParseTSV(text)).slice(0, 200);
   }, [text]);
   const sample =
-    "name,title,company,email,stage,temp\n" +
-    "Maya Okafor,VP Engineering,Lumen AI,maya@lumen.ai,new,hot\n" +
-    "Ravi Mehta,Head of Eng,Glyphic,ravi@glyphic.co,contacted,warm";
+    "name,title,company,email,linkedin,stage,temp\n" +
+    "Maya Okafor,VP Engineering,Lumen AI,maya@lumen.ai,https://linkedin.com/in/maya,new,hot\n" +
+    "Ravi Mehta,Head of Eng,Glyphic,ravi@glyphic.co,,contacted,warm";
+
+  const EMOJIS = ["📣", "🎯", "🧲", "💼", "🌱", "🚀", "🔥", "📊", "✨", "🧭", "⭐", "📌"];
+
+  const onPickFile = async (file: File) => {
+    const raw = await file.text();
+    setText(raw);
+    // Default the new-board name to the file's stem when the user hasn't typed one.
+    if (!newBoardName) {
+      const stem = file.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
+      if (stem) setNewBoardName(stem.slice(0, 60));
+    }
+  };
 
   const handleImport = async () => {
     setSaving(true);
     try {
-      await onImport(preview);
+      await onImport(preview, {
+        destination,
+        newBoardName: newBoardName.trim() || "Imported list",
+        newBoardEmoji,
+        autoEnrich,
+      });
       onClose();
     } finally {
       setSaving(false);
@@ -304,7 +348,9 @@ function ImportModal({
           <div>
             <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>Import contacts</div>
             <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 2 }}>
-              Paste CSV or TSV into <strong>{boardName}</strong>
+              {destination === "active"
+                ? <>Paste CSV/TSV or upload a file into <strong>{boardName}</strong></>
+                : <>Create a new board from a CSV/TSV file or paste</>}
             </div>
           </div>
           <button className="icon-btn" onClick={onClose}><IconClose size={15} /></button>
@@ -312,9 +358,44 @@ function ImportModal({
         {step === "paste" ? (
           <>
             <div className="im-body">
+              <div className="im-dest-row" style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                <button
+                  className={`pill-btn ${destination === "active" ? "primary" : ""}`}
+                  onClick={() => setDestination("active")}
+                  style={{ fontSize: 11.5 }}
+                >
+                  Add to "{boardName}"
+                </button>
+                <button
+                  className={`pill-btn ${destination === "new" ? "primary" : ""}`}
+                  onClick={() => setDestination("new")}
+                  style={{ fontSize: 11.5 }}
+                >
+                  <IconNewChat size={12} />Create new board
+                </button>
+              </div>
+
+              {destination === "new" && (
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10 }}>
+                  <select
+                    value={newBoardEmoji}
+                    onChange={(e) => setNewBoardEmoji(e.target.value)}
+                    style={{ fontSize: 15, padding: "6px 8px", border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--panel)" }}
+                  >
+                    {EMOJIS.map((e) => <option key={e} value={e}>{e}</option>)}
+                  </select>
+                  <input
+                    value={newBoardName}
+                    onChange={(e) => setNewBoardName(e.target.value)}
+                    placeholder="New board name"
+                    style={{ flex: 1, fontSize: 12.5, padding: "7px 10px", border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--panel)" }}
+                  />
+                </div>
+              )}
+
               <div style={{ fontSize: 11.5, color: "var(--text-mute)", marginBottom: 8 }}>
-                Copy from Google Sheets, Excel, Notion, or a .csv file and paste below.
-                Recognized columns: <code>name, title, company, email, stage, temp, source, nextStep</code>
+                Copy from Google Sheets, Excel, Notion, or upload a .csv / .tsv / .txt file.
+                Recognized columns: <code>name, title, company, email, phone, linkedin, stage, temp, source, nextStep, notes</code>
               </div>
               <textarea
                 className="im-textarea"
@@ -323,8 +404,24 @@ function ImportModal({
                 placeholder={sample}
                 autoFocus
               />
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
-                <button className="tool" onClick={() => setText(sample)} style={{ fontSize: 11.5 }}>Load sample</button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values,text/plain"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onPickFile(f);
+                  e.target.value = "";
+                }}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8, gap: 8 }}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="tool" onClick={() => fileRef.current?.click()} style={{ fontSize: 11.5 }}>
+                    <IconUpload size={12} />Upload file
+                  </button>
+                  <button className="tool" onClick={() => setText(sample)} style={{ fontSize: 11.5 }}>Load sample</button>
+                </div>
                 <div style={{ fontSize: 11, color: "var(--text-mute)", fontFamily: "Geist Mono, monospace" }}>
                   {text.trim() ? `${preview.length} row${preview.length === 1 ? "" : "s"} detected` : "empty"}
                 </div>
@@ -341,7 +438,8 @@ function ImportModal({
           <>
             <div className="im-body">
               <div style={{ fontSize: 11.5, color: "var(--text-mute)", marginBottom: 8 }}>
-                Preview — {preview.length} contact{preview.length === 1 ? "" : "s"} will be added.
+                Preview — {preview.length} contact{preview.length === 1 ? "" : "s"} will be added
+                {destination === "new" ? <> to a new board <strong>{newBoardEmoji} {newBoardName.trim() || "Imported list"}</strong></> : <> to <strong>{boardName}</strong></>}.
               </div>
               <div className="im-preview">
                 <div className="im-prev-head">
@@ -362,11 +460,22 @@ function ImportModal({
                   </div>
                 )}
               </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12, color: "var(--text-dim)", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={autoEnrich}
+                  onChange={(e) => setAutoEnrich(e.target.checked)}
+                />
+                <IconSparkle size={12} style={{ color: "var(--accent)" }} />
+                Run Apollo enrichment after import (fills missing email / phone / LinkedIn)
+              </label>
             </div>
             <div className="im-foot">
               <button className="pill-btn" onClick={() => setStep("paste")}>← Back</button>
               <button className="pill-btn primary" disabled={saving} onClick={handleImport}>
-                <IconCheck size={12} />{saving ? "Importing…" : `Import ${preview.length}`}
+                <IconCheck size={12} />{saving
+                  ? (autoEnrich ? "Importing & enriching…" : "Importing…")
+                  : (autoEnrich ? `Import & enrich ${preview.length}` : `Import ${preview.length}`)}
               </button>
             </div>
           </>
@@ -593,29 +702,63 @@ export function CRMView({
     }
   };
 
-  const doImport = async (rows: CrmImportRow[]) => {
-    if (!activeId) return;
+  const doImport = async (rows: CrmImportRow[], opts: ImportOptions) => {
     try {
-      await api.post(`/api/crm/boards/${activeId}/contacts/bulk`, {
+      // 1. Figure out which board we're importing into.
+      let boardId = activeId;
+      let createdBoard: CrmBoard | null = null;
+      if (opts.destination === "new") {
+        createdBoard = await api.post<CrmBoard>("/api/crm/boards", {
+          name: opts.newBoardName,
+          emoji: opts.newBoardEmoji,
+        });
+        boardId = createdBoard.id;
+      }
+      if (!boardId) return;
+
+      // 2. Bulk insert.
+      await api.post(`/api/crm/boards/${boardId}/contacts/bulk`, {
         contacts: rows.map((r) => ({
           name: r.name,
           title: r.title ?? null,
           company: r.company ?? null,
           email: r.email ?? null,
+          phone: r.phone ?? null,
+          linkedin: r.linkedin ?? null,
+          notes: r.notes ?? null,
           stage: (r.stage && ["new", "contacted", "replied", "meeting", "closed"].includes(r.stage)) ? r.stage : "new",
           temp: (r.temp && ["hot", "warm", "cold"].includes(r.temp)) ? r.temp : "warm",
-          source: r.source ?? "CSV import",
+          source: r.source ?? (opts.destination === "new" ? "Table import" : "CSV import"),
           nextStep: r.nextStep ?? "First touch",
         })),
       });
-      // Reload contacts + board counts.
+
+      // 3. Optional: auto-enrich via Apollo.
+      let enrichSummary = "";
+      if (opts.autoEnrich) {
+        try {
+          const er = await api.post<{ enriched: number; skipped: number; total: number }>(
+            `/api/crm/boards/${boardId}/enrich`,
+          );
+          enrichSummary = ` · enriched ${er.enriched}/${er.total}`;
+        } catch (err) {
+          const m = (err as Error).message;
+          enrichSummary = m.includes("apollo_not_configured")
+            ? " · enrichment skipped (APOLLO_API_KEY not set)"
+            : ` · enrich failed: ${m}`;
+        }
+      }
+
+      // 4. Reload state and switch to the new board when applicable.
       const [cs, bs] = await Promise.all([
-        api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`),
+        api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${boardId}/contacts`),
         api.get<{ boards: CrmBoard[] }>("/api/crm/boards"),
       ]);
-      setContacts(cs.contacts);
       setBoards(bs.boards);
-      onFlash(`Imported ${rows.length} contact${rows.length === 1 ? "" : "s"}`);
+      if (createdBoard) setActiveId(createdBoard.id);
+      setContacts(cs.contacts);
+      const label = createdBoard ? `"${createdBoard.name}"` : "this board";
+      onFlash(`Imported ${rows.length} contact${rows.length === 1 ? "" : "s"} into ${label}${enrichSummary}`);
     } catch (e) {
       onFlash(`Import failed: ${(e as Error).message}`);
     }

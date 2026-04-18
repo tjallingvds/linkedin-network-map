@@ -1,3 +1,6 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
 import express from "express";
 import cookieParser from "cookie-parser";
 import cors from "cors";
@@ -13,6 +16,8 @@ import apolloRoutes from "./routes/apollo.js";
 import crmRoutes from "./routes/crm.js";
 import usageRoutes from "./routes/usage.js";
 import { stripeWebhookHandler } from "./routes/billing-webhook.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 
@@ -43,8 +48,24 @@ app.use("/api/apollo", requireAuth, apolloRoutes);
 app.use("/api/crm", requireAuth, crmRoutes);
 app.use("/api/usage", requireAuth, usageRoutes);
 
-// JSON 404
+// JSON 404 for the API surface.
 app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));
+
+// ---- Static client ----
+// The server Dockerfile copies client/dist next to server/dist so this image
+// can serve the SPA from the same origin. Locally (dev), Vite serves the
+// client on its own port and this branch is inactive.
+const clientDist = path.resolve(__dirname, "../../client/dist");
+if (existsSync(path.join(clientDist, "index.html"))) {
+  app.use(express.static(clientDist, { index: false, maxAge: "1h" }));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api") || req.path === "/health") return next();
+    res.sendFile(path.join(clientDist, "index.html"));
+  });
+  console.log(`✔ Serving client from ${clientDist}`);
+} else {
+  console.log("ℹ No client bundle found — running in API-only mode.");
+}
 
 // Error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {

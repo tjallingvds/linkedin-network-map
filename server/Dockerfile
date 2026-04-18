@@ -1,5 +1,6 @@
 # Server — Dockerfile for Railway / Render / Fly.
-# Builds the shared types then the server. Runs migrations before starting.
+# Builds shared + server + client into one image so a single Railway service
+# serves the API and the SPA from the same origin. Runs migrations on boot.
 FROM node:20-alpine AS base
 WORKDIR /app
 
@@ -9,16 +10,19 @@ COPY shared/package.json ./shared/
 COPY server/package.json ./server/
 COPY client/package.json ./client/
 
-# Workspaces install — only production deps for the server, but we need
-# dev deps during the build stage. Use a multi-stage to slim the runtime.
+# Workspaces install — dev deps needed during build, slimmed in runtime stage.
 RUN npm install --workspaces --include-workspace-root
 
 # --- Build stage ---
 FROM base AS build
 COPY shared ./shared
 COPY server ./server
+COPY client ./client
 RUN npm run build --workspace=shared
 RUN npm run build --workspace=server
+# Same-origin: VITE_API_URL left empty so the client uses relative paths.
+ENV VITE_API_URL=
+RUN npm run build --workspace=client
 
 # --- Runtime stage ---
 FROM node:20-alpine
@@ -34,6 +38,7 @@ RUN npm install --workspaces --omit=dev --include-workspace-root
 COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/shared/src ./shared/src
 COPY --from=build /app/server/dist ./server/dist
+COPY --from=build /app/client/dist ./client/dist
 
 WORKDIR /app/server
 
