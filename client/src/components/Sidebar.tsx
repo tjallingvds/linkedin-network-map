@@ -2,9 +2,9 @@
  * Sidebar — collapsible, with a working search and a live API-usage card in
  * place of the old "Upgrade to Pro" pitch.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  IconNewChat, IconSidebar, IconSearch, IconBookmark, IconList, IconUsers, IconSparkle,
+  IconNewChat, IconSidebar, IconSearch, IconBookmark, IconList, IconUsers, IconSparkle, IconClose,
 } from "../design/icons";
 
 export interface NavEntry {
@@ -32,11 +32,15 @@ interface Props {
   balance: number;
   onOpenSettings: () => void;
   onGetMoreUsage: () => void;
+  /** Optional — when supplied, each saved-search row gets rename + delete hover actions. */
+  onRenameSearch?: (id: string, title: string) => void | Promise<void>;
+  onDeleteSearch?: (id: string) => void | Promise<void>;
 }
 
 export function Sidebar({
   activeNav, onSelect, onNewChat, savedSearches, lists,
   collapsed, onToggleCollapse, usage, balance, onOpenSettings, onGetMoreUsage,
+  onRenameSearch, onDeleteSearch,
 }: Props) {
   const [q, setQ] = useState("");
 
@@ -95,13 +99,15 @@ export function Sidebar({
             </div>
 
             <NavSection
-              label="Saved searches"
+              label="Past searches"
               addIcon={<IconBookmark size={11} />}
               items={filteredSearches}
               icon={<IconSearch size={13} />}
               activeNav={activeNav}
               onSelect={onSelect}
               emptyMsg={q ? "No matches" : savedSearches.length === 0 ? "Your searches appear here" : undefined}
+              onRename={onRenameSearch}
+              onDelete={onDeleteSearch}
             />
 
             <NavSection
@@ -138,7 +144,7 @@ function filterByQuery(items: NavEntry[], q: string): NavEntry[] {
 }
 
 function NavSection({
-  label, addIcon, items, icon, activeNav, onSelect, emptyMsg,
+  label, addIcon, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete,
 }: {
   label: string;
   addIcon: React.ReactNode;
@@ -147,6 +153,8 @@ function NavSection({
   activeNav: string;
   onSelect: (id: string) => void;
   emptyMsg?: string;
+  onRename?: (id: string, title: string) => void | Promise<void>;
+  onDelete?: (id: string) => void | Promise<void>;
 }) {
   return (
     <div className="nav-section">
@@ -158,20 +166,110 @@ function NavSection({
         <div style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--text-mute)" }}>{emptyMsg}</div>
       ) : (
         items.map((s) => (
-          <button
+          <NavRow
             key={s.id}
-            className={`nav-item ${activeNav === s.id ? "active" : ""}`}
-            onClick={() => onSelect(s.id)}
-          >
-            {icon}
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-              {s.label}
-            </span>
-            <span className="count">{s.count}</span>
-          </button>
+            entry={s}
+            icon={icon}
+            active={activeNav === s.id}
+            onSelect={onSelect}
+            onRename={onRename}
+            onDelete={onDelete}
+          />
         ))
       )}
     </div>
+  );
+}
+
+function NavRow({
+  entry, icon, active, onSelect, onRename, onDelete,
+}: {
+  entry: NavEntry;
+  icon: React.ReactNode;
+  active: boolean;
+  onSelect: (id: string) => void;
+  onRename?: (id: string, title: string) => void | Promise<void>;
+  onDelete?: (id: string) => void | Promise<void>;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [value, setValue] = useState(entry.label);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { setValue(entry.label); }, [entry.label]);
+  useEffect(() => { if (renaming) { inputRef.current?.focus(); inputRef.current?.select(); } }, [renaming]);
+
+  const commit = async () => {
+    const next = value.trim();
+    setRenaming(false);
+    if (!next || next === entry.label) { setValue(entry.label); return; }
+    try { await onRename?.(entry.id, next); }
+    catch { setValue(entry.label); }
+  };
+
+  if (renaming) {
+    return (
+      <div className={`nav-item ${active ? "active" : ""}`}>
+        {icon}
+        <input
+          ref={inputRef}
+          className="nav-rename-input"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            else if (e.key === "Escape") { setValue(entry.label); setRenaming(false); }
+          }}
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`nav-item nav-row ${active ? "active" : ""}`}
+      onClick={() => onSelect(entry.id)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter") onSelect(entry.id); }}
+    >
+      {icon}
+      <span className="nav-row-label">{entry.label}</span>
+      {(onRename || onDelete) && (
+        <div className="nav-row-actions" onClick={(e) => e.stopPropagation()}>
+          {onRename && (
+            <button
+              className="nav-row-action"
+              title="Rename"
+              onClick={(e) => { e.stopPropagation(); setRenaming(true); }}
+            >
+              <PencilIcon />
+            </button>
+          )}
+          {onDelete && (
+            <button
+              className="nav-row-action danger"
+              title="Delete"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm(`Delete "${entry.label}"?`)) onDelete(entry.id);
+              }}
+            >
+              <IconClose size={11} />
+            </button>
+          )}
+        </div>
+      )}
+      {entry.count > 0 && <span className="count">{entry.count}</span>}
+    </div>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12.2 2.8a1.8 1.8 0 1 1 2.6 2.6L6 14.2l-3.5.9.9-3.5 8.8-8.8z" />
+    </svg>
   );
 }
 

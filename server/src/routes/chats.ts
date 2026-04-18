@@ -61,6 +61,20 @@ router.get("/:id/messages", async (req: AuthedRequest, res) => {
   res.json({ messages });
 });
 
+router.patch("/:id", async (req: AuthedRequest, res) => {
+  const body = z.object({ title: z.string().min(1).max(200) }).safeParse(req.body);
+  if (!body.success) return res.status(400).json({ error: "invalid_body" });
+  const row = await db
+    .updateTable("chats")
+    .set({ title: body.data.title, updated_at: new Date() as any })
+    .where("id", "=", req.params.id)
+    .where("user_id", "=", req.user!.id)
+    .returningAll()
+    .executeTakeFirst();
+  if (!row) return res.status(404).json({ error: "not_found" });
+  res.json(row);
+});
+
 router.delete("/:id", async (req: AuthedRequest, res) => {
   const r = await db
     .deleteFrom("chats")

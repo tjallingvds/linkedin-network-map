@@ -135,6 +135,37 @@ export function DiscoverPage() {
     return c.id;
   }
 
+  const renameChat = async (id: string, title: string) => {
+    // Optimistic update.
+    setChatList((cs) => cs.map((c) => (c.id === id ? { ...c, title } : c)));
+    try {
+      await api.patch(`/api/chats/${id}`, { title });
+    } catch (err) {
+      refreshChatList();
+      flash(`Rename failed: ${(err as Error).message}`);
+    }
+  };
+
+  const deleteChat = async (id: string) => {
+    // Optimistic update.
+    setChatList((cs) => cs.filter((c) => c.id !== id));
+    try {
+      await api.del(`/api/chats/${id}`);
+      if (chatId === id) {
+        setChatId(null);
+        setActiveNav("");
+        setThread([]);
+        setView("hero");
+        setLastProspects([]);
+        setLastBrief("");
+      }
+      flash("Search deleted");
+    } catch (err) {
+      refreshChatList();
+      flash(`Delete failed: ${(err as Error).message}`);
+    }
+  };
+
   // Let users click a saved search in the sidebar to re-enter that chat.
   const handleSelectNav = (id: string) => {
     setActiveNav(id);
@@ -363,6 +394,8 @@ export function DiscoverPage() {
           activeNav={activeNav}
           onSelect={handleSelectNav}
           onNewChat={handleNewChat}
+          onRenameSearch={renameChat}
+          onDeleteSearch={deleteChat}
           savedSearches={savedSearches}
           lists={[]}
           collapsed={collapsed}
