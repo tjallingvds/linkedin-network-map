@@ -1,0 +1,27 @@
+# Fly.io config for the API. Run:
+#   fly launch --no-deploy --copy-config   (from server/ or repo root with --config server/fly.toml)
+#   fly postgres create && fly postgres attach
+#   fly secrets set AUTH_SECRET=$(openssl rand -hex 32) OPENAI_API_KEY=... ...
+#   fly deploy
+app = "network-map-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "4000"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.checks]
+    [[http_service.checks.http]]
+      path = "/health"
+      interval = "30s"
+      timeout = "5s"

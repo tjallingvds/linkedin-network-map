@@ -1,0 +1,43 @@
+{
+  "name": "@app/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate": "tsx src/db/migrate.ts up",
+    "migrate:down": "tsx src/db/migrate.ts down",
+    "migrate:make": "tsx src/db/migrate.ts make"
+  },
+  "dependencies": {
+    "@app/shared": "*",
+    "@auth/core": "^0.37.0",
+    "@auth/express": "^0.7.0",
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "helmet": "^8.0.0",
+    "kysely": "^0.27.4",
+    "morgan": "^1.10.0",
+    "pg": "^8.13.0",
+    "stripe": "^17.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cookie-parser": "^1.4.7",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/morgan": "^1.9.9",
+    "@types/node": "^22.7.0",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

@@ -5,6 +5,18 @@ Connections.csv
 # Environment / secrets
 .env
 .env.*
+!.env.example
+
+# Dependencies / build
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
 
 # OS
 .DS_Store

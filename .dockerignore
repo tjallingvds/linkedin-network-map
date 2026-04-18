@@ -1,0 +1,13 @@
+node_modules
+**/node_modules
+**/dist
+**/build
+.git
+.github
+legacy
+*.log
+.env
+.env.*
+!.env.example
+*.csv
+.DS_Store

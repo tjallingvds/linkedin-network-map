@@ -1,0 +1,61 @@
+# Render Blueprint — one-click deploy of server + client + Postgres.
+# After pushing to GitHub: New > Blueprint, point at this repo.
+services:
+  - type: web
+    name: network-map-api
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "4000"
+      - key: SERVER_URL
+        sync: false
+      - key: CLIENT_URL
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: network-map-db
+          property: connectionString
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_PRICE_STARTER
+        sync: false
+      - key: STRIPE_PRICE_GROWTH
+        sync: false
+      - key: STRIPE_PRICE_SCALE
+        sync: false
+      - key: APOLLO_API_KEY
+        sync: false
+
+  - type: web
+    name: network-map-web
+    runtime: docker
+    dockerfilePath: ./client/Dockerfile
+    dockerContext: .
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+
+databases:
+  - name: network-map-db
+    plan: free
+    postgresMajorVersion: "16"
