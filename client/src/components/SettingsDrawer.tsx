@@ -6,8 +6,9 @@
  * the user's key over its own. (Server wiring of those headers is a follow-up.)
  */
 import { useEffect, useState } from "react";
-import { IconClose, IconUpload } from "../design/icons";
+import { IconClose, IconUpload, IconUsers } from "../design/icons";
 import type { UsageBucket } from "./Sidebar";
+import { api } from "../lib/api";
 
 const KEY_STORE = "nontrivial.apiKeys.v1";
 
@@ -39,11 +40,30 @@ interface Props {
   onFlash: (msg: string) => void;
   /** Opens the LinkedIn connections / invitations import modal. */
   onImportLinkedIn?: () => void;
+  /** Fired after successfully joining a shared board, so the parent can
+   *  refresh the boards list and jump to the new board. */
+  onBoardJoined?: (boardId: string) => void;
 }
 
-export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn }: Props) {
+export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn, onBoardJoined }: Props) {
   const [keys, setKeys] = useState<ApiKeys>(() => loadApiKeys());
   const [dirty, setDirty] = useState(false);
+  const [joinCode, setJoinCode] = useState("");
+  const [joining, setJoining] = useState(false);
+
+  const join = async () => {
+    const token = joinCode.trim();
+    if (!token) return;
+    setJoining(true);
+    try {
+      const r = await api.post<{ boardId: string; name: string; alreadyMember?: boolean }>(`/api/crm/share/${token}/join`);
+      onFlash(r.alreadyMember ? `You already have "${r.name}".` : `Joined "${r.name}".`);
+      setJoinCode("");
+      onBoardJoined?.(r.boardId);
+    } catch (e) {
+      onFlash(`Join failed: ${(e as Error).message}`);
+    } finally { setJoining(false); }
+  };
 
   useEffect(() => {
     if (open) setKeys(loadApiKeys());
@@ -101,6 +121,34 @@ export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn
                   </div>
                 );
               })}
+            </div>
+          </section>
+
+          <section>
+            <div className="section-title">Join a shared board</div>
+            <div style={{ fontSize: 11.5, color: "var(--text-mute)", marginBottom: 10 }}>
+              Paste the share code a teammate sent you. You'll get read + write access to their CRM board.
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                onKeyDown={(e) => { if (e.key === "Enter") join(); }}
+                placeholder="e.g. ABC23XYZ8KLM"
+                style={{
+                  flex: 1, padding: "8px 10px",
+                  background: "var(--panel)", border: "1px solid var(--hairline)",
+                  borderRadius: 8, color: "var(--text)", fontSize: 13,
+                  fontFamily: "Geist Mono, monospace", letterSpacing: "0.1em",
+                }}
+              />
+              <button
+                className="pill-btn primary"
+                onClick={join}
+                disabled={!joinCode.trim() || joining}
+              >
+                <IconUsers size={12} />{joining ? "Joining…" : "Join"}
+              </button>
             </div>
           </section>
 

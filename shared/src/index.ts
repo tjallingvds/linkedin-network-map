@@ -139,6 +139,12 @@ export interface CrmBoard {
   name: string;
   emoji: string;
   contactCount?: number;
+  /** true when the current user owns this board. */
+  owned?: boolean;
+  /** true when the board was joined via a share token (read-write member). */
+  shared?: boolean;
+  /** Whether a share token currently exists (owner only). */
+  hasShareToken?: boolean;
   createdAt: string;
   updatedAt: string;
 }

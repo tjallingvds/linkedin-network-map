@@ -10,6 +10,7 @@ export interface Database {
   chats: ChatsTable;
   messages: MessagesTable;
   crm_boards: CrmBoardsTable;
+  crm_board_members: CrmBoardMembersTable;
   crm_contacts: CrmContactsTable;
   usage_events: UsageEventsTable;
   credit_purchases: CreditPurchasesTable;
@@ -111,8 +112,16 @@ export interface CrmBoardsTable {
   user_id: string;
   name: string;
   emoji: string;
+  share_token: string | null;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
+}
+
+export interface CrmBoardMembersTable {
+  id: Generated<string>;
+  board_id: string;
+  user_id: string;
+  created_at: Generated<Timestamp>;
 }
 
 export interface CrmContactsTable {

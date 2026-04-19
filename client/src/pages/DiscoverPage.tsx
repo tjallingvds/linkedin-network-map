@@ -981,6 +981,16 @@ export function DiscoverPage() {
         onClose={() => setSettingsOpen(false)}
         onFlash={flash}
         onImportLinkedIn={() => { setSettingsOpen(false); setConnectionsImportOpen(true); }}
+        onBoardJoined={async (boardId) => {
+          try {
+            const r = await api.get<{ boards: CrmBoard[] }>("/api/crm/boards");
+            setBoards(r.boards);
+          } catch { /* noop */ }
+          setSettingsOpen(false);
+          setAppMode("crm");
+          setActiveBoardId(boardId);
+          setActiveNav(`board:${boardId}`);
+        }}
       />
       {connectionsImportOpen && (
         <ConnectionsImportModal

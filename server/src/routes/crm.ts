@@ -52,30 +52,69 @@ function toCamelContact(row: Record<string, unknown>) {
   };
 }
 
+/**
+ * A user has access to a board if they own it OR are a member (via a
+ * previously-accepted share token).
+ */
 async function ensureBoard(userId: string, boardId: string) {
-  return db
+  const owned = await db
     .selectFrom("crm_boards")
-    .select("id")
+    .select(["id"])
     .where("id", "=", boardId)
     .where("user_id", "=", userId)
     .executeTakeFirst();
+  if (owned) return owned;
+  const membership = await db
+    .selectFrom("crm_board_members")
+    .innerJoin("crm_boards", "crm_boards.id", "crm_board_members.board_id")
+    .select(["crm_boards.id"])
+    .where("crm_board_members.board_id", "=", boardId)
+    .where("crm_board_members.user_id", "=", userId)
+    .executeTakeFirst();
+  return membership;
+}
+
+function generateShareToken(): string {
+  // URL-safe, 12 chars — unlikely collision across any realistic user base.
+  const bytes = new Uint8Array(9);
+  crypto.getRandomValues(bytes);
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // skip confusing chars
+  let out = "";
+  for (let i = 0; i < 12; i++) out += alphabet[bytes[i % bytes.length]! % alphabet.length];
+  return out;
 }
 
 // ---- Boards ----
 
 router.get("/boards", async (req: AuthedRequest, res) => {
+  const userId = req.user!.id;
+  // Board ids the user can see: owned + shared-with-them.
+  const memberIds = await db
+    .selectFrom("crm_board_members")
+    .select("board_id")
+    .where("user_id", "=", userId)
+    .execute();
+  const sharedIds = memberIds.map((m) => m.board_id);
+
   const boards = await db
     .selectFrom("crm_boards")
     .leftJoin("crm_contacts", "crm_contacts.board_id", "crm_boards.id")
-    .select(({ fn }) => [
+    .select(({ fn, eb }) => [
       "crm_boards.id",
+      "crm_boards.user_id",
       "crm_boards.name",
       "crm_boards.emoji",
+      "crm_boards.share_token",
       "crm_boards.created_at",
       "crm_boards.updated_at",
       fn.count<number>("crm_contacts.id").as("contact_count"),
+      eb("crm_boards.user_id", "=", userId).as("owned"),
     ])
-    .where("crm_boards.user_id", "=", req.user!.id)
+    .where((eb) =>
+      sharedIds.length > 0
+        ? eb.or([eb("crm_boards.user_id", "=", userId), eb("crm_boards.id", "in", sharedIds)])
+        : eb("crm_boards.user_id", "=", userId),
+    )
     .groupBy(["crm_boards.id"])
     .orderBy("crm_boards.created_at", "asc")
     .execute();
@@ -84,13 +123,14 @@ router.get("/boards", async (req: AuthedRequest, res) => {
   if (boards.length === 0) {
     const row = await db
       .insertInto("crm_boards")
-      .values({ user_id: req.user!.id, name: "Outreach pipeline", emoji: "📣" })
+      .values({ user_id: userId, name: "Outreach pipeline", emoji: "📣" })
       .returningAll()
       .executeTakeFirstOrThrow();
     return res.json({
       boards: [{
         id: row.id, name: row.name, emoji: row.emoji,
-        contactCount: 0, createdAt: row.created_at, updatedAt: row.updated_at,
+        contactCount: 0, shared: false, owned: true,
+        createdAt: row.created_at, updatedAt: row.updated_at,
       }],
     });
   }
@@ -99,6 +139,9 @@ router.get("/boards", async (req: AuthedRequest, res) => {
     boards: boards.map((b) => ({
       id: b.id, name: b.name, emoji: b.emoji,
       contactCount: Number(b.contact_count) || 0,
+      owned: !!b.owned,
+      shared: !b.owned, // for anyone not the owner, it reached them via a share token
+      hasShareToken: !!b.share_token,
       createdAt: b.created_at, updatedAt: b.updated_at,
     })),
   });
@@ -399,6 +442,66 @@ router.delete("/contacts/:id", async (req: AuthedRequest, res) => {
     .executeTakeFirst();
   if (!r.numDeletedRows) return res.status(404).json({ error: "not_found" });
   res.status(204).end();
+});
+
+// ---- Sharing ----
+
+/** Owner generates (or rotates) a share token for a board. */
+router.post("/boards/:id/share", async (req: AuthedRequest, res) => {
+  const row = await db
+    .selectFrom("crm_boards")
+    .select(["id", "share_token"])
+    .where("id", "=", req.params.id)
+    .where("user_id", "=", req.user!.id)
+    .executeTakeFirst();
+  if (!row) return res.status(404).json({ error: "not_found" });
+  const token = row.share_token ?? generateShareToken();
+  if (!row.share_token) {
+    await db
+      .updateTable("crm_boards")
+      .set({ share_token: token })
+      .where("id", "=", row.id)
+      .execute();
+  }
+  res.json({ token });
+});
+
+/** Owner revokes the token and kicks every member. */
+router.delete("/boards/:id/share", async (req: AuthedRequest, res) => {
+  const row = await db
+    .updateTable("crm_boards")
+    .set({ share_token: null })
+    .where("id", "=", req.params.id)
+    .where("user_id", "=", req.user!.id)
+    .returning("id")
+    .executeTakeFirst();
+  if (!row) return res.status(404).json({ error: "not_found" });
+  await db.deleteFrom("crm_board_members").where("board_id", "=", row.id).execute();
+  res.status(204).end();
+});
+
+/** Any authed user joins a board by pasting a token. */
+router.post("/share/:token/join", async (req: AuthedRequest, res) => {
+  const token = req.params.token;
+  if (!token || token.length < 6) return res.status(400).json({ error: "bad_token" });
+  const board = await db
+    .selectFrom("crm_boards")
+    .select(["id", "user_id", "name", "emoji"])
+    .where("share_token", "=", token)
+    .executeTakeFirst();
+  if (!board) return res.status(404).json({ error: "token_not_found" });
+  if (board.user_id === req.user!.id) {
+    return res.json({ boardId: board.id, name: board.name, emoji: board.emoji, alreadyMember: true });
+  }
+  try {
+    await db
+      .insertInto("crm_board_members")
+      .values({ board_id: board.id, user_id: req.user!.id })
+      .execute();
+  } catch {
+    // unique constraint — already a member, idempotent.
+  }
+  res.json({ boardId: board.id, name: board.name, emoji: board.emoji });
 });
 
 export default router;

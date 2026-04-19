@@ -12,7 +12,7 @@ import { useModal } from "./Modal";
 import { initials, avatarGrad } from "../design/mockProspects";
 import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
-  IconSend, IconMail, IconSparkle, IconLinkedIn,
+  IconSend, IconMail, IconSparkle, IconLinkedIn, IconUsers,
 } from "../design/icons";
 
 // ========== Column configuration ==========
@@ -64,6 +64,38 @@ export interface CustomColumn {
 
 function colsKey(boardId: string) { return `crm.cols.v1.${boardId}`; }
 function customColsKey(boardId: string) { return `crm.customcols.v1.${boardId}`; }
+function kanbanFieldsKey(boardId: string) { return `crm.kanbanfields.v1.${boardId}`; }
+
+/** Fields the user can opt into showing on each kanban card. Order matters. */
+const KANBAN_FIELD_OPTIONS = [
+  { id: "title",        label: "Title" },
+  { id: "company",      label: "Company" },
+  { id: "email",        label: "Email" },
+  { id: "phone",        label: "Phone" },
+  { id: "linkedin",     label: "LinkedIn" },
+  { id: "temp",         label: "Temp" },
+  { id: "nextStep",     label: "Next step" },
+  { id: "source",       label: "Source" },
+  { id: "messageNotes", label: "Personalize" },
+  { id: "notes",        label: "Notes" },
+] as const;
+const KANBAN_DEFAULT = ["title", "company"];
+
+function loadKanbanFields(boardId: string, customColIds: string[]): string[] {
+  const allIds = [...KANBAN_FIELD_OPTIONS.map((f) => f.id), ...customColIds];
+  if (!boardId) return KANBAN_DEFAULT;
+  try {
+    const raw = localStorage.getItem(kanbanFieldsKey(boardId));
+    if (!raw) return KANBAN_DEFAULT;
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return KANBAN_DEFAULT;
+    return (arr as string[]).filter((id) => allIds.includes(id));
+  } catch { return KANBAN_DEFAULT; }
+}
+function saveKanbanFields(boardId: string, ids: string[]) {
+  if (!boardId) return;
+  try { localStorage.setItem(kanbanFieldsKey(boardId), JSON.stringify(ids)); } catch { /* noop */ }
+}
 
 function loadCustomCols(boardId: string): CustomColumn[] {
   if (!boardId) return [];
@@ -188,7 +220,7 @@ function rowsToContacts(rows: string[][]): CrmImportRow[] {
 // ========== Pieces ==========
 
 function KanbanCard({
-  p, idx, onOpen, onDelete, onDragStart, onDragEnd, dragging,
+  p, idx, onOpen, onDelete, onDragStart, onDragEnd, dragging, fields, customCols,
 }: {
   p: CrmContact;
   idx: number;
@@ -197,8 +229,37 @@ function KanbanCard({
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
   dragging: boolean;
+  /** Ordered field ids the user wants shown on the card. "name" is implicit. */
+  fields: string[];
+  customCols: CustomColumn[];
 }) {
   const modal = useModal();
+  const customById = Object.fromEntries(customCols.map((c) => [c.id, c]));
+
+  const renderField = (id: string): React.ReactNode => {
+    const customLabel = customById[id]?.label;
+    const raw: string | null | undefined =
+      id === "title" ? p.title :
+      id === "company" ? p.company :
+      id === "email" ? p.email :
+      id === "phone" ? p.phone :
+      id === "linkedin" ? p.linkedin :
+      id === "temp" ? p.temp :
+      id === "nextStep" ? p.nextStep :
+      id === "source" ? p.source :
+      id === "messageNotes" ? p.messageNotes ?? null :
+      id === "notes" ? p.notes :
+      customLabel ? (p.customFields ?? {})[id] ?? null :
+      null;
+    if (!raw) return null;
+    return (
+      <div key={id} className="kc-field">
+        {customLabel && <span className="kc-field-label">{customLabel}:</span>}
+        <span className="kc-field-value">{raw}</span>
+      </div>
+    );
+  };
+
   return (
     <div
       className={`kanban-card${dragging ? " dragging" : ""}`}
@@ -231,21 +292,85 @@ function KanbanCard({
         <div className="kc-avatar" style={{ background: avatarGrad(idx) }}>{initials(p.name)}</div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="kc-name">{p.name}</div>
-          {p.title && <div className="kc-role">{p.title}</div>}
-          {p.company && <div className="kc-co">{p.company}</div>}
+          {fields.map(renderField)}
         </div>
       </div>
     </div>
   );
 }
 
+/** Dropdown menu that toggles which fields show on kanban cards (per board,
+ *  persisted to localStorage, same pattern as ColumnsMenu). */
+function KanbanFieldsMenu({
+  boardId, value, onChange, customCols,
+}: {
+  boardId: string;
+  value: string[];
+  onChange: (next: string[]) => void;
+  customCols: CustomColumn[];
+}) {
+  const [open, setOpen] = useState(false);
+  const toggle = (id: string) => {
+    const next = value.includes(id) ? value.filter((x) => x !== id) : [...value, id];
+    onChange(next);
+    saveKanbanFields(boardId, next);
+  };
+  const reset = () => {
+    onChange(KANBAN_DEFAULT);
+    saveKanbanFields(boardId, KANBAN_DEFAULT);
+  };
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="pill-btn" title="Show/hide fields on kanban cards" onClick={() => setOpen((o) => !o)}>
+        <IconSheet size={12} />Card fields
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={() => setOpen(false)} />
+          <div className="board-menu" style={{ minWidth: 220, right: 0, left: "auto" }}>
+            <div className="bm-label">Built-in</div>
+            {KANBAN_FIELD_OPTIONS.map((f) => {
+              const on = value.includes(f.id);
+              return (
+                <button key={f.id} className="bm-item" onClick={() => toggle(f.id)}>
+                  <ColCheckbox on={on} />
+                  <span style={{ flex: 1, textAlign: "left" }}>{f.label}</span>
+                </button>
+              );
+            })}
+            {customCols.length > 0 && <>
+              <div className="bm-sep" />
+              <div className="bm-label">Your columns</div>
+              {customCols.map((c) => {
+                const on = value.includes(c.id);
+                return (
+                  <button key={c.id} className="bm-item" onClick={() => toggle(c.id)}>
+                    <ColCheckbox on={on} />
+                    <span style={{ flex: 1, textAlign: "left" }}>{c.label}</span>
+                  </button>
+                );
+              })}
+            </>}
+            <div className="bm-sep" />
+            <button className="bm-item" onClick={reset}>
+              <IconArrowR size={13} /><span>Reset to defaults</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function KanbanBoard({
-  contacts, onOpen, onMoveStage, onDelete,
+  contacts, onOpen, onMoveStage, onDelete, fields, customCols,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
   onMoveStage: (contactId: string, stage: CrmStage) => void;
   onDelete: (id: string) => void;
+  fields: string[];
+  customCols: CustomColumn[];
 }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<CrmStage | null>(null);
@@ -295,6 +420,8 @@ function KanbanBoard({
                   onDragStart={(id) => setDraggingId(id)}
                   onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
                   dragging={draggingId === p.id}
+                  fields={fields}
+                  customCols={customCols}
                 />
               ))}
               {items.length === 0 && (
@@ -627,6 +754,114 @@ function ColumnsMenu({
             <button className="bm-item" onClick={reset}>
               <IconArrowR size={13} /><span>Show all</span>
             </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function BoardShareMenu({
+  boardId, boardName, owned, onFlash,
+}: {
+  boardId: string;
+  boardName: string;
+  owned: boolean;
+  onFlash: (msg: string) => void;
+}) {
+  const modal = useModal();
+  const [open, setOpen] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const copy = async (t: string) => {
+    try {
+      await navigator.clipboard.writeText(t);
+      onFlash("Share code copied");
+    } catch {
+      onFlash(`Share code: ${t}`);
+    }
+  };
+
+  const generate = async () => {
+    setLoading(true);
+    try {
+      const r = await api.post<{ token: string }>(`/api/crm/boards/${boardId}/share`);
+      setToken(r.token);
+      copy(r.token);
+    } catch (e) {
+      onFlash(`Share failed: ${(e as Error).message}`);
+    } finally { setLoading(false); }
+  };
+
+  const revoke = async () => {
+    const ok = await modal.confirm({
+      title: "Revoke share code?",
+      message: "Anyone holding the old code loses access. Current members are removed.",
+      confirmLabel: "Revoke",
+      destructive: true,
+    });
+    if (!ok) return;
+    setLoading(true);
+    try {
+      await api.del(`/api/crm/boards/${boardId}/share`);
+      setToken(null);
+      onFlash("Share revoked");
+    } catch (e) {
+      onFlash(`Revoke failed: ${(e as Error).message}`);
+    } finally { setLoading(false); }
+  };
+
+  if (!owned) {
+    return (
+      <span className="pill-btn" style={{ color: "var(--text-mute)", cursor: "default" }} title="Shared by someone else">
+        <IconUsers size={12} />Shared with you
+      </span>
+    );
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="pill-btn" onClick={() => setOpen((o) => !o)} title="Share this board with a collaborator">
+        <IconUsers size={12} />Share
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={() => setOpen(false)} />
+          <div className="board-menu" style={{ minWidth: 260, right: 0, left: "auto", padding: 12 }}>
+            <div className="bm-label" style={{ padding: 0, marginBottom: 8 }}>Share "{boardName}"</div>
+            {token ? (
+              <>
+                <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginBottom: 8 }}>
+                  Send this code to a teammate. They paste it in Settings → Join a shared board.
+                </div>
+                <div
+                  style={{
+                    display: "flex", gap: 6, alignItems: "center",
+                    padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)",
+                    borderRadius: 8, fontFamily: "Geist Mono, monospace", fontSize: 14, letterSpacing: "0.15em",
+                    color: "var(--text)", fontWeight: 600,
+                  }}
+                >
+                  <span style={{ flex: 1 }}>{token}</span>
+                  <button className="pill-btn" onClick={() => copy(token)} style={{ fontSize: 11 }}>Copy</button>
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+                  <button className="pill-btn" onClick={revoke} disabled={loading} style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}>
+                    <IconClose size={12} />Revoke
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 10 }}>
+                  Generate a short code. Share it — anyone with it can read + edit this board.
+                </div>
+                <button className="pill-btn primary" onClick={generate} disabled={loading} style={{ width: "100%" }}>
+                  <IconCheck size={12} />{loading ? "Generating…" : "Generate share code"}
+                </button>
+              </>
+            )}
           </div>
         </>
       )}
@@ -1185,6 +1420,7 @@ export function CRMView({
   const [enriching, setEnriching] = useState(false);
   const [visibleCols, setVisibleCols] = useState<string[]>(BUILTIN_COL_IDS);
   const [customCols, setCustomCols] = useState<CustomColumn[]>([]);
+  const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -1199,20 +1435,30 @@ export function CRMView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFlash]);
 
-  // Whenever the active board changes, pull its saved column config.
+  // Whenever the active board changes, pull its saved column + kanban config.
   useEffect(() => {
     if (!activeId) return;
     const cc = loadCustomCols(activeId);
     setCustomCols(cc);
     setVisibleCols(loadColsConfig(activeId, cc.map((c) => c.id)));
+    setKanbanFields(loadKanbanFields(activeId, cc.map((c) => c.id)));
   }, [activeId]);
 
-  // Load contacts when active board changes.
+  // Load contacts when active board changes, then poll every 8s so shared
+  // boards reflect what other collaborators are doing without a hard refresh.
   useEffect(() => {
     if (!activeId) return;
-    api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`)
-      .then((r) => setContacts(r.contacts))
-      .catch((e) => onFlash(`Load contacts failed: ${e.message}`));
+    let stopped = false;
+    const load = () => {
+      api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`)
+        .then((r) => { if (!stopped) setContacts(r.contacts); })
+        .catch((e) => { if (!stopped) onFlash(`Load contacts failed: ${e.message}`); });
+    };
+    load();
+    const iv = window.setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, 8_000);
+    return () => { stopped = true; window.clearInterval(iv); };
   }, [activeId, onFlash]);
 
   const active = boards.find((b) => b.id === activeId);
@@ -1417,13 +1663,28 @@ export function CRMView({
           </div>
         </div>
         <div className="crm-tools">
-          {viewMode === "table" && (
+          {active && (
+            <BoardShareMenu
+              boardId={active.id}
+              boardName={active.name}
+              owned={active.owned !== false}
+              onFlash={onFlash}
+            />
+          )}
+          {viewMode === "table" ? (
             <ColumnsMenu
               boardId={activeId}
               value={visibleCols}
               onChange={setVisibleCols}
               customCols={customCols}
               onCustomColsChange={setCustomCols}
+            />
+          ) : (
+            <KanbanFieldsMenu
+              boardId={activeId}
+              value={kanbanFields}
+              onChange={setKanbanFields}
+              customCols={customCols}
             />
           )}
           <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Fill email for contacts that don't have one yet (via Apollo.io)">
@@ -1444,6 +1705,8 @@ export function CRMView({
           onOpen={setOpenContact}
           onMoveStage={(id, stage) => patchContact(id, { stage })}
           onDelete={deleteContact}
+          fields={kanbanFields}
+          customCols={customCols}
         />
       ) : (
         <TableView

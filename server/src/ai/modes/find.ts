@@ -44,45 +44,89 @@ export async function runFind(
       return { kind: "text", content: "How many prospects would you like? e.g. 10, 25, 50." };
     }
   }
-  // Cap to keep Tavily + LLM costs bounded. 50 is already a fat list.
-  const count = Math.min(Math.max(requestedCount || 8, 1), 50);
+  const count = Math.min(Math.max(requestedCount || 8, 1), 100);
+
+  // Scale query count with target. More queries = more unique URL coverage,
+  // which is the actual bottleneck when the brief asks for 25+ people.
+  const queryCount =
+    count <= 8  ? 3 :
+    count <= 20 ? 6 :
+    count <= 40 ? 9 :
+    12;
 
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
-    "You generate concise web search queries for prospecting.",
-    `Brief: ${userInput}\n\nReturn {"queries": [q1, q2, q3]} — exactly 3 specific queries that together cover the brief by title, company type, and location/industry. Make each query self-sufficient.`,
-    { maxTokens: 300, userId, userKeys },
+    "You generate specific, distinct web search queries for prospecting on LinkedIn, company blogs, press releases, and public profiles. Each query should target a different angle so the UNION of results covers many distinct people.",
+    `Brief: ${userInput}\n\nReturn {"queries": [...]} — exactly ${queryCount} queries. Vary by role/seniority, specific companies in the target segment, sub-specialties, regions, and recent-hire or funding signals. Never duplicate angles. Each query self-sufficient, 6-12 words.`,
+    { maxTokens: 600, userId, userKeys },
   );
-  // Cap at 3 Tavily calls per Find — keeps user quotas stretching further.
-  const queries = (queriesObj.queries ?? []).slice(0, 3);
+  const queries = (queriesObj.queries ?? []).slice(0, queryCount);
 
-  // Scale Tavily result width with the requested count so the LLM has
-  // enough raw material to synthesize N prospects.
-  const perQuery = Math.max(6, Math.ceil(count / queries.length) + 4);
-  const searchResults = (
+  // Tavily returns up to ~10 per query reliably. Run in parallel, then
+  // dedupe by URL so overlapping results don't steal slots.
+  const perQuery = 10;
+  const raw = (
     await Promise.all(
       queries.map((q) => tavilySearch(q, { maxResults: perQuery, userId, userKeys }).catch(() => [] as TavilyResult[])),
     )
   ).flat();
+  const seenUrl = new Set<string>();
+  const searchResults: TavilyResult[] = [];
+  for (const r of raw) {
+    const key = (r.url ?? "").toLowerCase();
+    if (!key || seenUrl.has(key)) continue;
+    seenUrl.add(key);
+    searchResults.push(r);
+  }
 
-  const extracted = await aiJson<{ summary: string; prospects: Prospect[] }>(
-    provider,
-    "You extract structured prospect data from web search results. Be accurate: do not invent contact info.",
-    `Brief: ${userInput}\n\nSearch results (${searchResults.length} total):\n${JSON.stringify(
-      searchResults.slice(0, Math.min(40, count * 3)).map((r) => ({ url: r.url, title: r.title, snippet: r.content.slice(0, 400) })),
-    )}\n\nReturn {"summary": "<1 short sentence summary>", "prospects": [<up to ${count} Prospect objects>]}.\nEach Prospect: {id, name, title, company, loc?, email?, emailConf?, phone?, linkedin?, headcount?, funding?, signals: [{kind: "hot"|"fresh"|"match", text, when}], past: [{co, role, when}], matchPct}.\nOnly include contact info you're confident about from the sources. Return as many DISTINCT prospects as you can find — up to ${count}.`,
-    { maxTokens: Math.min(8000, 500 + count * 250), userId, userKeys },
-  );
+  // Extract in chunks so a single LLM call doesn't have to juggle 100+
+  // snippets. Round 1 is the first batch; if we still need more, round 2
+  // feeds in the remaining snippets + tells the LLM which names to skip.
+  const collected: Prospect[] = [];
+  const seenNames = new Set<string>();
 
-  const prospects = (extracted.prospects ?? []).map((p, i) => ({
-    ...p,
-    id: p.id || `p${Date.now()}-${i}`,
-    signals: p.signals ?? [],
-    past: p.past ?? [],
-    matchPct: typeof p.matchPct === "number" ? p.matchPct : 80,
-  }));
+  async function extractRound(snippets: TavilyResult[], needed: number): Promise<Prospect[]> {
+    if (snippets.length === 0 || needed <= 0) return [];
+    const excludeClause = seenNames.size > 0
+      ? `Already captured (DO NOT repeat): ${Array.from(seenNames).slice(0, 60).join(", ")}`
+      : "";
+    const out = await aiJson<{ prospects: Prospect[] }>(
+      provider,
+      "You extract structured prospect data from web search results. Never invent contact info. Each prospect must be a DIFFERENT person.",
+      `Brief: ${userInput}\n${excludeClause}\n\nSearch results (${snippets.length}):\n${JSON.stringify(
+        snippets.map((r) => ({ url: r.url, title: r.title, snippet: r.content.slice(0, 480) })),
+      )}\n\nReturn {"prospects": [...]} — up to ${needed} distinct prospects.\nProspect shape: {id?, name, title, company, loc?, email?, emailConf?, phone?, linkedin?, headcount?, funding?, signals: [{kind: "hot"|"fresh"|"match", text, when}], past: [{co, role, when}], matchPct}.\nOnly include contact info you can see in the sources.`,
+      { maxTokens: Math.min(8000, 400 + needed * 260), userId, userKeys },
+    );
+    return out.prospects ?? [];
+  }
 
-  return { kind: "prospects", summary: extracted.summary ?? "Results:", prospects };
+  const batchSize = Math.max(20, Math.min(40, Math.ceil(count * 1.8)));
+  for (let offset = 0; offset < searchResults.length && collected.length < count; offset += batchSize) {
+    const batch = searchResults.slice(offset, offset + batchSize);
+    const needed = count - collected.length;
+    const got = await extractRound(batch, needed);
+    for (const p of got) {
+      const key = (p.name ?? "").toLowerCase().trim();
+      if (!key || seenNames.has(key)) continue;
+      seenNames.add(key);
+      collected.push({
+        ...p,
+        id: p.id || `p${Date.now()}-${collected.length}`,
+        signals: p.signals ?? [],
+        past: p.past ?? [],
+        matchPct: typeof p.matchPct === "number" ? p.matchPct : 80,
+      });
+      if (collected.length >= count) break;
+    }
+  }
+
+  const summary =
+    collected.length >= count
+      ? `Found ${collected.length} matching ${userInput.length > 60 ? userInput.slice(0, 60) + "…" : userInput}.`
+      : `Found ${collected.length} (couldn't surface ${count}) — try a more specific brief or a different angle.`;
+
+  return { kind: "prospects", summary, prospects: collected };
 }
 
 /** Very simple count extractor — matches common phrasings ("find me 25 …",
