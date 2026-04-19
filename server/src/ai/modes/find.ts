@@ -17,31 +17,35 @@ export async function runFind(
   assertKeys(provider, userKeys);
 
   // Pre-flight: decide whether the brief is specific enough to search.
-  // We REQUIRE the user to tell us how many results they want — that's the
-  // most common cause of wasted searches + pointless re-runs.
+  // We only kick the clarify LLM in when we CAN'T already pull a number out
+  // of the brief — otherwise the user types "100" once, we extract 100,
+  // and proceed without pestering them again.
   let requestedCount = extractCount(userInput);
-  try {
-    const clarify = await aiJson<{ ready: boolean; question?: string; count?: number }>(
-      provider,
-      "You screen a prospecting brief before running an expensive web search. " +
-      "Require (a) some targeting (role/seniority/industry/company/region) AND (b) a specific COUNT of how many prospects the user wants. " +
-      "If the brief is missing a count — even if the rest is clear — ask 'How many would you like? e.g. 10, 25, 50.' " +
-      "Otherwise if the targeting is too vague, ask ONE concise question about what's missing.",
-      `Brief: ${userInput}\n\nReturn {"ready": true, "count": <integer>} when the brief includes both a count and clear targeting. ` +
-      `Return {"ready": false, "question": "<one line>"} otherwise. Prioritize asking for the count first.`,
-      { maxTokens: 200, userId, userKeys },
-    );
-    if (clarify.ready === false && clarify.question) {
-      return { kind: "text", content: clarify.question.trim() };
-    }
-    if (typeof clarify.count === "number" && clarify.count > 0) {
-      requestedCount = Math.max(requestedCount, clarify.count);
-    }
-  } catch {
-    // If the clarify LLM call fails, just proceed with the search if the
-    // user already included a count; otherwise return a hard-coded prompt.
-    if (!requestedCount) {
-      return { kind: "text", content: "How many prospects would you like? e.g. 10, 25, 50." };
+  const hasTargeting = looksTargeted(userInput);
+
+  if (!requestedCount || !hasTargeting) {
+    try {
+      const clarify = await aiJson<{ ready: boolean; question?: string; count?: number }>(
+        provider,
+        "You screen a prospecting brief before running a web search. " +
+        "Require (a) some targeting (role/seniority/industry/company/region) AND (b) a specific COUNT of how many prospects the user wants. " +
+        "If a count is missing, ask 'How many would you like? e.g. 10, 25, 50.' " +
+        "If targeting is missing, ask ONE concise question about what's missing. " +
+        "Treat the ENTIRE brief as context — numbers on their own lines DO count.",
+        `Brief:\n${userInput}\n\nReturn {"ready": true, "count": <integer>} when both are clear. ` +
+        `Return {"ready": false, "question": "<one line>"} otherwise.`,
+        { maxTokens: 200, userId, userKeys },
+      );
+      if (clarify.ready === false && clarify.question) {
+        return { kind: "text", content: clarify.question.trim() };
+      }
+      if (typeof clarify.count === "number" && clarify.count > 0) {
+        requestedCount = Math.max(requestedCount, clarify.count);
+      }
+    } catch {
+      if (!requestedCount) {
+        return { kind: "text", content: "How many prospects would you like? e.g. 10, 25, 50." };
+      }
     }
   }
   const count = Math.min(Math.max(requestedCount || 8, 1), 100);
@@ -138,6 +142,32 @@ function extractCount(s: string): number {
   if (!m) return 0;
   const n = parseInt(m[1]!, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Heuristic: does the brief mention who to look for (role/company/industry/
+ *  region)? Good enough to skip the clarify LLM when paired with a number. */
+function looksTargeted(s: string): boolean {
+  if (s.trim().length < 6) return false;
+  const hay = s.toLowerCase();
+  // Any of these tokens implies real targeting.
+  const keywords = [
+    // roles / seniority
+    "ceo", "cto", "cfo", "coo", "cro", "ciso", "vp", "director", "head of",
+    "manager", "founder", "partner", "principal", "associate", "consultant",
+    "engineer", "designer", "analyst", "lead", "chief", "president", "owner",
+    "scientist", "researcher", "officer", "advisor",
+    // industries / functions
+    "ai", "ml", "sales", "marketing", "product", "design", "finance",
+    "legal", "hr", "recruit", "customer", "operations", "strategy",
+    "banking", "fintech", "saas", "biotech", "health", "retail", "media",
+    "consulting", "investment",
+    // companies (quick heuristic — any name-like Capitalized word of 2+ chars)
+  ];
+  if (keywords.some((k) => hay.includes(k))) return true;
+  // Catch capitalized brand names that aren't the start-of-sentence.
+  const capitalized = s.match(/\b[A-Z][a-zA-Z0-9&]{2,}/g) ?? [];
+  if (capitalized.length >= 2) return true;
+  return false;
 }
 
 function assertKeys(provider: AiProvider, userKeys?: UserKeys) {
