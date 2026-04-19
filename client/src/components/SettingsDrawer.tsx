@@ -6,7 +6,7 @@
  * the user's key over its own. (Server wiring of those headers is a follow-up.)
  */
 import { useEffect, useState } from "react";
-import { IconClose } from "../design/icons";
+import { IconClose, IconUpload } from "../design/icons";
 import type { UsageBucket } from "./Sidebar";
 
 const KEY_STORE = "nontrivial.apiKeys.v1";
@@ -37,9 +37,11 @@ interface Props {
   usage: UsageBucket[];
   onClose: () => void;
   onFlash: (msg: string) => void;
+  /** Opens the LinkedIn connections / invitations import modal. */
+  onImportLinkedIn?: () => void;
 }
 
-export function SettingsDrawer({ open, usage, onClose, onFlash }: Props) {
+export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn }: Props) {
   const [keys, setKeys] = useState<ApiKeys>(() => loadApiKeys());
   const [dirty, setDirty] = useState(false);
 
@@ -101,6 +103,19 @@ export function SettingsDrawer({ open, usage, onClose, onFlash }: Props) {
               })}
             </div>
           </section>
+
+          {onImportLinkedIn && (
+            <section>
+              <div className="section-title">Your LinkedIn network</div>
+              <div style={{ fontSize: 11.5, color: "var(--text-mute)", marginBottom: 10 }}>
+                Import <code>Connections.csv</code> or <code>Invitations.csv</code> from your LinkedIn
+                data export. Once imported, "My network" chat mode can search across them.
+              </div>
+              <button className="pill-btn" onClick={onImportLinkedIn}>
+                <IconUpload size={12} />Import from LinkedIn
+              </button>
+            </section>
+          )}
 
           <section>
             <div className="section-title">Connect your own API keys</div>

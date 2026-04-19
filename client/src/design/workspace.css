@@ -298,7 +298,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 
 /* Main canvas */
-.main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; position: relative; }
+.main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; min-width: 0; position: relative; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 11px 24px; border-bottom: 1px solid var(--hairline);
@@ -356,8 +356,9 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 /* Canvas / hero */
 .canvas {
-  position: relative; overflow-y: auto;
+  position: relative; overflow-y: auto; overflow-x: hidden;
   padding: 24px 28px 16px;
+  min-width: 0;
   scrollbar-width: thin; scrollbar-color: rgba(20,14,40,0.15) transparent;
 }
 .canvas::-webkit-scrollbar { width: 8px; }
@@ -715,7 +716,12 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 
 /* === CRM: kanban + table + board switcher + import modal === */
-.crm-wrap { display: flex; flex-direction: column; height: 100%; gap: 14px; }
+.crm-wrap {
+  display: flex; flex-direction: column; height: 100%; gap: 14px;
+  /* Let children drive their own horizontal scroll instead of pushing
+     the whole flex container wider than the canvas. */
+  min-width: 0;
+}
 .crm-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .view-toggle {
   display: flex; background: var(--panel-2);
@@ -734,11 +740,21 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .crm-tools { display: flex; gap: 6px; }
 
 .kanban {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(220px, 1fr));
-  gap: 12px; flex: 1; min-height: 0;
+  display: flex;
+  gap: 12px; flex: 1;
+  min-height: 0; min-width: 0;
+  /* Horizontal scroll when the columns don't fit — no more bleed past
+     the canvas. Columns are a fixed width so the grid feels consistent
+     regardless of viewport. */
+  overflow-x: auto; overflow-y: hidden;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20,14,40,0.15) transparent;
 }
+.kanban::-webkit-scrollbar { height: 8px; }
+.kanban::-webkit-scrollbar-thumb { background: rgba(20,14,40,0.12); border-radius: 4px; }
 .kanban-col {
+  flex: 0 0 260px;
   background: var(--panel-2);
   border: 1px solid var(--hairline);
   border-radius: 14px;
@@ -831,7 +847,12 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   flex: 1;
   background: var(--shell); border: 1px solid var(--hairline);
   border-radius: 12px; overflow: auto;
+  min-width: 0; /* required inside flex parents so horizontal scroll activates */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20,14,40,0.15) transparent;
 }
+.tbl-wrap::-webkit-scrollbar { height: 8px; width: 8px; }
+.tbl-wrap::-webkit-scrollbar-thumb { background: rgba(20,14,40,0.12); border-radius: 4px; }
 .tbl { min-width: 1480px; }
 .tbl-row {
   display: grid;

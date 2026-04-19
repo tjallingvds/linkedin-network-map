@@ -14,9 +14,10 @@ import { DetailDrawer } from "../components/DetailDrawer";
 import { OutreachDrawer } from "../components/OutreachDrawer";
 import { CRMView } from "../components/CRMView";
 import { SettingsDrawer } from "../components/SettingsDrawer";
+import { ConnectionsImportModal } from "../components/ConnectionsImportModal";
 import {
   IconSearch, IconSparkle, IconArrowUp, IconAttach,
-  IconCheck, IconSave, IconDownload, IconSheet, IconSend, IconUsers,
+  IconCheck, IconDownload, IconSend, IconUsers,
 } from "../design/icons";
 
 type ThreadEntry =
@@ -121,6 +122,7 @@ export function DiscoverPage() {
   const [outreachFor, setOutreachFor] = useState<{ prospects: Prospect[]; drafts?: OutreachDraft[] } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [connectionsImportOpen, setConnectionsImportOpen] = useState(false);
   const [boardMenuOpen, setBoardMenuOpen] = useState(false);
   const [boards, setBoards] = useState<CrmBoard[]>([]);
 
@@ -278,16 +280,28 @@ export function DiscoverPage() {
       setActiveBoardId(boardId);
       return;
     }
-    if (id === chatId && appMode === "discover") return;
-    // Chat row: re-enter that chat.
-    if (chatList.some((c) => c.id === id)) {
-      setAppMode("discover");
-      setChatId(id);
-      setThread([]);
-      setView("hero");
-      setLastProspects([]);
-      setLastBrief("");
-    }
+    // Chat row: switch to Discover and restore the conversation.
+    if (!chatList.some((c) => c.id === id)) return;
+    setAppMode("discover");
+    setChatId(id);
+    setLastProspects([]);
+    setLastBrief("");
+    setThread([]);
+    setView("hero");
+    // Fetch the chat's messages so the user sees their prior conversation
+    // instead of an empty hero. Structured prospect cards aren't persisted
+    // server-side yet — messages render as plain text bubbles for now.
+    api.get<{ messages: { role: string; content: string }[] }>(`/api/chats/${id}/messages`)
+      .then((r) => {
+        const entries: ThreadEntry[] = (r.messages ?? []).map((m) =>
+          m.role === "user"
+            ? { role: "user" as const, text: m.content }
+            : { role: "ai" as const, text: m.content }
+        );
+        setThread(entries);
+        setView(entries.length > 0 ? "thread" : "hero");
+      })
+      .catch(() => { /* leave thread empty */ });
   };
 
   const toggleSel = (id: string) => {
@@ -678,14 +692,8 @@ export function DiscoverPage() {
                           </>
                         )}
                       </div>
-                      <button className="pill-btn" onClick={() => flash(`Saved ${selected.size} prospects to a new list`)}>
-                        <IconSave size={12} />Save as list
-                      </button>
                       <button className="pill-btn" onClick={exportCSV}>
                         <IconDownload size={12} />Export CSV
-                      </button>
-                      <button className="pill-btn" onClick={() => flash(`Sent ${selected.size} prospects to Google Sheets`)}>
-                        <IconSheet size={12} />Send to Sheets
                       </button>
                       <button className="pill-btn primary" onClick={() => draftOutreachFor()}>
                         <IconSend size={12} />Draft outreach
@@ -735,7 +743,13 @@ export function DiscoverPage() {
                         <IconUsers size={12} />My network
                       </button>
                     </div>
-                    <button className="tool"><IconAttach size={13} />Attach list</button>
+                    <button
+                      className="tool"
+                      onClick={() => setConnectionsImportOpen(true)}
+                      title="Import your LinkedIn connections / invites so My network search can find them"
+                    >
+                      <IconAttach size={13} />Import LinkedIn
+                    </button>
                   </div>
                   <div className="send-group">
                     <button
@@ -774,7 +788,14 @@ export function DiscoverPage() {
         usage={usage}
         onClose={() => setSettingsOpen(false)}
         onFlash={flash}
+        onImportLinkedIn={() => { setSettingsOpen(false); setConnectionsImportOpen(true); }}
       />
+      {connectionsImportOpen && (
+        <ConnectionsImportModal
+          onClose={() => setConnectionsImportOpen(false)}
+          onFlash={flash}
+        />
+      )}
       {toast && (
         <div className="toast"><IconCheck size={14} />{toast}</div>
       )}
