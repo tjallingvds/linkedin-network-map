@@ -11,7 +11,7 @@ import { api } from "../lib/api";
 import { initials, avatarGrad } from "../design/mockProspects";
 import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
-  IconSend, IconMail, IconSparkle,
+  IconSend, IconMail, IconSparkle, IconLinkedIn,
 } from "../design/icons";
 
 // ========== Column configuration ==========
@@ -48,28 +48,58 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { id: "source",   label: "Source",     width: "1fr"   },
 ];
 
-const ALL_COL_IDS = TABLE_COLUMNS.map((c) => c.id);
+const BUILTIN_COL_IDS = TABLE_COLUMNS.map((c) => c.id);
 const REQUIRED_COLS = TABLE_COLUMNS.filter((c) => c.alwaysVisible).map((c) => c.id);
 
-function colsKey(boardId: string) { return `crm.cols.v1.${boardId}`; }
+/** User-defined column. Values live in contact.customFields[id]. */
+export interface CustomColumn {
+  id: string;
+  label: string;
+  /** Width used in grid-template-columns. Defaults to "1fr" for text. */
+  width?: string;
+}
 
-function loadColsConfig(boardId: string): string[] {
-  if (!boardId) return ALL_COL_IDS;
+function colsKey(boardId: string) { return `crm.cols.v1.${boardId}`; }
+function customColsKey(boardId: string) { return `crm.customcols.v1.${boardId}`; }
+
+function loadCustomCols(boardId: string): CustomColumn[] {
+  if (!boardId) return [];
+  try {
+    const raw = localStorage.getItem(customColsKey(boardId));
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return [];
+    return (arr as CustomColumn[]).filter((c) => c && typeof c.id === "string" && typeof c.label === "string");
+  } catch { return []; }
+}
+function saveCustomCols(boardId: string, cols: CustomColumn[]) {
+  if (!boardId) return;
+  try { localStorage.setItem(customColsKey(boardId), JSON.stringify(cols)); } catch { /* noop */ }
+}
+
+function loadColsConfig(boardId: string, customIds: string[]): string[] {
+  const all = [...BUILTIN_COL_IDS, ...customIds];
+  if (!boardId) return all;
   try {
     const raw = localStorage.getItem(colsKey(boardId));
-    if (!raw) return ALL_COL_IDS;
+    if (!raw) return all;
     const arr = JSON.parse(raw) as unknown;
-    if (!Array.isArray(arr)) return ALL_COL_IDS;
-    const valid = (arr as string[]).filter((id) => ALL_COL_IDS.includes(id));
-    // Always prepend required columns in their canonical order.
+    if (!Array.isArray(arr)) return all;
+    const valid = (arr as string[]).filter((id) => all.includes(id));
     const required = REQUIRED_COLS.filter((id) => !valid.includes(id));
     return [...required, ...valid];
-  } catch { return ALL_COL_IDS; }
+  } catch { return all; }
 }
 
 function saveColsConfig(boardId: string, ids: string[]) {
   if (!boardId) return;
   try { localStorage.setItem(colsKey(boardId), JSON.stringify(ids)); } catch { /* noop */ }
+}
+
+/** Turn a free-form label into a stable id: "Lead score" → "lead-score-<rnd>". */
+function makeCustomColId(label: string): string {
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "col";
+  return `c_${slug}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
 // --- Stage definitions — colors come from the design bundle. ---
@@ -359,22 +389,43 @@ function TempCell({ temp, onChange }: { temp: CrmTemp; onChange: (t: CrmTemp) =>
 }
 
 function TableView({
-  contacts, onOpen, onPatch, columns,
+  contacts, onOpen, onPatch, columns, customCols,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   /** Ordered list of visible column ids. */
   columns: string[];
+  customCols: CustomColumn[];
 }) {
-  // Resolve visible column ids → full defs (dropping unknown ids).
+  // Build the full registry (builtins + custom) on the fly so custom columns
+  // get TableColumnDef shape without special-casing callsites.
+  const customDefs: TableColumnDef[] = customCols.map((c) => ({
+    id: c.id,
+    label: c.label,
+    width: c.width ?? "1fr",
+  }));
+  const registry = [...TABLE_COLUMNS, ...customDefs];
   const colDefs = useMemo(
-    () => columns.map((id) => TABLE_COLUMNS.find((c) => c.id === id)).filter((c): c is TableColumnDef => !!c),
-    [columns],
+    () => columns.map((id) => registry.find((c) => c.id === id)).filter((c): c is TableColumnDef => !!c),
+    [columns, customCols],
   );
   const gridTemplate = colDefs.map((c) => c.width).join(" ");
 
+  const isCustom = (id: string) => customCols.some((c) => c.id === id);
+
   const renderCell = (col: TableColumnDef, p: CrmContact, i: number) => {
+    if (isCustom(col.id)) {
+      const val = (p.customFields ?? {})[col.id] ?? "";
+      // Only send the diff — the server merges with the existing bag so
+      // unrelated keys stay intact.
+      return (
+        <EditableCell
+          value={val}
+          onSave={(v) => onPatch(p.id, { customFields: { [col.id]: v } })}
+        />
+      );
+    }
     switch (col.id) {
       case "_select":
         return <div className="pc-check" onClick={(e) => e.stopPropagation()} />;
@@ -436,36 +487,71 @@ function TableView({
   );
 }
 
-/** Dropdown menu for toggling column visibility per board. */
+/** Dropdown menu for toggling column visibility per board AND managing
+ *  user-defined custom columns. Visibility state + custom defs both persist
+ *  in localStorage, keyed by board id. */
 function ColumnsMenu({
-  boardId, value, onChange,
+  boardId, value, onChange, customCols, onCustomColsChange,
 }: {
   boardId: string;
   value: string[];
   onChange: (next: string[]) => void;
+  customCols: CustomColumn[];
+  onCustomColsChange: (next: CustomColumn[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const toggle = (id: string) => {
-    const col = TABLE_COLUMNS.find((c) => c.id === id);
-    if (col?.alwaysVisible) return;
+    const isBuiltIn = TABLE_COLUMNS.find((c) => c.id === id);
+    if (isBuiltIn?.alwaysVisible) return;
     const next = value.includes(id) ? value.filter((x) => x !== id) : [...value, id];
     onChange(next);
     saveColsConfig(boardId, next);
   };
   const reset = () => {
-    onChange(ALL_COL_IDS);
-    saveColsConfig(boardId, ALL_COL_IDS);
+    const all = [...BUILTIN_COL_IDS, ...customCols.map((c) => c.id)];
+    onChange(all);
+    saveColsConfig(boardId, all);
   };
+  const addCustom = () => {
+    const label = window.prompt("New column name:", "")?.trim();
+    if (!label) return;
+    const id = makeCustomColId(label);
+    const nextCols = [...customCols, { id, label, width: "1fr" }];
+    onCustomColsChange(nextCols);
+    saveCustomCols(boardId, nextCols);
+    const nextVisible = [...value, id];
+    onChange(nextVisible);
+    saveColsConfig(boardId, nextVisible);
+  };
+  const removeCustom = (id: string) => {
+    if (!window.confirm("Remove this column? Data stored in it will be kept on each contact but hidden.")) return;
+    const nextCols = customCols.filter((c) => c.id !== id);
+    onCustomColsChange(nextCols);
+    saveCustomCols(boardId, nextCols);
+    const nextVisible = value.filter((v) => v !== id);
+    onChange(nextVisible);
+    saveColsConfig(boardId, nextVisible);
+  };
+  const renameCustom = (id: string) => {
+    const existing = customCols.find((c) => c.id === id);
+    if (!existing) return;
+    const label = window.prompt("Rename column:", existing.label)?.trim();
+    if (!label) return;
+    const nextCols = customCols.map((c) => (c.id === id ? { ...c, label } : c));
+    onCustomColsChange(nextCols);
+    saveCustomCols(boardId, nextCols);
+  };
+
   return (
     <div style={{ position: "relative" }}>
-      <button className="pill-btn" title="Show/hide columns" onClick={() => setOpen((o) => !o)}>
+      <button className="pill-btn" title="Show/hide + add columns" onClick={() => setOpen((o) => !o)}>
         <IconSheet size={12} />Columns
       </button>
       {open && (
         <>
           <div className="board-menu-bg" onClick={() => setOpen(false)} />
-          <div className="board-menu" style={{ minWidth: 200, right: 0, left: "auto" }}>
-            <div className="bm-label">Table columns</div>
+          <div className="board-menu" style={{ minWidth: 240, right: 0, left: "auto", maxHeight: "70vh", overflowY: "auto" }}>
+            <div className="bm-label">Built-in</div>
             {TABLE_COLUMNS.filter((c) => c.id !== "_select").map((c) => {
               const on = value.includes(c.id);
               const locked = c.alwaysVisible;
@@ -477,30 +563,70 @@ function ColumnsMenu({
                   disabled={locked}
                   style={locked ? { opacity: 0.5, cursor: "default" } : undefined}
                 >
-                  <span
-                    style={{
-                      width: 14, height: 14, borderRadius: 4,
-                      border: "1.5px solid var(--hairline-strong)",
-                      background: on ? "var(--accent)" : "transparent",
-                      display: "grid", placeItems: "center",
-                      color: "white",
-                    }}
-                  >
-                    {on && <IconCheck size={10} />}
-                  </span>
+                  <ColCheckbox on={on} />
                   <span style={{ flex: 1, textAlign: "left" }}>{c.label}</span>
                   {locked && <span style={{ fontSize: 10, color: "var(--text-mute)" }}>locked</span>}
                 </button>
               );
             })}
+            {customCols.length > 0 && <>
+              <div className="bm-sep" />
+              <div className="bm-label">Your columns</div>
+              {customCols.map((c) => {
+                const on = value.includes(c.id);
+                return (
+                  <div key={c.id} className="bm-item" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      style={{ display: "flex", gap: 8, flex: 1, alignItems: "center", textAlign: "left", padding: 0, background: "none", border: 0, cursor: "pointer", color: "inherit" }}
+                      onClick={() => toggle(c.id)}
+                    >
+                      <ColCheckbox on={on} />
+                      <span>{c.label}</span>
+                    </button>
+                    <button
+                      title="Rename"
+                      onClick={(e) => { e.stopPropagation(); renameCustom(c.id); }}
+                      style={{ fontSize: 10.5, color: "var(--text-mute)", padding: "2px 6px", borderRadius: 4 }}
+                    >
+                      rename
+                    </button>
+                    <button
+                      title="Remove"
+                      onClick={(e) => { e.stopPropagation(); removeCustom(c.id); }}
+                      style={{ fontSize: 10.5, color: "var(--danger, oklch(0.55 0.2 25))", padding: "2px 6px", borderRadius: 4 }}
+                    >
+                      remove
+                    </button>
+                  </div>
+                );
+              })}
+            </>}
             <div className="bm-sep" />
+            <button className="bm-item" onClick={addCustom}>
+              <IconNewChat size={13} /><span>Add column…</span>
+            </button>
             <button className="bm-item" onClick={reset}>
-              <IconArrowR size={13} /><span>Reset to defaults</span>
+              <IconArrowR size={13} /><span>Show all</span>
             </button>
           </div>
         </>
       )}
     </div>
+  );
+}
+
+function ColCheckbox({ on }: { on: boolean }) {
+  return (
+    <span
+      style={{
+        width: 14, height: 14, borderRadius: 4, flexShrink: 0,
+        border: "1.5px solid var(--hairline-strong)",
+        background: on ? "var(--accent)" : "transparent",
+        display: "grid", placeItems: "center", color: "white",
+      }}
+    >
+      {on && <IconCheck size={10} />}
+    </span>
   );
 }
 
@@ -869,6 +995,24 @@ export function CRMDrawer({
             <button className="icon-btn" onClick={onClose}><IconClose size={15} /></button>
             <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Contact · CRM</div>
           </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {contact.linkedin && (
+              <a
+                className="pill-btn"
+                href={contact.linkedin}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open LinkedIn profile"
+              >
+                <IconLinkedIn size={12} />LinkedIn
+              </a>
+            )}
+            {contact.email && (
+              <a className="pill-btn" href={`mailto:${contact.email}`} title={`Email ${contact.email}`}>
+                <IconMail size={12} />Email
+              </a>
+            )}
+          </div>
         </div>
         <div className="drawer-body">
           <div className="profile-hero">
@@ -974,7 +1118,8 @@ export function CRMView({
   const [openContact, setOpenContact] = useState<CrmContact | null>(null);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
-  const [visibleCols, setVisibleCols] = useState<string[]>(ALL_COL_IDS);
+  const [visibleCols, setVisibleCols] = useState<string[]>(BUILTIN_COL_IDS);
+  const [customCols, setCustomCols] = useState<CustomColumn[]>([]);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -991,7 +1136,10 @@ export function CRMView({
 
   // Whenever the active board changes, pull its saved column config.
   useEffect(() => {
-    if (activeId) setVisibleCols(loadColsConfig(activeId));
+    if (!activeId) return;
+    const cc = loadCustomCols(activeId);
+    setCustomCols(cc);
+    setVisibleCols(loadColsConfig(activeId, cc.map((c) => c.id)));
   }, [activeId]);
 
   // Load contacts when active board changes.
@@ -1005,8 +1153,16 @@ export function CRMView({
   const active = boards.find((b) => b.id === activeId);
 
   const patchContact = async (id: string, patch: Partial<CrmContact>) => {
-    // optimistic
-    setContacts((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+    // Optimistic update — merge customFields instead of replacing so patching
+    // a single key doesn't wipe the rest of the bag on screen.
+    setContacts((cs) => cs.map((c) => {
+      if (c.id !== id) return c;
+      const merged: CrmContact = { ...c, ...patch };
+      if (patch.customFields) {
+        merged.customFields = { ...(c.customFields ?? {}), ...patch.customFields };
+      }
+      return merged;
+    }));
     try {
       const updated = await api.patch<CrmContact>(`/api/crm/contacts/${id}`, patch);
       setContacts((cs) => cs.map((c) => (c.id === id ? updated : c)));
@@ -1180,7 +1336,13 @@ export function CRMView({
         </div>
         <div className="crm-tools">
           {viewMode === "table" && (
-            <ColumnsMenu boardId={activeId} value={visibleCols} onChange={setVisibleCols} />
+            <ColumnsMenu
+              boardId={activeId}
+              value={visibleCols}
+              onChange={setVisibleCols}
+              customCols={customCols}
+              onCustomColsChange={setCustomCols}
+            />
           )}
           <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Enrich all contacts on this board via Apollo.io">
             <IconSparkle size={12} />{enriching ? "Enriching…" : "Enrich all"}
@@ -1207,6 +1369,7 @@ export function CRMView({
           onOpen={setOpenContact}
           onPatch={patchContact}
           columns={visibleCols}
+          customCols={customCols}
         />
       )}
 

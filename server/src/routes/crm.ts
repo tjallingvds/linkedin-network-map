@@ -44,6 +44,7 @@ function toCamelContact(row: Record<string, unknown>) {
     nextStep: row.next_step,
     source: row.source,
     notes: row.notes,
+    customFields: (row.custom_fields ?? {}) as Record<string, string>,
     positionIdx: row.position_idx,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -172,6 +173,7 @@ const contactInput = z.object({
   nextStep: z.string().nullish(),
   source: z.string().nullish(),
   notes: z.string().nullish(),
+  customFields: z.record(z.string().max(2000)).optional(),
 });
 
 router.get("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
@@ -213,6 +215,8 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
       next_step: p.nextStep ?? null,
       source: p.source ?? null,
       notes: p.notes ?? null,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      custom_fields: (p.customFields ?? {}) as any,
     })
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -252,6 +256,8 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
           next_step: p.nextStep ?? null,
           source: p.source ?? "CSV import",
           notes: p.notes ?? null,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          custom_fields: (p.customFields ?? {}) as any,
         })),
       )
       .execute();
@@ -272,6 +278,28 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
   for (const [k, col] of Object.entries(map)) {
     const v = (body as Record<string, unknown>)[k];
     if (v !== undefined) update[col] = v ?? null;
+  }
+
+  if (body.customFields !== undefined) {
+    // Merge with the existing bag so callers can patch a single key without
+    // clobbering the rest. If a value is empty string, drop that key.
+    const existing = await db
+      .selectFrom("crm_contacts")
+      .select("custom_fields")
+      .where("id", "=", req.params.id)
+      .where("user_id", "=", req.user!.id)
+      .executeTakeFirst();
+    if (!existing) return res.status(404).json({ error: "not_found" });
+    const current = (existing.custom_fields ?? {}) as Record<string, string>;
+    const patch = body.customFields;
+    const merged: Record<string, string> = { ...current };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === "" || v === null || v === undefined) delete merged[k];
+      else merged[k] = String(v);
+    }
+    // Kysely PostgresDialect sends JS objects as JSON to jsonb columns.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    update.custom_fields = merged as any;
   }
 
   const row = await db

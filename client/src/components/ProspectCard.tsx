@@ -1,5 +1,5 @@
 import { type Prospect, initials, avatarGrad } from "../design/mockProspects";
-import { IconCheck } from "../design/icons";
+import { IconCheck, IconLinkedIn, IconMail } from "../design/icons";
 
 interface Props {
   prospect: Prospect;
@@ -30,9 +30,31 @@ export function ProspectCard({ prospect: p, index, selected, onToggle, onOpen }:
         <div className="pc-avatar" style={{ background: avatarGrad(index) }}>
           {initials(p.name)}
         </div>
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <div className="pc-name">{p.name}</div>
           <div className="pc-title">{p.title} · {p.company}</div>
+        </div>
+        <div className="pc-quick" onClick={(e) => e.stopPropagation()}>
+          {p.linkedin && (
+            <a
+              className="pc-quick-btn"
+              href={p.linkedin}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open LinkedIn profile"
+            >
+              <IconLinkedIn size={12} />
+            </a>
+          )}
+          {p.email && (
+            <a
+              className="pc-quick-btn"
+              href={`mailto:${p.email}`}
+              title={`Email ${p.email}`}
+            >
+              <IconMail size={12} />
+            </a>
+          )}
         </div>
       </div>
 

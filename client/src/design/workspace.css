@@ -90,6 +90,18 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .app.collapsed { --sidebar-w: 56px; }
 [data-theme="dark"] .app { box-shadow: none; }
 
+/* Prospect card quick-access icons (LinkedIn / email). */
+.pc-quick { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
+.pc-quick-btn {
+  width: 24px; height: 24px; display: grid; place-items: center;
+  border-radius: 6px; color: var(--text-mute);
+  background: transparent;
+  text-decoration: none;
+  transition: background 140ms ease, color 140ms ease, transform 120ms ease;
+}
+.pc-quick-btn:hover { background: var(--hairline); color: var(--text); transform: scale(1.08); }
+.pc-quick-btn:active { transform: scale(0.92); }
+
 /* Sidebar section "+" add button. */
 .nav-add {
   width: 18px; height: 18px; border-radius: 4px;

@@ -29,6 +29,63 @@ type ThreadEntry =
 type KeyErrorHint = { providers: string[] };
 interface ChatListItem { id: string; title: string; updated_at: string; }
 
+/**
+ * When sending chat-found prospects into a CRM board, carry their match
+ * signals / match % / past roles / location as custom fields so the CRM
+ * board actually shows WHY each lead matters.
+ *
+ * The custom column defs live in localStorage (same keys CRMView uses) so
+ * the columns appear automatically when the user opens the board.
+ */
+const CHAT_CUSTOM_COLS: { id: string; label: string; width: string }[] = [
+  { id: "c_signals", label: "Why relevant", width: "1.5fr" },
+  { id: "c_match",   label: "Match %",     width: "80px"  },
+  { id: "c_loc",     label: "Location",    width: "1fr"   },
+  { id: "c_past",    label: "Past roles",  width: "1.3fr" },
+];
+
+function prospectToCustomFields(p: Prospect): Record<string, string> {
+  const out: Record<string, string> = {};
+  const signals = (p.signals ?? [])
+    .map((s) => `${s.kind}: ${s.text}${s.when ? ` (${s.when})` : ""}`)
+    .join(" · ");
+  if (signals) out.c_signals = signals;
+  if (typeof p.matchPct === "number" && p.matchPct > 0) out.c_match = `${p.matchPct}%`;
+  if (p.loc) out.c_loc = p.loc;
+  const past = (p.past ?? [])
+    .slice(0, 2)
+    .map((r) => `${r.role} @ ${r.co}${r.when ? ` (${r.when})` : ""}`)
+    .join(" · ");
+  if (past) out.c_past = past;
+  return out;
+}
+
+/** Register the chat-origin custom columns on a board so they render the
+ *  next time the CRM view loads it. Also flips them on in the visibility list. */
+function ensureChatCustomCols(boardId: string) {
+  if (!boardId) return;
+  const customKey = `crm.customcols.v1.${boardId}`;
+  const visKey = `crm.cols.v1.${boardId}`;
+  try {
+    const rawCustom = localStorage.getItem(customKey);
+    const existing = rawCustom ? (JSON.parse(rawCustom) as { id: string }[]) : [];
+    const existingIds = new Set(existing.map((c) => c.id));
+    const toAdd = CHAT_CUSTOM_COLS.filter((c) => !existingIds.has(c.id));
+    if (toAdd.length > 0) {
+      localStorage.setItem(customKey, JSON.stringify([...existing, ...toAdd]));
+    }
+    // Also make sure they're visible.
+    const rawVis = localStorage.getItem(visKey);
+    if (rawVis) {
+      const visible = JSON.parse(rawVis) as string[];
+      const missing = CHAT_CUSTOM_COLS.map((c) => c.id).filter((id) => !visible.includes(id));
+      if (missing.length > 0) {
+        localStorage.setItem(visKey, JSON.stringify([...visible, ...missing]));
+      }
+    }
+  } catch { /* swallow */ }
+}
+
 /** Small inline picker under a prospect result. Shows "Add all N to board…"
  *  which expands into a list of the user's CRM boards. Keeps the CRM-in-chat
  *  flow one click away instead of buried behind selection. */
@@ -188,10 +245,14 @@ export function DiscoverPage() {
       const c = await api.post<{ id: string }>("/api/chats", { title: "New search" });
       setChatId(c.id);
       setActiveNav(c.id);
+      // Append optimistically so the sidebar reflects it before the list fetch
+      // finishes — avoids the "I clicked and nothing happened" feel.
+      setChatList((cs) => [{ id: c.id, title: "New search", updated_at: new Date().toISOString() }, ...cs]);
       refreshChatList();
-    } catch {
+    } catch (err) {
       setChatId(null);
       setActiveNav("");
+      flash(`New search failed: ${(err as Error).message}`);
     }
   };
 
@@ -451,6 +512,7 @@ export function DiscoverPage() {
     if (!name) return;
     try {
       const board = await api.post<CrmBoard>("/api/crm/boards", { name, emoji: "✨" });
+      ensureChatCustomCols(board.id);
       await api.post(`/api/crm/boards/${board.id}/contacts/bulk`, {
         contacts: chosen.map((p) => ({
           name: p.name,
@@ -462,6 +524,7 @@ export function DiscoverPage() {
           source: "Search — Saved list",
           stage: "new",
           temp: "warm",
+          customFields: prospectToCustomFields(p),
         })),
       });
       const r = await api.get<{ boards: CrmBoard[] }>("/api/crm/boards");
@@ -531,6 +594,7 @@ export function DiscoverPage() {
     const chosen = allProspects.filter((p) => selected.has(p.id));
     if (chosen.length === 0) return;
     try {
+      ensureChatCustomCols(boardId);
       await api.post(`/api/crm/boards/${boardId}/contacts/bulk`, {
         contacts: chosen.map((p) => ({
           name: p.name,
@@ -543,6 +607,7 @@ export function DiscoverPage() {
           stage: "new",
           temp: "warm",
           nextStep: "First touch",
+          customFields: prospectToCustomFields(p),
         })),
       });
       // Refresh board counts.
@@ -678,6 +743,7 @@ export function DiscoverPage() {
                                 count={m.prospects.length}
                                 onAdd={async (boardId) => {
                                   try {
+                                    ensureChatCustomCols(boardId);
                                     await api.post(`/api/crm/boards/${boardId}/contacts/bulk`, {
                                       contacts: m.prospects.map((p) => ({
                                         name: p.name,
@@ -689,6 +755,7 @@ export function DiscoverPage() {
                                         source: "Chat — Discover",
                                         stage: "new",
                                         temp: "warm",
+                                        customFields: prospectToCustomFields(p),
                                       })),
                                     });
                                     const r = await api.get<{ boards: CrmBoard[] }>("/api/crm/boards");
