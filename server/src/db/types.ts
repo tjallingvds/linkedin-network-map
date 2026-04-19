@@ -134,6 +134,7 @@ export interface CrmContactsTable {
   next_step: string | null;
   source: string | null;
   notes: string | null;
+  message_notes: string | null;
   custom_fields: Generated<Record<string, unknown>>;
   position_idx: Generated<number>;
   created_at: Generated<Timestamp>;

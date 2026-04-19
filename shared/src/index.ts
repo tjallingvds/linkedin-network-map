@@ -124,6 +124,8 @@ export interface CrmContact {
   nextStep: string | null;
   source: string | null;
   notes: string | null;
+  /** Free-form "what to personalize" hook for outreach. */
+  messageNotes?: string | null;
   /** User-defined columns: map of column-id → cell value. Optional for
    *  backward compat with clients that haven't loaded the new schema. */
   customFields?: Record<string, string>;

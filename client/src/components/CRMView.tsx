@@ -47,6 +47,8 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { id: "replies",  label: "Replies",    width: "64px",  numeric: true },
   { id: "nextStep", label: "Next step",  width: "1.3fr" },
   { id: "source",   label: "Source",     width: "1fr"   },
+  { id: "messageNotes", label: "Personalize", width: "1.5fr" },
+  { id: "notes",    label: "Notes",      width: "1.5fr" },
 ];
 
 const BUILTIN_COL_IDS = TABLE_COLUMNS.map((c) => c.id);
@@ -229,20 +231,9 @@ function KanbanCard({
         <div className="kc-avatar" style={{ background: avatarGrad(idx) }}>{initials(p.name)}</div>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="kc-name">{p.name}</div>
-          <div className="kc-co">{p.company ?? ""}</div>
+          {p.title && <div className="kc-role">{p.title}</div>}
+          {p.company && <div className="kc-co">{p.company}</div>}
         </div>
-        <span className={`kc-temp ${p.temp}`} title={`${p.temp} lead`} />
-      </div>
-      <div className="kc-role">{p.title ?? ""}</div>
-      <div className="kc-stats">
-        <span title="Sent"><IconSend size={10} />{p.sent}</span>
-        <span title="Opens"><IconMail size={10} />{p.opens}</span>
-        <span title="Replies"><IconArrowR size={10} />{p.replies}</span>
-        <span className="kc-touch">{p.lastTouch ?? "—"}</span>
-      </div>
-      <div className="kc-next-row">
-        <span className="kc-next-dot" />
-        <span className="kc-next">{p.nextStep ?? "First touch"}</span>
       </div>
     </div>
   );
@@ -459,6 +450,8 @@ function TableView({
       case "replies": return <EditableCell value={p.replies} align="center" onSave={(v) => onPatch(p.id, { replies: Number(v) || 0 })} />;
       case "nextStep":return <EditableCell value={p.nextStep} onSave={(v) => onPatch(p.id, { nextStep: v })} />;
       case "source":  return <span className="src-chip">{p.source ?? ""}</span>;
+      case "messageNotes": return <EditableCell value={p.messageNotes} onSave={(v) => onPatch(p.id, { messageNotes: v })} />;
+      case "notes":   return <EditableCell value={p.notes} onSave={(v) => onPatch(p.id, { notes: v })} />;
       default:        return null;
     }
   };
@@ -1109,6 +1102,17 @@ export function CRMDrawer({
               );
             })}
 
+            <DrawerField label="What to personalize" block>
+              <textarea
+                className="drawer-notes"
+                defaultValue={contact.messageNotes ?? ""}
+                placeholder="One-liner hook, recent post, mutual connection, what to lead with…"
+                onBlur={(e) => {
+                  const v = e.target.value;
+                  if ((contact.messageNotes ?? "") !== v) onPatch(contact.id, { messageNotes: v });
+                }}
+              />
+            </DrawerField>
             <DrawerField label="Notes" block>
               <textarea
                 className="drawer-notes"

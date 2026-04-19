@@ -44,6 +44,7 @@ function toCamelContact(row: Record<string, unknown>) {
     nextStep: row.next_step,
     source: row.source,
     notes: row.notes,
+    messageNotes: row.message_notes ?? null,
     customFields: (row.custom_fields ?? {}) as Record<string, string>,
     positionIdx: row.position_idx,
     createdAt: row.created_at,
@@ -173,6 +174,7 @@ const contactInput = z.object({
   nextStep: z.string().nullish(),
   source: z.string().nullish(),
   notes: z.string().nullish(),
+  messageNotes: z.string().nullish(),
   customFields: z.record(z.string().max(2000)).optional(),
 });
 
@@ -215,6 +217,7 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
       next_step: p.nextStep ?? null,
       source: p.source ?? null,
       notes: p.notes ?? null,
+      message_notes: p.messageNotes ?? null,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       custom_fields: (p.customFields ?? {}) as any,
     })
@@ -256,6 +259,7 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
           next_step: p.nextStep ?? null,
           source: p.source ?? "CSV import",
           notes: p.notes ?? null,
+          message_notes: p.messageNotes ?? null,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           custom_fields: (p.customFields ?? {}) as any,
         })),
@@ -274,6 +278,7 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
     phone: "phone", linkedin: "linkedin", stage: "stage", temp: "temp",
     sent: "sent", opens: "opens", replies: "replies",
     lastTouch: "last_touch", nextStep: "next_step", source: "source", notes: "notes",
+    messageNotes: "message_notes",
   } as const;
   for (const [k, col] of Object.entries(map)) {
     const v = (body as Record<string, unknown>)[k];
