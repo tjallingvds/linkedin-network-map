@@ -11,7 +11,7 @@ import { api } from "../lib/api";
 import { initials, avatarGrad } from "../design/mockProspects";
 import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
-  IconSend, IconMail, IconBookmark, IconCalendar, IconSparkle,
+  IconSend, IconMail, IconSparkle,
 } from "../design/icons";
 
 // ========== Column configuration ==========
@@ -869,10 +869,6 @@ export function CRMDrawer({
             <button className="icon-btn" onClick={onClose}><IconClose size={15} /></button>
             <div style={{ fontSize: 12, color: "var(--text-dim)" }}>Contact · CRM</div>
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button className="pill-btn"><IconMail size={12} />Email</button>
-            <button className="pill-btn"><IconCalendar size={12} />Schedule</button>
-          </div>
         </div>
         <div className="drawer-body">
           <div className="profile-hero">
@@ -943,9 +939,6 @@ export function CRMDrawer({
           )}
           <button className="pill-btn" style={{ flex: 1 }} onClick={advanceStage}>
             Move to next stage <IconArrowR size={13} />
-          </button>
-          <button className="pill-btn primary" style={{ flex: 1 }}>
-            <IconSend size={13} />Send follow-up
           </button>
         </div>
       </div>
@@ -1039,7 +1032,6 @@ export function CRMView({
   };
 
   const deleteBoard = async (id: string) => {
-    if (boards.length <= 1) return;
     if (!window.confirm("Delete this board and all its contacts?")) return;
     try {
       await api.del(`/api/crm/boards/${id}`);
@@ -1250,5 +1242,3 @@ export function CRMView({
   );
 }
 
-// Also re-export the Bookmark icon for activity rows (kept for future use).
-export { IconBookmark };

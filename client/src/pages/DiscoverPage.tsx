@@ -17,7 +17,7 @@ import { SettingsDrawer } from "../components/SettingsDrawer";
 import { ConnectionsImportModal } from "../components/ConnectionsImportModal";
 import {
   IconSearch, IconSparkle, IconArrowUp, IconAttach,
-  IconCheck, IconDownload, IconSend, IconUsers,
+  IconCheck, IconSave, IconDownload, IconSheet, IconSend, IconUsers,
 } from "../design/icons";
 
 type ThreadEntry =
@@ -172,18 +172,27 @@ export function DiscoverPage() {
     setTimeout(() => setToast(null), 2800);
   };
 
-  const handleNewChat = () => {
+  const handleNewChat = async () => {
+    setAppMode("discover");
     setView("hero");
     setThread([]);
     setSelected(new Set());
     setDraft("");
     setOpenProspect(null);
     setOutreachFor(null);
-    setChatId(null);
-    setActiveNav("");
     setLastProspects([]);
     setLastBrief("");
-    // Intentionally NO api.post here — the chat is created on first send.
+    // Eagerly create a chat so it shows up in the sidebar immediately.
+    // On first user message the title will be replaced via the same endpoint.
+    try {
+      const c = await api.post<{ id: string }>("/api/chats", { title: "New search" });
+      setChatId(c.id);
+      setActiveNav(c.id);
+      refreshChatList();
+    } catch {
+      setChatId(null);
+      setActiveNav("");
+    }
   };
 
   /** Ensure we have a chatId, creating one lazily on the user's first send. */
@@ -257,12 +266,18 @@ export function DiscoverPage() {
   const deleteBoardFromNav = async (navId: string) => {
     const id = navId.startsWith("board:") ? navId.slice(6) : navId;
     const target = boards.find((b) => b.id === id);
-    if (boards.length <= 1) { flash("You need at least one board."); return; }
-    setBoards((bs) => bs.filter((b) => b.id !== id));
+    const next = boards.filter((b) => b.id !== id);
+    setBoards(next);
     if (activeBoardId === id) setActiveBoardId("");
     try {
       await api.del(`/api/crm/boards/${id}`);
       flash(`Deleted "${target?.name ?? "board"}"`);
+      // The server auto-seeds a default board on the next GET /api/crm/boards
+      // if none remain, so refetch to pick that up.
+      if (next.length === 0) {
+        const r = await api.get<{ boards: CrmBoard[] }>("/api/crm/boards");
+        setBoards(r.boards);
+      }
     } catch (err) {
       flash(`Delete failed: ${(err as Error).message}`);
     }
@@ -426,6 +441,61 @@ export function DiscoverPage() {
       setOutreachFor({ prospects: recipients, drafts: result.drafts });
     }
   }
+
+  /** Create a fresh CRM board from the selected prospects. Real action — POSTs
+   *  a board + bulk-inserts contacts, then switches the user to the new board. */
+  const saveAsList = async () => {
+    const chosen = allProspects.filter((p) => selected.has(p.id));
+    if (chosen.length === 0) return;
+    const name = window.prompt("Name this list:", `Prospects · ${new Date().toLocaleDateString()}`);
+    if (!name) return;
+    try {
+      const board = await api.post<CrmBoard>("/api/crm/boards", { name, emoji: "✨" });
+      await api.post(`/api/crm/boards/${board.id}/contacts/bulk`, {
+        contacts: chosen.map((p) => ({
+          name: p.name,
+          title: p.title,
+          company: p.company,
+          email: p.email ?? null,
+          phone: p.phone ?? null,
+          linkedin: p.linkedin ?? null,
+          source: "Search — Saved list",
+          stage: "new",
+          temp: "warm",
+        })),
+      });
+      const r = await api.get<{ boards: CrmBoard[] }>("/api/crm/boards");
+      setBoards(r.boards);
+      flash(`Saved ${chosen.length} to "${name}" — switch to CRM to view.`);
+      clearSel();
+    } catch (err) {
+      flash(`Save failed: ${(err as Error).message}`);
+    }
+  };
+
+  /** "Send to Sheets" — copies the CSV to the clipboard and opens a new
+   *  Google Sheet. User pastes into A1. No Google OAuth required; works for
+   *  anyone logged into Google in another tab. */
+  const sendToSheets = async () => {
+    const chosen = allProspects.filter((p) => selected.has(p.id));
+    if (chosen.length === 0) return;
+    const headers = ["Name", "Title", "Company", "Email", "Email Confidence", "Phone", "LinkedIn", "Location", "Headcount", "Funding", "Match %"];
+    const rows = chosen.map((p) => [
+      p.name, p.title, p.company, p.email ?? "", p.emailConf != null ? `${p.emailConf}%` : "",
+      p.phone ?? "", p.linkedin ?? "", p.loc ?? "", p.headcount ?? "", p.funding ?? "", `${p.matchPct}%`,
+    ]);
+    // TSV is what Google Sheets expects on paste — tabs split into columns.
+    const tsv = [headers, ...rows]
+      .map((r) => r.map((v) => String(v).replace(/\t/g, " ")).join("\t"))
+      .join("\n");
+    try {
+      await navigator.clipboard.writeText(tsv);
+      window.open("https://sheets.new", "_blank", "noopener");
+      flash(`Copied ${chosen.length} to clipboard — paste into the new sheet (⌘V).`);
+    } catch {
+      flash("Clipboard blocked by the browser — use Export CSV instead.");
+    }
+  };
 
   const exportCSV = () => {
     const chosen = allProspects.filter((p) => selected.has(p.id));
@@ -692,8 +762,14 @@ export function DiscoverPage() {
                           </>
                         )}
                       </div>
+                      <button className="pill-btn" onClick={saveAsList}>
+                        <IconSave size={12} />Save as list
+                      </button>
                       <button className="pill-btn" onClick={exportCSV}>
                         <IconDownload size={12} />Export CSV
+                      </button>
+                      <button className="pill-btn" onClick={sendToSheets}>
+                        <IconSheet size={12} />Send to Sheets
                       </button>
                       <button className="pill-btn primary" onClick={() => draftOutreachFor()}>
                         <IconSend size={12} />Draft outreach
