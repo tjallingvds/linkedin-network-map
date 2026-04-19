@@ -29,6 +29,55 @@ type ThreadEntry =
 type KeyErrorHint = { providers: string[] };
 interface ChatListItem { id: string; title: string; updated_at: string; }
 
+/** Small inline picker under a prospect result. Shows "Add all N to board…"
+ *  which expands into a list of the user's CRM boards. Keeps the CRM-in-chat
+ *  flow one click away instead of buried behind selection. */
+function InlineAddAllToBoard({
+  boards, count, onAdd,
+}: {
+  boards: CrmBoard[];
+  count: number;
+  onAdd: (boardId: string) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (count === 0) return null;
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="pill-btn primary" onClick={() => setOpen((o) => !o)} disabled={busy}>
+        <IconUsers size={12} />Add all {count} to board
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={() => setOpen(false)} />
+          <div className="board-menu" style={{ top: "calc(100% + 6px)", left: 0, right: "auto" }}>
+            <div className="bm-label">Add {count} prospect{count === 1 ? "" : "s"} to…</div>
+            {boards.length === 0 && (
+              <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--text-mute)" }}>
+                No boards yet — open the CRM tab to create one.
+              </div>
+            )}
+            {boards.map((b) => (
+              <button
+                key={b.id}
+                className="bm-item"
+                onClick={async () => {
+                  setBusy(true);
+                  try { await onAdd(b.id); } finally { setBusy(false); setOpen(false); }
+                }}
+              >
+                <span style={{ fontSize: 15 }}>{b.emoji}</span>
+                <span style={{ flex: 1, textAlign: "left" }}>{b.name}</span>
+                <span className="board-count">{b.contactCount ?? 0}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Parse a server error message for missing-key mentions so we can render a
  *  friendlier "Add your keys" card instead of a raw error string. */
 function detectMissingKeys(msg: string): KeyErrorHint | undefined {
@@ -63,6 +112,7 @@ export function DiscoverPage() {
   const [collapsed, setCollapsed] = useState(false);
   const [appMode, setAppMode] = useState<"discover" | "crm">("discover");
   const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table">("kanban");
+  const [activeBoardId, setActiveBoardId] = useState<string>("");
   const [view, setView] = useState<"hero" | "thread">("hero");
   const [thread, setThread] = useState<ThreadEntry[]>([]);
   const [draft, setDraft] = useState("");
@@ -98,6 +148,18 @@ export function DiscoverPage() {
   const savedSearches = useMemo(
     () => chatList.slice(0, 20).map((c) => ({ id: c.id, label: c.title || "Untitled", count: 0 })),
     [chatList],
+  );
+
+  // Sidebar "Lists & segments" shows the user's CRM boards. Clicking one
+  // jumps to the CRM view on that board — so the sidebar doubles as a
+  // board picker without a second UI.
+  const boardLists = useMemo(
+    () => boards.map((b) => ({
+      id: `board:${b.id}`,
+      label: `${b.emoji} ${b.name}`,
+      count: b.contactCount ?? 0,
+    })),
+    [boards],
   );
 
   const allProspects = useMemo(
@@ -166,12 +228,20 @@ export function DiscoverPage() {
     }
   };
 
-  // Let users click a saved search in the sidebar to re-enter that chat.
+  // Let users click a saved search in the sidebar to re-enter that chat,
+  // OR a CRM list to jump to that board.
   const handleSelectNav = (id: string) => {
     setActiveNav(id);
-    if (!id || id === chatId) return;
-    // If it's a known chat, switch to it (UI is stateless per-chat for now,
-    // so clear the thread and let the user keep typing in the same chat).
+    if (!id) return;
+    // Board item: "board:<id>" → switch to CRM view on that board.
+    if (id.startsWith("board:")) {
+      const boardId = id.slice("board:".length);
+      setAppMode("crm");
+      setActiveBoardId(boardId);
+      return;
+    }
+    if (id === chatId) return;
+    // Chat row: re-enter that chat.
     if (chatList.some((c) => c.id === id)) {
       setChatId(id);
       setThread([]);
@@ -397,7 +467,7 @@ export function DiscoverPage() {
           onRenameSearch={renameChat}
           onDeleteSearch={deleteChat}
           savedSearches={savedSearches}
-          lists={[]}
+          lists={boardLists}
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed((c) => !c)}
           usage={usage}
@@ -435,7 +505,14 @@ export function DiscoverPage() {
 
           <div className="canvas">
             {appMode === "crm" ? (
-              <CRMView viewMode={crmViewMode} setViewMode={setCrmViewMode} onFlash={flash} />
+              <CRMView
+                viewMode={crmViewMode}
+                setViewMode={setCrmViewMode}
+                onFlash={flash}
+                activeBoardId={activeBoardId || undefined}
+                onActiveBoardChange={setActiveBoardId}
+                onBoardsChange={setBoards}
+              />
             ) : view === "hero" ? (
               <div className="hero">
                 <div className="hero-eyebrow">Prospecting · Enrichment · Outreach</div>
@@ -472,14 +549,43 @@ export function DiscoverPage() {
                             onToggle={toggleSel}
                             onOpen={setOpenProspect}
                           />
-                          {/* Show "More results" only on the latest prospect block + when we have a brief to re-query. */}
-                          {i === thread.length - 1 && lastBrief && m.prospects.length > 0 && !streaming && (
+                          {/* Result actions — only on the latest prospect block. */}
+                          {i === thread.length - 1 && m.prospects.length > 0 && !streaming && (
                             <div className="result-actions">
-                              <button className="pill-btn" onClick={sendDiscoverMore}>
-                                <IconSearch size={12} />More results
-                              </button>
+                              {lastBrief && (
+                                <button className="pill-btn" onClick={sendDiscoverMore}>
+                                  <IconSearch size={12} />More results
+                                </button>
+                              )}
+                              <InlineAddAllToBoard
+                                boards={boards}
+                                count={m.prospects.length}
+                                onAdd={async (boardId) => {
+                                  try {
+                                    await api.post(`/api/crm/boards/${boardId}/contacts/bulk`, {
+                                      contacts: m.prospects.map((p) => ({
+                                        name: p.name,
+                                        title: p.title,
+                                        company: p.company,
+                                        email: p.email ?? null,
+                                        phone: p.phone ?? null,
+                                        linkedin: p.linkedin ?? null,
+                                        source: "Chat — Discover",
+                                        stage: "new",
+                                        temp: "warm",
+                                      })),
+                                    });
+                                    const r = await api.get<{ boards: CrmBoard[] }>("/api/crm/boards");
+                                    setBoards(r.boards);
+                                    const board = r.boards.find((b) => b.id === boardId);
+                                    flash(`Added ${m.prospects.length} to "${board?.name ?? "board"}"`);
+                                  } catch (err) {
+                                    flash(`Add to board failed: ${(err as Error).message}`);
+                                  }
+                                }}
+                              />
                               <span className="result-hint">
-                                Ask a question or type a filter (e.g. "only those with email") to refine.
+                                Type a filter or question below (e.g. "only those with email") to refine.
                               </span>
                             </div>
                           )}

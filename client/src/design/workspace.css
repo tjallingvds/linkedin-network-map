@@ -808,10 +808,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   background: var(--shell); border: 1px solid var(--hairline);
   border-radius: 12px; overflow: auto;
 }
-.tbl { min-width: 1200px; }
+.tbl { min-width: 1480px; }
 .tbl-row {
   display: grid;
-  grid-template-columns: 36px 1.8fr 1.2fr 120px 90px 60px 60px 60px 1.4fr 100px 1.1fr;
+  /* grid-template-columns is set inline by TableView so columns can be
+     toggled / reordered from a user-editable config. */
   align-items: center;
   padding: 0 14px;
   border-bottom: 1px solid var(--hairline);

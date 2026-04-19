@@ -14,6 +14,64 @@ import {
   IconSend, IconMail, IconBookmark, IconCalendar, IconSparkle,
 } from "../design/icons";
 
+// ========== Column configuration ==========
+
+/**
+ * Every table column is described here — id, label, width (passed to the grid
+ * template), render function, and alwaysVisible flag for columns the user
+ * can't hide (the selection checkbox + the person column).
+ *
+ * Visibility + order per-board are persisted in localStorage under
+ * "crm.cols.v1.<boardId>" as a string[] of column ids in the desired order.
+ */
+export interface TableColumnDef {
+  id: string;
+  label: string;
+  width: string;
+  alwaysVisible?: boolean;
+  numeric?: boolean;
+}
+
+const TABLE_COLUMNS: TableColumnDef[] = [
+  { id: "_select",  label: "",           width: "36px",   alwaysVisible: true },
+  { id: "person",   label: "Person",     width: "1.8fr",  alwaysVisible: true },
+  { id: "title",    label: "Title",      width: "1.1fr" },
+  { id: "company",  label: "Company",    width: "1.1fr" },
+  { id: "email",    label: "Email",      width: "1.2fr" },
+  { id: "phone",    label: "Phone",      width: "130px" },
+  { id: "stage",    label: "Stage",      width: "120px" },
+  { id: "temp",     label: "Temp",       width: "90px"  },
+  { id: "sent",     label: "Sent",       width: "64px",  numeric: true },
+  { id: "opens",    label: "Opens",      width: "64px",  numeric: true },
+  { id: "replies",  label: "Replies",    width: "64px",  numeric: true },
+  { id: "nextStep", label: "Next step",  width: "1.3fr" },
+  { id: "source",   label: "Source",     width: "1fr"   },
+];
+
+const ALL_COL_IDS = TABLE_COLUMNS.map((c) => c.id);
+const REQUIRED_COLS = TABLE_COLUMNS.filter((c) => c.alwaysVisible).map((c) => c.id);
+
+function colsKey(boardId: string) { return `crm.cols.v1.${boardId}`; }
+
+function loadColsConfig(boardId: string): string[] {
+  if (!boardId) return ALL_COL_IDS;
+  try {
+    const raw = localStorage.getItem(colsKey(boardId));
+    if (!raw) return ALL_COL_IDS;
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return ALL_COL_IDS;
+    const valid = (arr as string[]).filter((id) => ALL_COL_IDS.includes(id));
+    // Always prepend required columns in their canonical order.
+    const required = REQUIRED_COLS.filter((id) => !valid.includes(id));
+    return [...required, ...valid];
+  } catch { return ALL_COL_IDS; }
+}
+
+function saveColsConfig(boardId: string, ids: string[]) {
+  if (!boardId) return;
+  try { localStorage.setItem(colsKey(boardId), JSON.stringify(ids)); } catch { /* noop */ }
+}
+
 // --- Stage definitions — colors come from the design bundle. ---
 const STAGES: { id: CrmStage; label: string; color: string; tint: string }[] = [
   { id: "new",       label: "New",       color: "oklch(0.72 0.04 280)", tint: "oklch(0.95 0.02 280 / 0.7)" },
@@ -288,48 +346,71 @@ function TempCell({ temp, onChange }: { temp: CrmTemp; onChange: (t: CrmTemp) =>
 }
 
 function TableView({
-  contacts, onOpen, onPatch,
-}: { contacts: CrmContact[]; onOpen: (c: CrmContact) => void; onPatch: (id: string, patch: Partial<CrmContact>) => void }) {
+  contacts, onOpen, onPatch, columns,
+}: {
+  contacts: CrmContact[];
+  onOpen: (c: CrmContact) => void;
+  onPatch: (id: string, patch: Partial<CrmContact>) => void;
+  /** Ordered list of visible column ids. */
+  columns: string[];
+}) {
+  // Resolve visible column ids → full defs (dropping unknown ids).
+  const colDefs = useMemo(
+    () => columns.map((id) => TABLE_COLUMNS.find((c) => c.id === id)).filter((c): c is TableColumnDef => !!c),
+    [columns],
+  );
+  const gridTemplate = colDefs.map((c) => c.width).join(" ");
+
+  const renderCell = (col: TableColumnDef, p: CrmContact, i: number) => {
+    switch (col.id) {
+      case "_select":
+        return <div className="pc-check" onClick={(e) => e.stopPropagation()} />;
+      case "person":
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, width: "100%" }}>
+            <div className="kc-avatar" style={{ background: avatarGrad(i), width: 24, height: 24, fontSize: 10 }}>
+              {initials(p.name)}
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <EditableCell value={p.name} onSave={(v) => { if (v.trim()) onPatch(p.id, { name: v.trim() }); }} />
+            </div>
+          </div>
+        );
+      case "title":   return <EditableCell value={p.title}   onSave={(v) => onPatch(p.id, { title: v })} />;
+      case "company": return <EditableCell value={p.company} onSave={(v) => onPatch(p.id, { company: v })} />;
+      case "email":   return <EditableCell value={p.email}   onSave={(v) => onPatch(p.id, { email: v })} />;
+      case "phone":   return <EditableCell value={p.phone}   onSave={(v) => onPatch(p.id, { phone: v })} />;
+      case "stage":   return <StageCell stage={p.stage} onChange={(v) => onPatch(p.id, { stage: v })} />;
+      case "temp":    return <TempCell  temp={p.temp}   onChange={(v) => onPatch(p.id, { temp: v })} />;
+      case "sent":    return <EditableCell value={p.sent}    align="center" onSave={(v) => onPatch(p.id, { sent: Number(v) || 0 })} />;
+      case "opens":   return <EditableCell value={p.opens}   align="center" onSave={(v) => onPatch(p.id, { opens: Number(v) || 0 })} />;
+      case "replies": return <EditableCell value={p.replies} align="center" onSave={(v) => onPatch(p.id, { replies: Number(v) || 0 })} />;
+      case "nextStep":return <EditableCell value={p.nextStep} onSave={(v) => onPatch(p.id, { nextStep: v })} />;
+      case "source":  return <span className="src-chip">{p.source ?? ""}</span>;
+      default:        return null;
+    }
+  };
+
   return (
     <div className="tbl-wrap">
       <div className="tbl">
-        <div className="tbl-row tbl-head">
-          <div className="tbl-cell"></div>
-          <div className="tbl-cell">Person</div>
-          <div className="tbl-cell">Title</div>
-          <div className="tbl-cell">Company</div>
-          <div className="tbl-cell">Email</div>
-          <div className="tbl-cell">Phone</div>
-          <div className="tbl-cell">Stage</div>
-          <div className="tbl-cell">Temp</div>
-          <div className="tbl-cell c-num">Sent</div>
-          <div className="tbl-cell c-num">Opens</div>
-          <div className="tbl-cell c-num">Replies</div>
-          <div className="tbl-cell">Next step</div>
-          <div className="tbl-cell">Source</div>
+        <div className="tbl-row tbl-head" style={{ gridTemplateColumns: gridTemplate }}>
+          {colDefs.map((c) => (
+            <div key={c.id} className={`tbl-cell${c.numeric ? " c-num" : ""}`}>{c.label}</div>
+          ))}
         </div>
         {contacts.map((p, i) => (
-          <div key={p.id} className="tbl-row" onClick={() => onOpen(p)}>
-            <div className="tbl-cell"><div className="pc-check" onClick={(e) => e.stopPropagation()} /></div>
-            <div className="tbl-cell c-name">
-              <div className="kc-avatar" style={{ background: avatarGrad(i), width: 24, height: 24, fontSize: 10 }}>
-                {initials(p.name)}
+          <div
+            key={p.id}
+            className="tbl-row"
+            onClick={() => onOpen(p)}
+            style={{ gridTemplateColumns: gridTemplate }}
+          >
+            {colDefs.map((c) => (
+              <div key={c.id} className={`tbl-cell${c.numeric ? " c-num" : ""}${c.id === "person" ? " c-name" : ""}`}>
+                {renderCell(c, p, i)}
               </div>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <EditableCell value={p.name} onSave={(v) => { if (v.trim()) onPatch(p.id, { name: v.trim() }); }} />
-              </div>
-            </div>
-            <div className="tbl-cell"><EditableCell value={p.title} onSave={(v) => onPatch(p.id, { title: v })} /></div>
-            <div className="tbl-cell"><EditableCell value={p.company} onSave={(v) => onPatch(p.id, { company: v })} /></div>
-            <div className="tbl-cell"><EditableCell value={p.email} onSave={(v) => onPatch(p.id, { email: v })} /></div>
-            <div className="tbl-cell"><EditableCell value={p.phone} onSave={(v) => onPatch(p.id, { phone: v })} /></div>
-            <div className="tbl-cell"><StageCell stage={p.stage} onChange={(v) => onPatch(p.id, { stage: v })} /></div>
-            <div className="tbl-cell"><TempCell temp={p.temp} onChange={(v) => onPatch(p.id, { temp: v })} /></div>
-            <div className="tbl-cell c-num"><EditableCell value={p.sent} align="center" onSave={(v) => onPatch(p.id, { sent: Number(v) || 0 })} /></div>
-            <div className="tbl-cell c-num"><EditableCell value={p.opens} align="center" onSave={(v) => onPatch(p.id, { opens: Number(v) || 0 })} /></div>
-            <div className="tbl-cell c-num"><EditableCell value={p.replies} align="center" onSave={(v) => onPatch(p.id, { replies: Number(v) || 0 })} /></div>
-            <div className="tbl-cell"><EditableCell value={p.nextStep} onSave={(v) => onPatch(p.id, { nextStep: v })} /></div>
-            <div className="tbl-cell"><span className="src-chip">{p.source ?? ""}</span></div>
+            ))}
           </div>
         ))}
         {contacts.length === 0 && (
@@ -338,6 +419,74 @@ function TableView({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Dropdown menu for toggling column visibility per board. */
+function ColumnsMenu({
+  boardId, value, onChange,
+}: {
+  boardId: string;
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const toggle = (id: string) => {
+    const col = TABLE_COLUMNS.find((c) => c.id === id);
+    if (col?.alwaysVisible) return;
+    const next = value.includes(id) ? value.filter((x) => x !== id) : [...value, id];
+    onChange(next);
+    saveColsConfig(boardId, next);
+  };
+  const reset = () => {
+    onChange(ALL_COL_IDS);
+    saveColsConfig(boardId, ALL_COL_IDS);
+  };
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="pill-btn" title="Show/hide columns" onClick={() => setOpen((o) => !o)}>
+        <IconSheet size={12} />Columns
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={() => setOpen(false)} />
+          <div className="board-menu" style={{ minWidth: 200, right: 0, left: "auto" }}>
+            <div className="bm-label">Table columns</div>
+            {TABLE_COLUMNS.filter((c) => c.id !== "_select").map((c) => {
+              const on = value.includes(c.id);
+              const locked = c.alwaysVisible;
+              return (
+                <button
+                  key={c.id}
+                  className="bm-item"
+                  onClick={() => toggle(c.id)}
+                  disabled={locked}
+                  style={locked ? { opacity: 0.5, cursor: "default" } : undefined}
+                >
+                  <span
+                    style={{
+                      width: 14, height: 14, borderRadius: 4,
+                      border: "1.5px solid var(--hairline-strong)",
+                      background: on ? "var(--accent)" : "transparent",
+                      display: "grid", placeItems: "center",
+                      color: "white",
+                    }}
+                  >
+                    {on && <IconCheck size={10} />}
+                  </span>
+                  <span style={{ flex: 1, textAlign: "left" }}>{c.label}</span>
+                  {locked && <span style={{ fontSize: 10, color: "var(--text-mute)" }}>locked</span>}
+                </button>
+              );
+            })}
+            <div className="bm-sep" />
+            <button className="bm-item" onClick={reset}>
+              <IconArrowR size={13} /><span>Reset to defaults</span>
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -774,26 +923,49 @@ export function CRMDrawer({
 
 export function CRMView({
   viewMode, setViewMode, onFlash,
-}: { viewMode: "kanban" | "table"; setViewMode: (v: "kanban" | "table") => void; onFlash: (msg: string) => void }) {
+  activeBoardId, onActiveBoardChange, onBoardsChange,
+}: {
+  viewMode: "kanban" | "table";
+  setViewMode: (v: "kanban" | "table") => void;
+  onFlash: (msg: string) => void;
+  /** Optional controlled active board — when provided, changes bubble up via onActiveBoardChange. */
+  activeBoardId?: string;
+  onActiveBoardChange?: (id: string) => void;
+  /** Fires whenever the boards list changes so the sidebar can stay in sync. */
+  onBoardsChange?: (boards: CrmBoard[]) => void;
+}) {
   const [boards, setBoards] = useState<CrmBoard[]>([]);
-  const [activeId, setActiveId] = useState<string>("");
+  const [internalActiveId, setInternalActiveId] = useState<string>("");
+  const activeId = activeBoardId ?? internalActiveId;
+  const setActiveId = (id: string) => {
+    if (onActiveBoardChange) onActiveBoardChange(id);
+    setInternalActiveId(id);
+  };
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [importOpen, setImportOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [openContact, setOpenContact] = useState<CrmContact | null>(null);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
+  const [visibleCols, setVisibleCols] = useState<string[]>(ALL_COL_IDS);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
     api.get<{ boards: CrmBoard[] }>("/api/crm/boards")
       .then((r) => {
         setBoards(r.boards);
-        if (r.boards[0]) setActiveId(r.boards[0].id);
+        onBoardsChange?.(r.boards);
+        if (!activeId && r.boards[0]) setActiveId(r.boards[0].id);
       })
       .catch((e) => onFlash(`Load boards failed: ${e.message}`))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFlash]);
+
+  // Whenever the active board changes, pull its saved column config.
+  useEffect(() => {
+    if (activeId) setVisibleCols(loadColsConfig(activeId));
+  }, [activeId]);
 
   // Load contacts when active board changes.
   useEffect(() => {
@@ -823,7 +995,7 @@ export function CRMView({
     const emoji = emojis[boards.length % emojis.length];
     try {
       const b = await api.post<CrmBoard>("/api/crm/boards", { name, emoji });
-      setBoards((bs) => [...bs, { ...b, contactCount: 0 }]);
+      setBoards((bs) => { const next = [...bs, { ...b, contactCount: 0 }]; onBoardsChange?.(next); return next; });
       setActiveId(b.id);
       setContacts([]);
       onFlash(`Created "${name}"`);
@@ -839,6 +1011,7 @@ export function CRMView({
       await api.del(`/api/crm/boards/${id}`);
       const next = boards.filter((b) => b.id !== id);
       setBoards(next);
+      onBoardsChange?.(next);
       setActiveId(next[0]!.id);
       onFlash("Board deleted");
     } catch (e) {
@@ -968,6 +1141,9 @@ export function CRMView({
           </div>
         </div>
         <div className="crm-tools">
+          {viewMode === "table" && (
+            <ColumnsMenu boardId={activeId} value={visibleCols} onChange={setVisibleCols} />
+          )}
           <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Enrich all contacts on this board via Apollo.io">
             <IconSparkle size={12} />{enriching ? "Enriching…" : "Enrich all"}
           </button>
@@ -987,7 +1163,12 @@ export function CRMView({
           onMoveStage={(id, stage) => patchContact(id, { stage })}
         />
       ) : (
-        <TableView contacts={contacts} onOpen={setOpenContact} onPatch={patchContact} />
+        <TableView
+          contacts={contacts}
+          onOpen={setOpenContact}
+          onPatch={patchContact}
+          columns={visibleCols}
+        />
       )}
 
       {importOpen && (

@@ -111,13 +111,13 @@ export function Sidebar({
             />
 
             <NavSection
-              label="Lists & segments"
+              label="CRM boards"
               addIcon={<IconList size={11} />}
               items={filteredLists}
               icon={<IconUsers size={13} />}
               activeNav={activeNav}
               onSelect={onSelect}
-              emptyMsg={q ? "No matches" : lists.length === 0 ? "No lists yet" : undefined}
+              emptyMsg={q ? "No matches" : lists.length === 0 ? "Create a board in the CRM tab" : undefined}
             />
 
             <div className="sidebar-spacer" />
