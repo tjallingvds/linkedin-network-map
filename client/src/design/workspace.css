@@ -38,6 +38,9 @@
   --accent-tint: oklch(0.28 0.04 160);
 }
 
+/* Global border-box so width:100% + padding never overflows the parent —
+   was the root cause of sidebar items spilling past the sidebar edge. */
+*, *::before, *::after { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {
   font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -1264,12 +1267,12 @@ button:focus-visible { outline-offset: 3px; }
 .nav-row:hover .nav-row-actions,
 .nav-row:focus-within .nav-row-actions { opacity: 1; transform: translateX(0); }
 .nav-row-action {
-  width: 22px; height: 22px; display: grid; place-items: center;
+  width: 20px; height: 20px; flex: 0 0 20px;
+  display: grid; place-items: center;
   border-radius: 5px; color: var(--text-mute);
-  transition: background 140ms ease, color 140ms ease, transform 120ms ease;
+  transition: background 140ms ease, color 140ms ease;
 }
-.nav-row-action:hover { background: var(--hairline); color: var(--text); transform: scale(1.1); }
-.nav-row-action:active { transform: scale(0.92); }
+.nav-row-action:hover { background: var(--hairline); color: var(--text); }
 .nav-row-action.danger:hover { background: oklch(0.96 0.05 25); color: var(--danger, oklch(0.55 0.2 25)); }
 .nav-row:hover .count { opacity: 0.35; }
 .nav-row .count { transition: opacity 160ms ease; }
@@ -1297,9 +1300,9 @@ button:focus-visible { outline-offset: 3px; }
   transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 180ms;
   opacity: 0;
 }
-.nav-item:hover { background: rgba(20,14,40,0.05); color: var(--text); padding-left: 14px; }
+.nav-item:hover { background: rgba(20,14,40,0.05); color: var(--text); }
 .nav-item:hover::before { transform: scaleY(1); opacity: 0.5; }
-.nav-item.active { color: var(--text); background: var(--accent-soft); padding-left: 14px; }
+.nav-item.active { color: var(--text); background: var(--accent-soft); }
 .nav-item.active::before { transform: scaleY(1); opacity: 1; }
 
 /* ---- New-chat button — subtle glow on hover. ---- */
