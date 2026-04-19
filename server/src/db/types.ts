@@ -100,6 +100,9 @@ export interface MessagesTable {
   chat_id: string;
   role: string;
   content: string;
+  /** Full CompletionResult JSON when the message represents a structured
+   *  response (prospects / drafts). Null for plain-text messages. */
+  result: unknown | null;
   created_at: Generated<Timestamp>;
 }
 

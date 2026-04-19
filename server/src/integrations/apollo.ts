@@ -69,7 +69,6 @@ export async function apolloPeopleSearch(params: {
   const apiKey = params.userKeys?.apollo ?? env.APOLLO_API_KEY;
   if (!apiKey) throw new Error("APOLLO_API_KEY not set");
   const byok = !!params.userKeys?.apollo;
-  const chargeUserId = byok ? undefined : params.userId;
 
   const r = await fetch(`${BASE}/mixed_people/search`, {
     method: "POST",
@@ -88,8 +87,8 @@ export async function apolloPeopleSearch(params: {
   });
   if (!r.ok) throw new Error(`apollo search ${r.status}: ${await r.text()}`);
   const data = (await r.json()) as ApolloSearchResponse;
-  if (chargeUserId) {
-    await recordUsage({ userId: chargeUserId, provider: "apollo", kind: "people_search", credits: 1 });
+  if (params.userId) {
+    await recordUsage({ userId: params.userId, provider: "apollo", kind: "people_search", credits: 1, metadata: { byok } });
   }
   return { people: data.people ?? [], total: data.pagination?.total_entries ?? 0 };
 }
@@ -112,7 +111,6 @@ export async function apolloMatchPerson(params: {
   const apiKey = params.userKeys?.apollo ?? env.APOLLO_API_KEY;
   if (!apiKey) throw new Error("APOLLO_API_KEY not set");
   const byok = !!params.userKeys?.apollo;
-  const chargeUserId = byok ? undefined : params.userId;
 
   const body: Record<string, unknown> = { reveal_personal_emails: false };
   if (params.firstName) body.first_name = params.firstName;
@@ -137,8 +135,8 @@ export async function apolloMatchPerson(params: {
     throw new Error(`apollo match ${r.status}: ${await r.text()}`);
   }
   const data = (await r.json()) as ApolloMatchResponse;
-  if (chargeUserId) {
-    await recordUsage({ userId: chargeUserId, provider: "apollo", kind: "match", credits: 1 });
+  if (params.userId) {
+    await recordUsage({ userId: params.userId, provider: "apollo", kind: "match", credits: 1, metadata: { byok } });
   }
   return data.person ?? null;
 }

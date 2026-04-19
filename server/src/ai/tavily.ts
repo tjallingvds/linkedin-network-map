@@ -19,7 +19,6 @@ export async function tavilySearch(
   const apiKey = opts.userKeys?.tavily ?? env.TAVILY_API_KEY;
   if (!apiKey) throw new Error("TAVILY_API_KEY not set");
   const byok = !!opts.userKeys?.tavily;
-  const chargeUserId = byok ? undefined : opts.userId;
 
   const r = await fetch("https://api.tavily.com/search", {
     method: "POST",
@@ -35,13 +34,13 @@ export async function tavilySearch(
   if (!r.ok) throw new Error(`tavily ${r.status}: ${await r.text()}`);
   const data = (await r.json()) as { results: TavilyResult[] };
 
-  if (chargeUserId) {
+  if (opts.userId) {
     await recordUsage({
-      userId: chargeUserId,
+      userId: opts.userId,
       provider: "tavily",
       kind: "search",
-      credits: opts.depth === "advanced" ? 2 : 1, // advanced charges 2 credits
-      metadata: { query: query.slice(0, 120) },
+      credits: opts.depth === "advanced" ? 2 : 1,
+      metadata: { query: query.slice(0, 120), byok },
     });
   }
 

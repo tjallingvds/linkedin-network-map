@@ -32,7 +32,6 @@ export async function aiJson<T = unknown>(
     env.DEEPSEEK_API_KEY;
   const apiKey = userKey ?? envKey;
   const byok = !!userKey;
-  const chargeUserId = byok ? undefined : opts.userId;
 
   let raw = "";
   let inputTokens = 0;
@@ -89,10 +88,10 @@ export async function aiJson<T = unknown>(
     outputTokens = data.usage.completion_tokens ?? 0;
   }
 
-  if (chargeUserId) {
+  if (opts.userId) {
     await recordUsage({
-      userId: chargeUserId, provider, kind: "json",
-      inputTokens, outputTokens, metadata: { model },
+      userId: opts.userId, provider, kind: "json",
+      inputTokens, outputTokens, metadata: { model, byok },
     });
   }
 

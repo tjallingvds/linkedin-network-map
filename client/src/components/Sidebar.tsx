@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   IconNewChat, IconSidebar, IconSearch, IconUsers, IconSparkle, IconClose,
 } from "../design/icons";
+import { useModal } from "./Modal";
 
 export interface NavEntry {
   id: string;
@@ -190,6 +191,7 @@ function NavRow({
   onRename?: (id: string, title: string) => void | Promise<void>;
   onDelete?: (id: string) => void | Promise<void>;
 }) {
+  const modal = useModal();
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(entry.label);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -249,9 +251,15 @@ function NavRow({
             <button
               className="nav-row-action danger"
               title="Delete"
-              onClick={(e) => {
+              onClick={async (e) => {
                 e.stopPropagation();
-                if (window.confirm(`Delete "${entry.label}"?`)) onDelete(entry.id);
+                const ok = await modal.confirm({
+                  title: `Delete "${entry.label}"?`,
+                  message: "This can't be undone.",
+                  confirmLabel: "Delete",
+                  destructive: true,
+                });
+                if (ok) onDelete(entry.id);
               }}
             >
               <IconClose size={11} />

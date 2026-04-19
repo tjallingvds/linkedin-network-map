@@ -64,8 +64,6 @@ export async function aiChat(
   const temperature = opts.temperature ?? 0.2;
   const model = MODELS[provider];
   const { key: apiKey, byok } = providerKey(provider, opts.userKeys);
-  // BYOK: skip usage recording — the user's own key hit their own quota.
-  const chargeUserId = byok ? undefined : opts.userId;
 
   let result: AiCallResult;
 
@@ -127,14 +125,16 @@ export async function aiChat(
     };
   }
 
-  if (chargeUserId) {
+  if (opts.userId) {
+    // Always track usage — even BYOK runs now appear in the usage card so
+    // users can see their own activity without needing the credit balance.
     await recordUsage({
-      userId: chargeUserId,
+      userId: opts.userId,
       provider,
       kind: "chat",
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      metadata: { model },
+      metadata: { model, byok },
     });
   }
 

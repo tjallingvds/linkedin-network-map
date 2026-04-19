@@ -16,6 +16,29 @@ export async function runFind(
 ): Promise<CompletionResult> {
   assertKeys(provider, userKeys);
 
+  // Pre-flight: decide whether the brief is specific enough to search. If it
+  // isn't, return a short clarifying question instead of burning Tavily +
+  // LLM tokens on a vague query. The user's follow-up becomes the refined
+  // brief (client re-sends as a fresh find call after reading the question).
+  try {
+    const clarify = await aiJson<{ ready: boolean; question?: string }>(
+      provider,
+      "You decide whether a prospecting brief is specific enough to run a web search. " +
+      "If the brief names a role/industry/geography (even roughly) and how many people, say ready. " +
+      "If it's vague (e.g. just 'find consultants'), ask ONE concise clarifying question — seniority, industry, location, headcount, or how many results.",
+      `Brief: ${userInput}\n\nReturn {"ready": true} or {"ready": false, "question": "<one line>"}. Never ask more than one thing.`,
+      { maxTokens: 200, userId, userKeys },
+    );
+    if (clarify.ready === false && clarify.question) {
+      return {
+        kind: "text",
+        content: clarify.question.trim(),
+      };
+    }
+  } catch {
+    // If the clarify LLM call fails, just proceed with the search.
+  }
+
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
     "You generate concise web search queries for prospecting.",

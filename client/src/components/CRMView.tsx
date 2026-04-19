@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CrmBoard, CrmContact, CrmImportRow, CrmStage, CrmTemp } from "@app/shared";
 import { api } from "../lib/api";
+import { useModal } from "./Modal";
 import { initials, avatarGrad } from "../design/mockProspects";
 import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
@@ -195,6 +196,7 @@ function KanbanCard({
   onDragEnd: () => void;
   dragging: boolean;
 }) {
+  const modal = useModal();
   return (
     <div
       className={`kanban-card${dragging ? " dragging" : ""}`}
@@ -210,9 +212,15 @@ function KanbanCard({
       <button
         className="kc-delete"
         title="Delete contact"
-        onClick={(e) => {
+        onClick={async (e) => {
           e.stopPropagation();
-          if (window.confirm(`Delete "${p.name}" from this board?`)) onDelete(p.id);
+          const ok = await modal.confirm({
+            title: `Delete "${p.name}"?`,
+            message: "Remove this contact from the board.",
+            confirmLabel: "Delete",
+            destructive: true,
+          });
+          if (ok) onDelete(p.id);
         }}
       >
         <IconClose size={11} />
@@ -499,6 +507,7 @@ function ColumnsMenu({
   customCols: CustomColumn[];
   onCustomColsChange: (next: CustomColumn[]) => void;
 }) {
+  const modal = useModal();
   const [open, setOpen] = useState(false);
   const toggle = (id: string) => {
     const isBuiltIn = TABLE_COLUMNS.find((c) => c.id === id);
@@ -512,19 +521,31 @@ function ColumnsMenu({
     onChange(all);
     saveColsConfig(boardId, all);
   };
-  const addCustom = () => {
-    const label = window.prompt("New column name:", "")?.trim();
+  const addCustom = async () => {
+    const label = await modal.prompt({
+      title: "Add column",
+      label: "Column name",
+      placeholder: "e.g. Lead score",
+      confirmLabel: "Add column",
+    });
     if (!label) return;
     const id = makeCustomColId(label);
-    const nextCols = [...customCols, { id, label, width: "1fr" }];
+    const nextCols = [...customCols, { id, label, width: "1fr", type: "text" as const }];
     onCustomColsChange(nextCols);
     saveCustomCols(boardId, nextCols);
     const nextVisible = [...value, id];
     onChange(nextVisible);
     saveColsConfig(boardId, nextVisible);
   };
-  const removeCustom = (id: string) => {
-    if (!window.confirm("Remove this column? Data stored in it will be kept on each contact but hidden.")) return;
+  const removeCustom = async (id: string) => {
+    const col = customCols.find((c) => c.id === id);
+    const ok = await modal.confirm({
+      title: `Remove "${col?.label ?? "column"}"?`,
+      message: "Data stored in this column is kept on each contact but hidden.",
+      confirmLabel: "Remove",
+      destructive: true,
+    });
+    if (!ok) return;
     const nextCols = customCols.filter((c) => c.id !== id);
     onCustomColsChange(nextCols);
     saveCustomCols(boardId, nextCols);
@@ -532,10 +553,15 @@ function ColumnsMenu({
     onChange(nextVisible);
     saveColsConfig(boardId, nextVisible);
   };
-  const renameCustom = (id: string) => {
+  const renameCustom = async (id: string) => {
     const existing = customCols.find((c) => c.id === id);
     if (!existing) return;
-    const label = window.prompt("Rename column:", existing.label)?.trim();
+    const label = await modal.prompt({
+      title: "Rename column",
+      label: "New name",
+      defaultValue: existing.label,
+      confirmLabel: "Rename",
+    });
     if (!label) return;
     const nextCols = customCols.map((c) => (c.id === id ? { ...c, label } : c));
     onCustomColsChange(nextCols);
@@ -977,6 +1003,7 @@ export function CRMDrawer({
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   onDelete?: (id: string) => void;
 }) {
+  const modal = useModal();
   const [note, setNote] = useState("");
   const stage = STAGES.find((s) => s.id === contact.stage) ?? STAGES[0]!;
 
@@ -1071,11 +1098,14 @@ export function CRMDrawer({
               className="pill-btn"
               style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
               title="Delete contact"
-              onClick={() => {
-                if (window.confirm(`Delete "${contact.name}" from this board?`)) {
-                  onDelete(contact.id);
-                  onClose();
-                }
+              onClick={async () => {
+                const ok = await modal.confirm({
+                  title: `Delete "${contact.name}"?`,
+                  message: "Remove this contact from the board.",
+                  confirmLabel: "Delete",
+                  destructive: true,
+                });
+                if (ok) { onDelete(contact.id); onClose(); }
               }}
             >
               <IconClose size={13} />Delete
@@ -1105,6 +1135,7 @@ export function CRMView({
   /** Fires whenever the boards list changes so the sidebar can stay in sync. */
   onBoardsChange?: (boards: CrmBoard[]) => void;
 }) {
+  const modal = useModal();
   const [boards, setBoards] = useState<CrmBoard[]>([]);
   const [internalActiveId, setInternalActiveId] = useState<string>("");
   const activeId = activeBoardId ?? internalActiveId;
@@ -1172,7 +1203,12 @@ export function CRMView({
   };
 
   const addBoard = async () => {
-    const name = window.prompt("New board name:", "Untitled pipeline");
+    const name = await modal.prompt({
+      title: "New CRM board",
+      label: "Board name",
+      defaultValue: "Untitled pipeline",
+      confirmLabel: "Create board",
+    });
     if (!name) return;
     const emojis = ["📣", "🎯", "🧲", "💼", "🌱", "🚀", "🔥", "📊", "✨", "🧭"];
     const emoji = emojis[boards.length % emojis.length];
@@ -1188,7 +1224,13 @@ export function CRMView({
   };
 
   const deleteBoard = async (id: string) => {
-    if (!window.confirm("Delete this board and all its contacts?")) return;
+    const ok = await modal.confirm({
+      title: "Delete this board?",
+      message: "All contacts on it will be removed. This can't be undone.",
+      confirmLabel: "Delete board",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.del(`/api/crm/boards/${id}`);
       const next = boards.filter((b) => b.id !== id);

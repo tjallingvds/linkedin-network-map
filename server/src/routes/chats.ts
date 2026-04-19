@@ -151,8 +151,8 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     });
   }
 
-  // Persist a short assistant stub for the chat timeline (full result is
-  // returned directly; the UI stores the structured payload in memory).
+  // Persist both a human-readable timeline stub AND the full structured
+  // result so prospect cards can be rebuilt on chat reload.
   const timelineText =
     result.kind === "text"
       ? result.content
@@ -162,7 +162,13 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
 
   await db
     .insertInto("messages")
-    .values({ chat_id: chat.id, role: "assistant", content: timelineText })
+    .values({
+      chat_id: chat.id,
+      role: "assistant",
+      content: timelineText,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      result: result as any,
+    })
     .execute();
 
   await db.updateTable("chats").set({ updated_at: new Date() as any }).where("id", "=", chat.id).execute();

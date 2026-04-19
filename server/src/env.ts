@@ -10,8 +10,6 @@ const schema = z.object({
   DATABASE_URL: z.string().min(1),
 
   AUTH_SECRET: z.string().min(32, "AUTH_SECRET must be at least 32 chars (openssl rand -hex 32)"),
-  GOOGLE_CLIENT_ID: z.string().optional(),
-  GOOGLE_CLIENT_SECRET: z.string().optional(),
 
   OPENAI_API_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),

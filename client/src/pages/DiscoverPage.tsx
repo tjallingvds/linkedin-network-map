@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CompletionResult, CrmBoard, OutreachDraft, Prospect } from "@app/shared";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
+import { useModal } from "../components/Modal";
 import { Sidebar } from "../components/Sidebar";
 import { useUsage } from "../lib/useUsage";
 import { ProspectGrid } from "../components/ProspectCard";
@@ -16,7 +17,7 @@ import { CRMView } from "../components/CRMView";
 import { SettingsDrawer } from "../components/SettingsDrawer";
 import { ConnectionsImportModal } from "../components/ConnectionsImportModal";
 import {
-  IconSearch, IconSparkle, IconArrowUp, IconAttach,
+  IconSearch, IconSparkle, IconArrowUp,
   IconCheck, IconSave, IconDownload, IconSheet, IconSend, IconUsers,
 } from "../design/icons";
 
@@ -158,6 +159,7 @@ const DRAFT_STEPS = ["Reviewing recipient signals…", "Writing personalised dra
 
 export function DiscoverPage() {
   const { user } = useAuth();
+  const modal = useModal();
   const { buckets: usage, refresh: refreshUsage } = useUsage();
 
   const [chatId, setChatId] = useState<string | null>(null);
@@ -299,7 +301,13 @@ export function DiscoverPage() {
   };
 
   const handleNewBoard = async () => {
-    const name = window.prompt("New board name:", "Untitled pipeline");
+    const name = await modal.prompt({
+      title: "New CRM board",
+      label: "Board name",
+      placeholder: "e.g. Outreach pipeline",
+      defaultValue: "Untitled pipeline",
+      confirmLabel: "Create board",
+    });
     if (!name) return;
     try {
       const b = await api.post<CrmBoard>("/api/crm/boards", { name, emoji: "📣" });
@@ -364,18 +372,41 @@ export function DiscoverPage() {
     setLastBrief("");
     setThread([]);
     setView("hero");
-    // Fetch the chat's messages so the user sees their prior conversation
-    // instead of an empty hero. Structured prospect cards aren't persisted
-    // server-side yet — messages render as plain text bubbles for now.
-    api.get<{ messages: { role: string; content: string }[] }>(`/api/chats/${id}/messages`)
+    // Fetch messages — assistant messages include the full structured result
+    // as JSON so prospect cards rebuild instead of becoming plain-text summaries.
+    api.get<{ messages: { role: string; content: string; result?: CompletionResult | null }[] }>(`/api/chats/${id}/messages`)
       .then((r) => {
-        const entries: ThreadEntry[] = (r.messages ?? []).map((m) =>
-          m.role === "user"
-            ? { role: "user" as const, text: m.content }
-            : { role: "ai" as const, text: m.content }
-        );
+        const entries: ThreadEntry[] = [];
+        let lastProspectBatch: Prospect[] = [];
+        let lastBriefFromHistory = "";
+        for (const m of r.messages ?? []) {
+          if (m.role === "user") {
+            entries.push({ role: "user" as const, text: m.content });
+            lastBriefFromHistory = m.content;
+          } else {
+            // Prefer the structured payload when present.
+            const res = m.result;
+            if (res && typeof res === "object" && "kind" in res) {
+              if (res.kind === "prospects") {
+                entries.push({ role: "ai" as const, summary: res.summary, prospects: res.prospects });
+                lastProspectBatch = res.prospects;
+                continue;
+              }
+              if (res.kind === "text") {
+                entries.push({ role: "ai" as const, text: res.content });
+                continue;
+              }
+              // "drafts" don't render in the thread in the legacy UI — fall through.
+            }
+            entries.push({ role: "ai" as const, text: m.content });
+          }
+        }
         setThread(entries);
         setView(entries.length > 0 ? "thread" : "hero");
+        // Restore follow-up context so "More results" + refinement work after
+        // reopening a past chat.
+        setLastProspects(lastProspectBatch);
+        setLastBrief(lastBriefFromHistory);
       })
       .catch(() => { /* leave thread empty */ });
   };
@@ -397,6 +428,7 @@ export function DiscoverPage() {
     setView("thread");
     setStreaming(true);
     const isFollowup = lastProspects.length > 0;
+    const isFirstMessage = thread.length === 0;
     const mode: "find" | "network" | "followup" = isFollowup ? "followup" : searchMode;
     setThread((t) => [
       ...t,
@@ -406,6 +438,13 @@ export function DiscoverPage() {
 
     try {
       const id = await ensureChatId(text);
+      // On the first message in a chat, rename the sidebar row to the brief
+      // so "New search" gets replaced with something meaningful.
+      if (isFirstMessage) {
+        const title = text.slice(0, 80);
+        setChatList((cs) => cs.map((c) => (c.id === id ? { ...c, title } : c)));
+        api.patch(`/api/chats/${id}`, { title }).catch(() => { /* non-fatal */ });
+      }
       const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${id}/completion`, {
         content: text,
         mode,
@@ -508,7 +547,12 @@ export function DiscoverPage() {
   const saveAsList = async () => {
     const chosen = allProspects.filter((p) => selected.has(p.id));
     if (chosen.length === 0) return;
-    const name = window.prompt("Name this list:", `Prospects · ${new Date().toLocaleDateString()}`);
+    const name = await modal.prompt({
+      title: "Save as CRM list",
+      label: "List name",
+      defaultValue: `Prospects · ${new Date().toLocaleDateString()}`,
+      confirmLabel: "Save",
+    });
     if (!name) return;
     try {
       const board = await api.post<CrmBoard>("/api/crm/boards", { name, emoji: "✨" });
@@ -886,13 +930,6 @@ export function DiscoverPage() {
                         <IconUsers size={12} />My network
                       </button>
                     </div>
-                    <button
-                      className="tool"
-                      onClick={() => setConnectionsImportOpen(true)}
-                      title="Import your LinkedIn connections / invites so My network search can find them"
-                    >
-                      <IconAttach size={13} />Import LinkedIn
-                    </button>
                   </div>
                   <div className="send-group">
                     <button
