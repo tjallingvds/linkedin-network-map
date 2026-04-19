@@ -90,6 +90,30 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .app.collapsed { --sidebar-w: 56px; }
 [data-theme="dark"] .app { box-shadow: none; }
 
+/* Sidebar section "+" add button. */
+.nav-add {
+  width: 18px; height: 18px; border-radius: 4px;
+  display: grid; place-items: center;
+  color: var(--text-mute);
+  transition: background 140ms ease, color 140ms ease, transform 120ms ease;
+}
+.nav-add:hover { background: var(--hairline); color: var(--text); transform: scale(1.15); }
+.nav-add:active { transform: scale(0.92); }
+
+/* Kanban card delete button — only visible on hover. */
+.kc-delete {
+  position: absolute; top: 6px; right: 6px;
+  width: 20px; height: 20px; border-radius: 5px;
+  display: grid; place-items: center;
+  color: var(--text-mute);
+  opacity: 0; transform: translateX(4px);
+  transition: opacity 160ms ease, transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              background 140ms ease, color 140ms ease;
+}
+.kanban-card { position: relative; }
+.kanban-card:hover .kc-delete { opacity: 1; transform: translateX(0); }
+.kc-delete:hover { background: oklch(0.96 0.05 25); color: var(--danger, oklch(0.55 0.2 25)); }
+
 /* Kanban drag & drop. */
 .kanban-card { cursor: grab; transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease; }
 .kanban-card:active { cursor: grabbing; }

@@ -33,16 +33,6 @@ services:
         sync: false
       - key: TAVILY_API_KEY
         sync: false
-      - key: STRIPE_SECRET_KEY
-        sync: false
-      - key: STRIPE_WEBHOOK_SECRET
-        sync: false
-      - key: STRIPE_PRICE_STARTER
-        sync: false
-      - key: STRIPE_PRICE_GROWTH
-        sync: false
-      - key: STRIPE_PRICE_SCALE
-        sync: false
       - key: APOLLO_API_KEY
         sync: false
 

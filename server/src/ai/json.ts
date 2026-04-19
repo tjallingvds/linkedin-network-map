@@ -4,8 +4,7 @@
  */
 import { env } from "../env.js";
 import type { AiProvider } from "@app/shared";
-import { recordUsage, refundCredits, reserveCredits } from "../usage/tracker.js";
-import { tokensToCredits } from "../billing/packs.js";
+import { recordUsage } from "../usage/tracker.js";
 import type { UserKeys } from "./user-keys.js";
 
 const MODELS: Record<AiProvider, string> = {
@@ -34,10 +33,6 @@ export async function aiJson<T = unknown>(
   const apiKey = userKey ?? envKey;
   const byok = !!userKey;
   const chargeUserId = byok ? undefined : opts.userId;
-
-  const estInput = Math.ceil((systemPrompt.length + userPrompt.length) / 4);
-  const reserved = tokensToCredits(estInput + maxTokens);
-  if (chargeUserId) await reserveCredits(chargeUserId, reserved);
 
   let raw = "";
   let inputTokens = 0;
@@ -95,8 +90,6 @@ export async function aiJson<T = unknown>(
   }
 
   if (chargeUserId) {
-    const actual = tokensToCredits(inputTokens + outputTokens);
-    if (reserved > actual) await refundCredits(chargeUserId, reserved - actual);
     await recordUsage({
       userId: chargeUserId, provider, kind: "json",
       inputTokens, outputTokens, metadata: { model },

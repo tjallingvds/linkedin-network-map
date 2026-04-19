@@ -26,8 +26,6 @@ On the app service → **Variables**, set:
 | `TAVILY_API_KEY` | for web search during enrichment |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | only if using Google OAuth |
 | `APOLLO_API_KEY` | only if using Apollo enrichment |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | only if using billing |
-| `STRIPE_PRICE_STARTER` / `STRIPE_PRICE_GROWTH` / `STRIPE_PRICE_SCALE` | one Stripe price ID per credit pack |
 
 Under **Settings → Networking**, click **Generate Domain** to get the public API URL — use that as `SERVER_URL`.
 
@@ -44,7 +42,6 @@ Migrations run automatically on each boot (`CMD` in `server/Dockerfile` runs `mi
 ### 4. Finish
 
 - Add `https://<server-url>/api/auth/google/callback` to the Google Console OAuth redirect URIs (if using Google sign-in).
-- Add `https://<server-url>/api/billing/webhook` as a Stripe webhook endpoint (if using billing) and copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
 - Verify `https://<server-url>/health` returns `{"ok":true}`.
 
 ## Render (Blueprint)
@@ -83,7 +80,6 @@ Deploy the client separately (Fly + nginx Dockerfile, or Vercel/Netlify static).
 - [ ] Sign up with email+password works
 - [ ] Session cookie is set (DevTools → Application → Cookies → `nm_session`)
 - [ ] Google OAuth callback URL is whitelisted in Google Console
-- [ ] Stripe webhook URL configured (`https://<server>/api/billing/webhook`) if using billing
 
 ## Environment variable reference
 

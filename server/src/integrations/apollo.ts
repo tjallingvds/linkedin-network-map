@@ -11,8 +11,7 @@
  * maps cleanly onto our Prospect shape.
  */
 import { env } from "../env.js";
-import { recordUsage, reserveCredits } from "../usage/tracker.js";
-import { CREDIT_COST } from "../billing/packs.js";
+import { recordUsage } from "../usage/tracker.js";
 import type { UserKeys } from "../ai/user-keys.js";
 
 const BASE = "https://api.apollo.io/api/v1";
@@ -71,8 +70,6 @@ export async function apolloPeopleSearch(params: {
   if (!apiKey) throw new Error("APOLLO_API_KEY not set");
   const byok = !!params.userKeys?.apollo;
   const chargeUserId = byok ? undefined : params.userId;
-
-  if (chargeUserId) await reserveCredits(chargeUserId, CREDIT_COST.apolloMatch);
 
   const r = await fetch(`${BASE}/mixed_people/search`, {
     method: "POST",
@@ -146,8 +143,3 @@ export async function apolloMatchPerson(params: {
   return data.person ?? null;
 }
 
-/** Reserve Apollo credits before a match call. Exposed so higher-level code
- *  can reserve a batch up front (e.g. "enrich 50 contacts"). */
-export function apolloCreditCost(): number {
-  return CREDIT_COST.apolloMatch;
-}

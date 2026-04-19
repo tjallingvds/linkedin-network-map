@@ -24,23 +24,24 @@ interface Props {
   activeNav: string;
   onSelect: (id: string) => void;
   onNewChat: () => void;
+  onNewBoard?: () => void;
   savedSearches: NavEntry[];
   lists: NavEntry[];
   collapsed: boolean;
   onToggleCollapse: () => void;
   usage: UsageBucket[];
-  balance: number;
   onOpenSettings: () => void;
-  onGetMoreUsage: () => void;
   /** Optional — when supplied, each saved-search row gets rename + delete hover actions. */
   onRenameSearch?: (id: string, title: string) => void | Promise<void>;
   onDeleteSearch?: (id: string) => void | Promise<void>;
+  onDeleteBoard?: (id: string) => void | Promise<void>;
+  onRenameBoard?: (id: string, title: string) => void | Promise<void>;
 }
 
 export function Sidebar({
-  activeNav, onSelect, onNewChat, savedSearches, lists,
-  collapsed, onToggleCollapse, usage, balance, onOpenSettings, onGetMoreUsage,
-  onRenameSearch, onDeleteSearch,
+  activeNav, onSelect, onNewChat, onNewBoard, savedSearches, lists,
+  collapsed, onToggleCollapse, usage, onOpenSettings,
+  onRenameSearch, onDeleteSearch, onRenameBoard, onDeleteBoard,
 }: Props) {
   const [q, setQ] = useState("");
 
@@ -83,12 +84,6 @@ export function Sidebar({
           </>
         ) : (
           <>
-            <button className="new-chat" onClick={onNewChat}>
-              <IconNewChat size={14} />
-              <span>New search</span>
-              <span className="kbd">⌘N</span>
-            </button>
-
             <div className="search-input">
               <IconSearch size={13} />
               <input
@@ -107,6 +102,8 @@ export function Sidebar({
               emptyMsg={q ? "No matches" : savedSearches.length === 0 ? "Your searches appear here" : undefined}
               onRename={onRenameSearch}
               onDelete={onDeleteSearch}
+              onAdd={onNewChat}
+              addTitle="New search"
             />
 
             <NavSection
@@ -115,17 +112,16 @@ export function Sidebar({
               icon={<IconUsers size={13} />}
               activeNav={activeNav}
               onSelect={onSelect}
-              emptyMsg={q ? "No matches" : lists.length === 0 ? "Create a board in the CRM tab" : undefined}
+              emptyMsg={q ? "No matches" : lists.length === 0 ? "Create your first board" : undefined}
+              onRename={onRenameBoard}
+              onDelete={onDeleteBoard}
+              onAdd={onNewBoard}
+              addTitle="New board"
             />
 
             <div className="sidebar-spacer" />
 
-            <UsageCard
-              usage={usage}
-              balance={balance}
-              onOpenSettings={onOpenSettings}
-              onGetMoreUsage={onGetMoreUsage}
-            />
+            <UsageCard usage={usage} onOpenSettings={onOpenSettings} />
           </>
         )}
       </div>
@@ -142,7 +138,7 @@ function filterByQuery(items: NavEntry[], q: string): NavEntry[] {
 }
 
 function NavSection({
-  label, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete,
+  label, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete, onAdd, addTitle,
 }: {
   label: string;
   items: NavEntry[];
@@ -152,11 +148,18 @@ function NavSection({
   emptyMsg?: string;
   onRename?: (id: string, title: string) => void | Promise<void>;
   onDelete?: (id: string) => void | Promise<void>;
+  onAdd?: () => void;
+  addTitle?: string;
 }) {
   return (
     <div className="nav-section">
       <div className="nav-label">
         <span>{label}</span>
+        {onAdd && (
+          <button className="nav-add" title={addTitle ?? `New ${label.toLowerCase()}`} onClick={onAdd}>
+            <PlusIcon />
+          </button>
+        )}
       </div>
       {items.length === 0 && emptyMsg ? (
         <div style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--text-mute)" }}>{emptyMsg}</div>
@@ -269,33 +272,28 @@ function PencilIcon() {
   );
 }
 
-function UsageCard({
-  usage, balance, onOpenSettings, onGetMoreUsage,
-}: {
-  usage: UsageBucket[];
-  balance: number;
-  onOpenSettings: () => void;
-  onGetMoreUsage: () => void;
-}) {
-  // Fallback buckets when the real fetch hasn't completed yet.
+function PlusIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M8 3v10M3 8h10" />
+    </svg>
+  );
+}
+
+function UsageCard({ usage, onOpenSettings }: { usage: UsageBucket[]; onOpenSettings: () => void }) {
   const view = usage.length > 0 ? usage : [
     { label: "Search", used: 0, max: 10_000, unit: "" },
     { label: "Enrich", used: 0, max: 5_000, unit: "" },
     { label: "LLM", used: 0, max: 5_000_000, unit: "" },
   ];
 
-  const low = balance < 20;
-
   return (
     <div className="upgrade">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-        <h4 style={{ margin: 0 }}>Credits</h4>
-        <span className="balance-chip" style={low ? { background: "oklch(0.58 0.17 25 / 0.12)", color: "var(--danger)", borderColor: "oklch(0.58 0.17 25 / 0.3)" } : undefined}>
-          <IconSparkle size={10} />
-          {balance.toLocaleString()}
-        </span>
+        <h4 style={{ margin: 0 }}>Usage</h4>
+        <IconSparkle size={12} style={{ color: "var(--text-mute)" }} />
       </div>
-      <p style={{ marginBottom: 10 }}>1 credit = 1 search or enrichment call.</p>
+      <p style={{ marginBottom: 10 }}>Month-to-date activity.</p>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {view.map((u) => {
           const pct = u.max > 0 ? Math.min(100, Math.round((u.used / u.max) * 100)) : 0;
@@ -319,12 +317,9 @@ function UsageCard({
           );
         })}
       </div>
-      <button className="upgrade-btn" style={{ marginTop: 12 }} onClick={onGetMoreUsage}>
-        Get more credits
-      </button>
       <button
         style={{
-          width: "100%", marginTop: 6, padding: "6px 12px",
+          width: "100%", marginTop: 12, padding: "6px 12px",
           borderRadius: 8, background: "transparent",
           color: "var(--text-dim)", fontSize: 11.5,
           border: "1px solid var(--hairline)",

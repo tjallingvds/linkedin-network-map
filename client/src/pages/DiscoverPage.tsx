@@ -14,9 +14,8 @@ import { DetailDrawer } from "../components/DetailDrawer";
 import { OutreachDrawer } from "../components/OutreachDrawer";
 import { CRMView } from "../components/CRMView";
 import { SettingsDrawer } from "../components/SettingsDrawer";
-import { PackPicker } from "../components/PackPicker";
 import {
-  IconBriefcase, IconSearch, IconSparkle, IconArrowUp, IconAttach,
+  IconSearch, IconSparkle, IconArrowUp, IconAttach,
   IconCheck, IconSave, IconDownload, IconSheet, IconSend, IconUsers,
 } from "../design/icons";
 
@@ -101,7 +100,7 @@ const DRAFT_STEPS = ["Reviewing recipient signals…", "Writing personalised dra
 
 export function DiscoverPage() {
   const { user } = useAuth();
-  const { buckets: usage, balance, refresh: refreshUsage } = useUsage();
+  const { buckets: usage, refresh: refreshUsage } = useUsage();
 
   const [chatId, setChatId] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<string>("");
@@ -122,7 +121,6 @@ export function DiscoverPage() {
   const [outreachFor, setOutreachFor] = useState<{ prospects: Prospect[]; drafts?: OutreachDraft[] } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [packPickerOpen, setPackPickerOpen] = useState(false);
   const [boardMenuOpen, setBoardMenuOpen] = useState(false);
   const [boards, setBoards] = useState<CrmBoard[]>([]);
 
@@ -228,6 +226,46 @@ export function DiscoverPage() {
     }
   };
 
+  const handleNewBoard = async () => {
+    const name = window.prompt("New board name:", "Untitled pipeline");
+    if (!name) return;
+    try {
+      const b = await api.post<CrmBoard>("/api/crm/boards", { name, emoji: "📣" });
+      const updated = [...boards, { ...b, contactCount: 0 }];
+      setBoards(updated);
+      setAppMode("crm");
+      setActiveBoardId(b.id);
+      setActiveNav(`board:${b.id}`);
+      flash(`Created "${name}"`);
+    } catch (e) {
+      flash(`Create board failed: ${(e as Error).message}`);
+    }
+  };
+
+  const renameBoard = async (navId: string, title: string) => {
+    const id = navId.startsWith("board:") ? navId.slice(6) : navId;
+    setBoards((bs) => bs.map((b) => (b.id === id ? { ...b, name: title } : b)));
+    try {
+      await api.patch(`/api/crm/boards/${id}`, { name: title });
+    } catch (err) {
+      flash(`Rename failed: ${(err as Error).message}`);
+    }
+  };
+
+  const deleteBoardFromNav = async (navId: string) => {
+    const id = navId.startsWith("board:") ? navId.slice(6) : navId;
+    const target = boards.find((b) => b.id === id);
+    if (boards.length <= 1) { flash("You need at least one board."); return; }
+    setBoards((bs) => bs.filter((b) => b.id !== id));
+    if (activeBoardId === id) setActiveBoardId("");
+    try {
+      await api.del(`/api/crm/boards/${id}`);
+      flash(`Deleted "${target?.name ?? "board"}"`);
+    } catch (err) {
+      flash(`Delete failed: ${(err as Error).message}`);
+    }
+  };
+
   // Let users click a saved search in the sidebar to re-enter that chat,
   // OR a CRM list to jump to that board.
   const handleSelectNav = (id: string) => {
@@ -240,9 +278,10 @@ export function DiscoverPage() {
       setActiveBoardId(boardId);
       return;
     }
-    if (id === chatId) return;
+    if (id === chatId && appMode === "discover") return;
     // Chat row: re-enter that chat.
     if (chatList.some((c) => c.id === id)) {
+      setAppMode("discover");
       setChatId(id);
       setThread([]);
       setView("hero");
@@ -466,14 +505,15 @@ export function DiscoverPage() {
           onNewChat={handleNewChat}
           onRenameSearch={renameChat}
           onDeleteSearch={deleteChat}
+          onNewBoard={handleNewBoard}
+          onRenameBoard={renameBoard}
+          onDeleteBoard={deleteBoardFromNav}
           savedSearches={savedSearches}
           lists={boardLists}
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed((c) => !c)}
           usage={usage}
-          balance={balance}
           onOpenSettings={() => setSettingsOpen(true)}
-          onGetMoreUsage={() => setPackPickerOpen(true)}
         />
 
         <div className="main">
@@ -484,14 +524,6 @@ export function DiscoverPage() {
               <span className="cur">{breadcrumb[1]}</span>
             </div>
             <div className="top-actions">
-              <div className="mode-switch">
-                <button className={appMode === "discover" ? "active" : ""} onClick={() => setAppMode("discover")}>
-                  <IconSearch size={12} />Discover
-                </button>
-                <button className={appMode === "crm" ? "active" : ""} onClick={() => setAppMode("crm")}>
-                  <IconBriefcase size={12} />CRM
-                </button>
-              </div>
               <button
                 className="avatar-mini"
                 title="Settings"
@@ -743,15 +775,6 @@ export function DiscoverPage() {
         onClose={() => setSettingsOpen(false)}
         onFlash={flash}
       />
-      {packPickerOpen && (
-        <PackPicker
-          onClose={() => setPackPickerOpen(false)}
-          onGranted={(credits) => {
-            flash(`+${credits.toLocaleString()} credits added`);
-            refreshUsage();
-          }}
-        />
-      )}
       {toast && (
         <div className="toast"><IconCheck size={14} />{toast}</div>
       )}

@@ -155,11 +155,12 @@ function rowsToContacts(rows: string[][]): CrmImportRow[] {
 // ========== Pieces ==========
 
 function KanbanCard({
-  p, idx, onOpen, onDragStart, onDragEnd, dragging,
+  p, idx, onOpen, onDelete, onDragStart, onDragEnd, dragging,
 }: {
   p: CrmContact;
   idx: number;
   onOpen: (c: CrmContact) => void;
+  onDelete: (id: string) => void;
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
   dragging: boolean;
@@ -176,6 +177,16 @@ function KanbanCard({
       }}
       onDragEnd={onDragEnd}
     >
+      <button
+        className="kc-delete"
+        title="Delete contact"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (window.confirm(`Delete "${p.name}" from this board?`)) onDelete(p.id);
+        }}
+      >
+        <IconClose size={11} />
+      </button>
       <div className="kc-top">
         <div className="kc-avatar" style={{ background: avatarGrad(idx) }}>{initials(p.name)}</div>
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -200,11 +211,12 @@ function KanbanCard({
 }
 
 function KanbanBoard({
-  contacts, onOpen, onMoveStage,
+  contacts, onOpen, onMoveStage, onDelete,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
   onMoveStage: (contactId: string, stage: CrmStage) => void;
+  onDelete: (id: string) => void;
 }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<CrmStage | null>(null);
@@ -250,6 +262,7 @@ function KanbanBoard({
                   p={p}
                   idx={contacts.indexOf(p)}
                   onOpen={onOpen}
+                  onDelete={onDelete}
                   onDragStart={(id) => setDraggingId(id)}
                   onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
                   dragging={draggingId === p.id}
@@ -830,8 +843,14 @@ function BoardSwitcher({
 // ========== CRMDrawer — per-contact side panel ==========
 
 export function CRMDrawer({
-  contact, idx, onClose, onPatch,
-}: { contact: CrmContact; idx: number; onClose: () => void; onPatch: (id: string, patch: Partial<CrmContact>) => void }) {
+  contact, idx, onClose, onPatch, onDelete,
+}: {
+  contact: CrmContact;
+  idx: number;
+  onClose: () => void;
+  onPatch: (id: string, patch: Partial<CrmContact>) => void;
+  onDelete?: (id: string) => void;
+}) {
   const [note, setNote] = useState("");
   const stage = STAGES.find((s) => s.id === contact.stage) ?? STAGES[0]!;
 
@@ -907,6 +926,21 @@ export function CRMDrawer({
           </div>
         </div>
         <div className="drawer-foot">
+          {onDelete && (
+            <button
+              className="pill-btn"
+              style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
+              title="Delete contact"
+              onClick={() => {
+                if (window.confirm(`Delete "${contact.name}" from this board?`)) {
+                  onDelete(contact.id);
+                  onClose();
+                }
+              }}
+            >
+              <IconClose size={13} />Delete
+            </button>
+          )}
           <button className="pill-btn" style={{ flex: 1 }} onClick={advanceStage}>
             Move to next stage <IconArrowR size={13} />
           </button>
@@ -1081,6 +1115,18 @@ export function CRMView({
     }
   };
 
+  const deleteContact = async (id: string) => {
+    const target = contacts.find((c) => c.id === id);
+    setContacts((cs) => cs.filter((c) => c.id !== id));
+    setBoards((bs) => bs.map((b) => b.id === activeId ? { ...b, contactCount: Math.max(0, (b.contactCount ?? 1) - 1) } : b));
+    try {
+      await api.del(`/api/crm/contacts/${id}`);
+      onFlash(`Deleted ${target?.name ?? "contact"}`);
+    } catch (e) {
+      onFlash(`Delete failed: ${(e as Error).message}`);
+    }
+  };
+
   const addContact = async (draft: { name: string; title?: string; company?: string; email?: string }) => {
     if (!activeId) return;
     try {
@@ -1161,6 +1207,7 @@ export function CRMView({
           contacts={contacts}
           onOpen={setOpenContact}
           onMoveStage={(id, stage) => patchContact(id, { stage })}
+          onDelete={deleteContact}
         />
       ) : (
         <TableView
@@ -1196,6 +1243,7 @@ export function CRMView({
             patchContact(id, patch);
             setOpenContact((c) => (c && c.id === id ? { ...c, ...patch } : c));
           }}
+          onDelete={deleteContact}
         />
       )}
     </div>

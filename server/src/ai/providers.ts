@@ -4,8 +4,7 @@
  */
 import { env } from "../env.js";
 import type { AiProvider } from "@app/shared";
-import { recordUsage, refundCredits, reserveCredits } from "../usage/tracker.js";
-import { tokensToCredits } from "../billing/packs.js";
+import { recordUsage } from "../usage/tracker.js";
 
 export interface AiMessage {
   role: "system" | "user" | "assistant";
@@ -65,13 +64,8 @@ export async function aiChat(
   const temperature = opts.temperature ?? 0.2;
   const model = MODELS[provider];
   const { key: apiKey, byok } = providerKey(provider, opts.userKeys);
-  // BYOK: skip credit accounting — the user pays their provider directly.
+  // BYOK: skip usage recording — the user's own key hit their own quota.
   const chargeUserId = byok ? undefined : opts.userId;
-
-  // Reserve a conservative upper bound: prompt length + max output tokens.
-  const estInput = Math.ceil(messages.reduce((a, m) => a + m.content.length, 0) / 4);
-  const reserved = tokensToCredits(estInput + maxTokens);
-  if (chargeUserId) await reserveCredits(chargeUserId, reserved);
 
   let result: AiCallResult;
 
@@ -134,8 +128,6 @@ export async function aiChat(
   }
 
   if (chargeUserId) {
-    const actual = tokensToCredits(result.inputTokens + result.outputTokens);
-    if (reserved > actual) await refundCredits(chargeUserId, reserved - actual);
     await recordUsage({
       userId: chargeUserId,
       provider,

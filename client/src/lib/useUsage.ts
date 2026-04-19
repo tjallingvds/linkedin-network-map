@@ -7,14 +7,12 @@ import { api } from "./api";
 import type { UsageBucket } from "../components/Sidebar";
 
 interface UsageResponse {
-  balance: number;
   buckets: UsageBucket[];
   costUsd?: number;
 }
 
 export function useUsage() {
   const [buckets, setBuckets] = useState<UsageBucket[]>([]);
-  const [balance, setBalance] = useState<number>(0);
   const [costUsd, setCostUsd] = useState(0);
   const [tick, setTick] = useState(0);
 
@@ -25,7 +23,6 @@ export function useUsage() {
         .then((r) => {
           if (stopped) return;
           setBuckets(r.buckets ?? []);
-          setBalance(r.balance ?? 0);
           setCostUsd(r.costUsd ?? 0);
         })
         .catch(() => { /* keep previous values */ });
@@ -37,5 +34,5 @@ export function useUsage() {
     return () => { stopped = true; window.clearInterval(iv); };
   }, [tick]);
 
-  return { buckets, balance, costUsd, refresh: () => setTick((t) => t + 1) };
+  return { buckets, costUsd, refresh: () => setTick((t) => t + 1) };
 }

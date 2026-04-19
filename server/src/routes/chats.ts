@@ -17,7 +17,6 @@ import { runEnrich } from "../ai/modes/enrich.js";
 import { runDraft } from "../ai/modes/draft.js";
 import { runFollowup } from "../ai/modes/followup.js";
 import { runDiscoverMore } from "../ai/modes/discover-more.js";
-import { InsufficientCreditsError } from "../usage/tracker.js";
 import { extractUserKeys } from "../ai/user-keys.js";
 
 const router = Router();
@@ -146,14 +145,6 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId, userKeys);
     }
   } catch (err) {
-    if (err instanceof InsufficientCreditsError) {
-      return res.status(402).json({
-        error: "insufficient_credits",
-        message: err.message,
-        requiredCredits: err.requiredCredits,
-        currentBalance: err.currentBalance,
-      });
-    }
     return res.status(500).json({
       error: "completion_failed",
       message: (err as Error).message,

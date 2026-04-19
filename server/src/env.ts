@@ -18,13 +18,6 @@ const schema = z.object({
   DEEPSEEK_API_KEY: z.string().optional(),
   TAVILY_API_KEY: z.string().optional(),
 
-  STRIPE_SECRET_KEY: z.string().optional(),
-  STRIPE_WEBHOOK_SECRET: z.string().optional(),
-  STRIPE_PRICE_ID: z.string().optional(), // legacy single-price, unused
-  STRIPE_PRICE_STARTER: z.string().optional(),
-  STRIPE_PRICE_GROWTH: z.string().optional(),
-  STRIPE_PRICE_SCALE: z.string().optional(),
-
   APOLLO_API_KEY: z.string().optional(),
 });
 

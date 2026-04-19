@@ -11,11 +11,9 @@ import { sessionMiddleware, requireAuth } from "./auth/session.js";
 import authRoutes from "./auth/routes.js";
 import peopleRoutes from "./routes/people.js";
 import chatsRoutes from "./routes/chats.js";
-import billingRoutes from "./routes/billing.js";
 import apolloRoutes from "./routes/apollo.js";
 import crmRoutes from "./routes/crm.js";
 import usageRoutes from "./routes/usage.js";
-import { stripeWebhookHandler } from "./routes/billing-webhook.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,9 +37,6 @@ app.use(cors({
 }));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
-// Stripe webhook needs raw body; mount BEFORE express.json().
-app.post("/api/billing/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
-
 app.use(express.json({ limit: "10mb" }));
 app.use(cookieParser());
 app.use(sessionMiddleware);
@@ -55,7 +50,6 @@ app.use("/api/auth", authRoutes);
 // Protected routes
 app.use("/api/people", requireAuth, peopleRoutes);
 app.use("/api/chats", requireAuth, chatsRoutes);
-app.use("/api/billing", requireAuth, billingRoutes);
 app.use("/api/apollo", requireAuth, apolloRoutes);
 app.use("/api/crm", requireAuth, crmRoutes);
 app.use("/api/usage", requireAuth, usageRoutes);

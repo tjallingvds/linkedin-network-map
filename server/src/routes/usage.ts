@@ -4,7 +4,7 @@
  */
 import { Router } from "express";
 import type { AuthedRequest } from "../auth/session.js";
-import { getCreditBalance, getMonthUsage } from "../usage/tracker.js";
+import { getMonthUsage } from "../usage/tracker.js";
 
 const router = Router();
 
@@ -15,10 +15,7 @@ const CAPS = {
 };
 
 router.get("/", async (req: AuthedRequest, res) => {
-  const [rows, balance] = await Promise.all([
-    getMonthUsage(req.user!.id),
-    getCreditBalance(req.user!.id),
-  ]);
+  const rows = await getMonthUsage(req.user!.id);
 
   const apolloCredits = rows.find((r) => r.provider === "apollo")?.totalCredits ?? 0;
   const tavilyCredits = rows.find((r) => r.provider === "tavily")?.totalCredits ?? 0;
@@ -28,7 +25,6 @@ router.get("/", async (req: AuthedRequest, res) => {
   const costMicros = rows.reduce((a, r) => a + r.totalCostMicros, 0);
 
   res.json({
-    balance,
     buckets: [
       { label: "Search", used: tavilyCredits, max: CAPS.tavily, unit: "" },
       { label: "Enrich", used: apolloCredits, max: CAPS.apollo, unit: "" },

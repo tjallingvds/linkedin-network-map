@@ -10,26 +10,6 @@ import type { CompletionResult, CrmBoard, CrmContact, Prospect } from "@app/shar
 const LS_BOARDS = "nontrivial.mock.boards";
 const LS_CONTACTS = "nontrivial.mock.contacts";
 const LS_USAGE = "nontrivial.mock.usage";
-const LS_BALANCE = "nontrivial.mock.balance";
-
-// First-time users get a tiny demo balance so actions work immediately.
-const INITIAL_BALANCE = 100;
-
-function readBalance(): number {
-  try {
-    const raw = localStorage.getItem(LS_BALANCE);
-    if (raw !== null) return Number(raw);
-  } catch { /* ignore */ }
-  localStorage.setItem(LS_BALANCE, String(INITIAL_BALANCE));
-  return INITIAL_BALANCE;
-}
-function writeBalance(n: number) {
-  localStorage.setItem(LS_BALANCE, String(n));
-}
-function deductBalance(cost: number) {
-  const cur = readBalance();
-  writeBalance(Math.max(0, cur - cost));
-}
 
 // ---------- Mock usage tracking ----------
 
@@ -217,16 +197,7 @@ export async function mockDispatch(method: string, path: string, body?: unknown)
     await new Promise((r) => setTimeout(r, 1200));
 
     // Draft: ~1 credit per recipient (1000 tokens).
-    // Find: 3 Tavily (3 credits) + ~3500 tokens (2 credits) = 5 credits.
     const n = req.recipients?.length ?? 1;
-    const cost = req.mode === "draft" ? n : 5;
-    if (readBalance() < cost) {
-      throw Object.assign(new Error(`Not enough credits (need ${cost}, have ${readBalance()}).`), {
-        status: 402,
-      });
-    }
-    deductBalance(cost);
-
     if (req.mode === "draft") {
       bumpUsage({ llmTokens: n * 1000, costUsd: n * 0.0008 });
       return { result: mockDrafts(req.recipients ?? []) };
@@ -358,12 +329,6 @@ export async function mockDispatch(method: string, path: string, body?: unknown)
       }
       return c;
     });
-    // 1 credit per Apollo match.
-    const cost = onBoard.length;
-    if (readBalance() < cost) {
-      throw Object.assign(new Error(`Not enough credits (need ${cost}, have ${readBalance()}).`), { status: 402 });
-    }
-    deductBalance(cost);
     writeContacts(updated);
     const enriched = updated.filter((c, i) => c.email && !contacts[i]?.email).length;
     bumpUsage({ apollo: onBoard.length, costUsd: onBoard.length * 0.01 });
@@ -386,48 +351,17 @@ export async function mockDispatch(method: string, path: string, body?: unknown)
     return undefined;
   }
 
-  // Usage endpoint — real numbers from the mock tracker. Caps match the
-  // server defaults in server/src/routes/usage.ts.
+  // Usage endpoint — matches server/src/routes/usage.ts shape.
   if (method === "GET" && path === "/api/usage") {
     const u = readUsage();
     return {
-      balance: readBalance(),
       buckets: [
-        { label: "Apollo match", used: u.apollo, max: 5_000, unit: "" },
-        { label: "Tavily search", used: u.tavily, max: 10_000, unit: "" },
-        { label: "LLM tokens", used: u.llmTokens, max: 5_000_000, unit: "" },
+        { label: "Search", used: u.tavily, max: 10_000, unit: "" },
+        { label: "Enrich", used: u.apollo, max: 5_000, unit: "" },
+        { label: "LLM", used: u.llmTokens, max: 5_000_000, unit: "" },
       ],
       costUsd: u.costUsd,
     };
-  }
-
-  // Billing: packs catalog + balance.
-  if (method === "GET" && path === "/api/billing/packs") {
-    return {
-      balance: readBalance(),
-      configured: false,
-      currency: "usd",
-      packs: [
-        { id: "starter", name: "Starter", credits: 1_000, amountCents: 1900, priceLabel: "$19" },
-        { id: "growth",  name: "Growth",  credits: 6_000, amountCents: 8900, priceLabel: "$89",  bonus: "20% extra credits", popular: true },
-        { id: "scale",   name: "Scale",   credits: 25_000, amountCents: 29900, priceLabel: "$299", bonus: "32% extra credits" },
-      ],
-    };
-  }
-
-  // Checkout — grant credits immediately in mock mode so the flow is demoable
-  // without Stripe keys. Real payments happen only when the backend is wired.
-  if (method === "POST" && path === "/api/billing/checkout") {
-    const req = body as { packId?: string };
-    const pack =
-      req.packId === "starter" ? { credits: 1_000 } :
-      req.packId === "growth" ? { credits: 6_000 } :
-      req.packId === "scale" ? { credits: 25_000 } : null;
-    if (pack) {
-      writeBalance(readBalance() + pack.credits);
-      return { url: null, granted: pack.credits, mock: true };
-    }
-    return { url: null, mock: true };
   }
 
   // Auth session — return the stored fake user if any.
