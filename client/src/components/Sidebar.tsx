@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  IconNewChat, IconSidebar, IconSearch, IconBookmark, IconList, IconUsers, IconSparkle, IconClose,
+  IconNewChat, IconSidebar, IconSearch, IconUsers, IconSparkle, IconClose,
 } from "../design/icons";
 
 export interface NavEntry {
@@ -100,7 +100,6 @@ export function Sidebar({
 
             <NavSection
               label="Past searches"
-              addIcon={<IconBookmark size={11} />}
               items={filteredSearches}
               icon={<IconSearch size={13} />}
               activeNav={activeNav}
@@ -112,7 +111,6 @@ export function Sidebar({
 
             <NavSection
               label="CRM boards"
-              addIcon={<IconList size={11} />}
               items={filteredLists}
               icon={<IconUsers size={13} />}
               activeNav={activeNav}
@@ -144,10 +142,9 @@ function filterByQuery(items: NavEntry[], q: string): NavEntry[] {
 }
 
 function NavSection({
-  label, addIcon, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete,
+  label, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete,
 }: {
   label: string;
-  addIcon: React.ReactNode;
   items: NavEntry[];
   icon: React.ReactNode;
   activeNav: string;
@@ -160,7 +157,6 @@ function NavSection({
     <div className="nav-section">
       <div className="nav-label">
         <span>{label}</span>
-        <button className="add" title={`New ${label.toLowerCase()}`}>{addIcon}</button>
       </div>
       {items.length === 0 && emptyMsg ? (
         <div style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--text-mute)" }}>{emptyMsg}</div>
