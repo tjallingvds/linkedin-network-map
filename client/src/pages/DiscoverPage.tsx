@@ -438,20 +438,8 @@ export function DiscoverPage() {
     else if (havePriorResult) mode = "followup";
     else mode = searchMode;
 
-    // When we're mid-clarify (no prospect result yet, but there are prior
-    // user messages in this chat), stitch ALL prior user messages together
-    // so the server sees full context. Otherwise answering "100" to
-    // "how many?" arrives at the server as just "100" with no targeting.
-    let contextualContent = text;
-    if (!havePriorResult && (mode === "find" || mode === "network")) {
-      const priorUserTexts: string[] = [];
-      for (const e of thread) {
-        if (e.role === "user" && "text" in e) priorUserTexts.push(e.text);
-      }
-      if (priorUserTexts.length > 0) {
-        contextualContent = [...priorUserTexts, text].join("\n");
-      }
-    }
+    // Server loads chat history from the DB and builds a full brief, so we
+    // just send the latest turn.
 
     setThread((t) => [
       ...t,
@@ -465,7 +453,7 @@ export function DiscoverPage() {
 
     try {
       const id = await ensureChatId(text);
-      const body: Record<string, unknown> = { content: contextualContent, mode };
+      const body: Record<string, unknown> = { content: text, mode };
       if (mode === "followup") body.previousProspects = lastProspects;
       if (mode === "discover_more") {
         body.previousProspects = lastProspects;

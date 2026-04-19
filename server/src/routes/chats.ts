@@ -120,11 +120,25 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     .values({ chat_id: chat.id, role: "user", content: parsed.data.content })
     .execute();
 
+  // Pull the full chat history (sans the user message we JUST wrote) so
+  // the mode handlers can reason about prior context. "100" answering a
+  // clarify question becomes "100" + "Find me 100 AI consultants …" —
+  // the LLM stops asking clarifying questions it already got answers to.
+  const history = await db
+    .selectFrom("messages")
+    .select(["role", "content", "created_at"])
+    .where("chat_id", "=", chat.id)
+    .orderBy("created_at", "asc")
+    .execute();
+  const priorMessages = history
+    .slice(0, -1) // drop the just-written user message; it's in `parsed.data.content`
+    .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+
   let result: CompletionResult;
   try {
     const userId = req.user!.id;
     if (parsed.data.mode === "find") {
-      result = await runFind(provider, parsed.data.content, userId, userKeys);
+      result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages);
     } else if (parsed.data.mode === "network") {
       result = await runNetwork(provider, parsed.data.content, userId, userKeys);
     } else if (parsed.data.mode === "enrich") {

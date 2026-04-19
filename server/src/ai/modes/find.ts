@@ -8,20 +8,32 @@ import { aiJson } from "../json.js";
 import { tavilySearch, type TavilyResult } from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
 
+export interface PriorMessage { role: "user" | "assistant"; content: string }
+
 export async function runFind(
   provider: AiProvider,
   userInput: string,
   userId: string,
   userKeys?: UserKeys,
+  priorMessages: PriorMessage[] = [],
 ): Promise<CompletionResult> {
   assertKeys(provider, userKeys);
 
+  // Build a single coherent brief from the chat history + this turn. That
+  // way answers like "100" to a clarifying question carry the targeting
+  // the user already gave earlier in the conversation.
+  const priorUserText = priorMessages
+    .filter((m) => m.role === "user")
+    .map((m) => m.content)
+    .join("\n");
+  const fullBrief = priorUserText ? `${priorUserText}\n${userInput}` : userInput;
+
   // Pre-flight: decide whether the brief is specific enough to search.
   // We only kick the clarify LLM in when we CAN'T already pull a number out
-  // of the brief — otherwise the user types "100" once, we extract 100,
-  // and proceed without pestering them again.
-  let requestedCount = extractCount(userInput);
-  const hasTargeting = looksTargeted(userInput);
+  // of the combined brief — otherwise the user types "100" once, we extract
+  // 100, and proceed without pestering them again.
+  let requestedCount = extractCount(fullBrief);
+  const hasTargeting = looksTargeted(fullBrief);
 
   if (!requestedCount || !hasTargeting) {
     try {
@@ -31,8 +43,8 @@ export async function runFind(
         "Require (a) some targeting (role/seniority/industry/company/region) AND (b) a specific COUNT of how many prospects the user wants. " +
         "If a count is missing, ask 'How many would you like? e.g. 10, 25, 50.' " +
         "If targeting is missing, ask ONE concise question about what's missing. " +
-        "Treat the ENTIRE brief as context — numbers on their own lines DO count.",
-        `Brief:\n${userInput}\n\nReturn {"ready": true, "count": <integer>} when both are clear. ` +
+        "The brief includes the ENTIRE conversation so a bare number like \"100\" on its own line IS a count answer to an earlier clarify.",
+        `Brief (oldest → newest):\n${fullBrief}\n\nReturn {"ready": true, "count": <integer>} when both are clear. ` +
         `Return {"ready": false, "question": "<one line>"} otherwise.`,
         { maxTokens: 200, userId, userKeys },
       );
@@ -61,7 +73,7 @@ export async function runFind(
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
     "You generate specific, distinct web search queries for prospecting on LinkedIn, company blogs, press releases, and public profiles. Each query should target a different angle so the UNION of results covers many distinct people.",
-    `Brief: ${userInput}\n\nReturn {"queries": [...]} — exactly ${queryCount} queries. Vary by role/seniority, specific companies in the target segment, sub-specialties, regions, and recent-hire or funding signals. Never duplicate angles. Each query self-sufficient, 6-12 words.`,
+    `Brief (full conversation):\n${fullBrief}\n\nReturn {"queries": [...]} — exactly ${queryCount} queries. Vary by role/seniority, specific companies in the target segment, sub-specialties, regions, and recent-hire or funding signals. Never duplicate angles. Each query self-sufficient, 6-12 words.`,
     { maxTokens: 600, userId, userKeys },
   );
   const queries = (queriesObj.queries ?? []).slice(0, queryCount);
@@ -97,7 +109,7 @@ export async function runFind(
     const out = await aiJson<{ prospects: Prospect[] }>(
       provider,
       "You extract structured prospect data from web search results. Never invent contact info. Each prospect must be a DIFFERENT person.",
-      `Brief: ${userInput}\n${excludeClause}\n\nSearch results (${snippets.length}):\n${JSON.stringify(
+      `Brief (full conversation):\n${fullBrief}\n${excludeClause}\n\nSearch results (${snippets.length}):\n${JSON.stringify(
         snippets.map((r) => ({ url: r.url, title: r.title, snippet: r.content.slice(0, 480) })),
       )}\n\nReturn {"prospects": [...]} — up to ${needed} distinct prospects.\nProspect shape: {id?, name, title, company, loc?, email?, emailConf?, phone?, linkedin?, headcount?, funding?, signals: [{kind: "hot"|"fresh"|"match", text, when}], past: [{co, role, when}], matchPct}.\nOnly include contact info you can see in the sources.`,
       { maxTokens: Math.min(8000, 400 + needed * 260), userId, userKeys },
