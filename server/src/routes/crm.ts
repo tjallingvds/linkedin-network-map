@@ -336,8 +336,16 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
 
   let enriched = 0;
   let skipped = 0;
+  let alreadyHad = 0;
 
   for (const r of rows) {
+    // Don't burn an Apollo call on anyone who already has an email —
+    // that's the field this enrichment is here to fill.
+    if (r.email && r.email.trim().length > 0) {
+      alreadyHad++;
+      continue;
+    }
+
     const params: Parameters<typeof apolloMatchPerson>[0] = {};
     const parts = r.name.split(/\s+/).filter(Boolean);
     if (parts.length >= 2) {
@@ -346,7 +354,6 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     } else {
       params.name = r.name;
     }
-    if (r.email) params.email = r.email;
     if (r.company) params.organizationName = r.company;
     if (r.linkedin) params.linkedinUrl = r.linkedin;
 
@@ -376,7 +383,7 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     }
   }
 
-  res.json({ enriched, skipped, total: rows.length });
+  res.json({ enriched, skipped, alreadyHad, total: rows.length });
 });
 
 router.delete("/contacts/:id", async (req: AuthedRequest, res) => {

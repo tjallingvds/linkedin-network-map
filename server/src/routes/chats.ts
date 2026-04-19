@@ -18,6 +18,7 @@ import { runDraft } from "../ai/modes/draft.js";
 import { runFollowup } from "../ai/modes/followup.js";
 import { runDiscoverMore } from "../ai/modes/discover-more.js";
 import { extractUserKeys } from "../ai/user-keys.js";
+import { aiJson } from "../ai/json.js";
 
 const router = Router();
 
@@ -171,9 +172,36 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     })
     .execute();
 
+  // If this is the very first user message in the chat, have the LLM
+  // synthesize a short title so the sidebar doesn't just say "New search".
+  // Cap at one title generation per chat.
+  let newTitle: string | undefined;
+  try {
+    const userCountRow = await db
+      .selectFrom("messages")
+      .select(({ fn }) => [fn.count<number>("id").as("c")])
+      .where("chat_id", "=", chat.id)
+      .where("role", "=", "user")
+      .executeTakeFirst();
+    const userMsgCount = Number(userCountRow?.c ?? 0);
+    if (userMsgCount === 1 && (chat.title === "New search" || !chat.title.trim())) {
+      const t = await aiJson<{ title: string }>(
+        provider,
+        "You write a very short chat title (3-6 words, Title Case, no quotes, no trailing period).",
+        `Brief:\n${parsed.data.content}\n\nReturn {"title": "<3-6 word title>"}.`,
+        { maxTokens: 60, userId: req.user!.id, userKeys },
+      );
+      const candidate = t.title?.trim().replace(/^["']|["']$/g, "").slice(0, 80);
+      if (candidate) {
+        newTitle = candidate;
+        await db.updateTable("chats").set({ title: candidate }).where("id", "=", chat.id).execute();
+      }
+    }
+  } catch { /* title generation is best-effort */ }
+
   await db.updateTable("chats").set({ updated_at: new Date() as any }).where("id", "=", chat.id).execute();
 
-  res.json({ result, provider });
+  res.json({ result, provider, title: newTitle });
 });
 
 export default router;

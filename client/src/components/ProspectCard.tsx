@@ -10,7 +10,6 @@ interface Props {
 }
 
 export function ProspectCard({ prospect: p, index, selected, onToggle, onOpen }: Props) {
-  const matchTier = p.matchPct >= 85 ? "high" : p.matchPct >= 70 ? "mid" : "low";
   const metaBits = [p.loc, p.headcount].filter(Boolean) as string[];
   return (
     <div
@@ -18,12 +17,6 @@ export function ProspectCard({ prospect: p, index, selected, onToggle, onOpen }:
       style={{ animationDelay: `${index * 40}ms` }}
       onClick={() => onOpen(p)}
     >
-      {typeof p.matchPct === "number" && p.matchPct > 0 && (
-        <div className={`pc-match-badge ${matchTier}`} title={`${p.matchPct}% match`}>
-          {p.matchPct}%
-        </div>
-      )}
-
       <div className="pc-head">
         <button
           className="pc-check"

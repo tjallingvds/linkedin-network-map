@@ -302,28 +302,15 @@ function UsageCard({ usage, onOpenSettings }: { usage: UsageBucket[]; onOpenSett
         <IconSparkle size={12} style={{ color: "var(--text-mute)" }} />
       </div>
       <p style={{ marginBottom: 10 }}>Month-to-date activity.</p>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {view.map((u) => {
-          const pct = u.max > 0 ? Math.min(100, Math.round((u.used / u.max) * 100)) : 0;
-          const over = pct > 90;
-          return (
-            <div key={u.label}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--text-dim)", marginBottom: 3 }}>
-                <span>{u.label}</span>
-                <span style={{ fontFamily: "Geist Mono, monospace", color: over ? "var(--danger)" : "var(--text-mute)" }}>
-                  {u.used.toLocaleString()} / {u.max.toLocaleString()}{u.unit}
-                </span>
-              </div>
-              <div style={{ width: "100%", height: 4, borderRadius: 2, background: "var(--hairline)", overflow: "hidden" }}>
-                <div style={{
-                  width: `${pct}%`, height: "100%",
-                  background: over ? "var(--danger)" : "var(--accent)",
-                  transition: "width 200ms",
-                }} />
-              </div>
-            </div>
-          );
-        })}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {view.map((u) => (
+          <div key={u.label} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-dim)" }}>
+            <span>{u.label}</span>
+            <span style={{ fontFamily: "Geist Mono, monospace", color: "var(--text)", fontWeight: 500 }}>
+              {u.used.toLocaleString()}{u.unit}
+            </span>
+          </div>
+        ))}
       </div>
       <button
         style={{

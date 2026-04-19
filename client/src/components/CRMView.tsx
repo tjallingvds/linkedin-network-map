@@ -856,6 +856,16 @@ function ImportModal({
   );
 }
 
+/** Label + editable value row used in CRMDrawer. */
+function DrawerField({ label, children, block }: { label: string; children: React.ReactNode; block?: boolean }) {
+  return (
+    <div className={`drawer-field${block ? " block" : ""}`}>
+      <div className="drawer-field-label">{label}</div>
+      <div className="drawer-field-value">{children}</div>
+    </div>
+  );
+}
+
 function AddContactModal({
   boardName, onClose, onAdd,
 }: {
@@ -995,16 +1005,17 @@ function BoardSwitcher({
 // ========== CRMDrawer — per-contact side panel ==========
 
 export function CRMDrawer({
-  contact, idx, onClose, onPatch, onDelete,
+  contact, idx, onClose, onPatch, onDelete, customCols = [],
 }: {
   contact: CrmContact;
   idx: number;
   onClose: () => void;
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   onDelete?: (id: string) => void;
+  /** User-defined board columns so the drawer shows the same fields as the table. */
+  customCols?: CustomColumn[];
 }) {
   const modal = useModal();
-  const [note, setNote] = useState("");
   const stage = STAGES.find((s) => s.id === contact.stage) ?? STAGES[0]!;
 
   const advanceStage = () => {
@@ -1046,50 +1057,69 @@ export function CRMDrawer({
             <div className="profile-avatar" style={{ background: avatarGrad(idx) }}>{initials(contact.name)}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="profile-name">{contact.name}</div>
-              <div className="profile-title">{contact.title ?? ""} · {contact.company ?? ""}</div>
+              <div className="profile-title">{[contact.title, contact.company].filter(Boolean).join(" · ") || "—"}</div>
               <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                <span className="tbl-stage" style={{ "--stage-color": stage.color, "--stage-tint": stage.tint } as React.CSSProperties}>
-                  {stage.label}
-                </span>
-                <span className={`kc-temp ${contact.temp} labeled`}>{contact.temp}</span>
+                <StageCell stage={contact.stage} onChange={(v) => onPatch(contact.id, { stage: v })} />
+                <TempCell temp={contact.temp} onChange={(v) => onPatch(contact.id, { temp: v })} />
               </div>
             </div>
           </div>
 
-          <div>
-            <div className="section-title">Outreach stats</div>
-            <div className="field-grid">
-              <div className="field"><div className="field-label">Sent</div><div className="field-value">{contact.sent}</div></div>
-              <div className="field"><div className="field-label">Opens</div><div className="field-value">{contact.opens}</div></div>
-              <div className="field"><div className="field-label">Replies</div><div className="field-value">{contact.replies}</div></div>
-              <div className="field"><div className="field-label">Last touch</div><div className="field-value">{contact.lastTouch ?? "—"}</div></div>
-            </div>
-          </div>
+          {/* Every field editable inline, including the user's custom columns. */}
+          <div className="drawer-fields">
+            <DrawerField label="Name">
+              <EditableCell value={contact.name} onSave={(v) => { if (v.trim()) onPatch(contact.id, { name: v.trim() }); }} />
+            </DrawerField>
+            <DrawerField label="Title">
+              <EditableCell value={contact.title} onSave={(v) => onPatch(contact.id, { title: v })} />
+            </DrawerField>
+            <DrawerField label="Company">
+              <EditableCell value={contact.company} onSave={(v) => onPatch(contact.id, { company: v })} />
+            </DrawerField>
+            <DrawerField label="Email">
+              <EditableCell value={contact.email} onSave={(v) => onPatch(contact.id, { email: v })} />
+            </DrawerField>
+            <DrawerField label="Phone">
+              <EditableCell value={contact.phone} onSave={(v) => onPatch(contact.id, { phone: v })} />
+            </DrawerField>
+            <DrawerField label="LinkedIn">
+              <EditableCell value={contact.linkedin} onSave={(v) => onPatch(contact.id, { linkedin: v })} />
+            </DrawerField>
+            <DrawerField label="Source">
+              <EditableCell value={contact.source} onSave={(v) => onPatch(contact.id, { source: v })} />
+            </DrawerField>
+            <DrawerField label="Next step">
+              <EditableCell value={contact.nextStep} onSave={(v) => onPatch(contact.id, { nextStep: v })} />
+            </DrawerField>
+            <DrawerField label="Last touch">
+              <EditableCell value={contact.lastTouch} onSave={(v) => onPatch(contact.id, { lastTouch: v })} />
+            </DrawerField>
 
-          <div>
-            <div className="section-title">Next step</div>
-            <div style={{ padding: "9px 14px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 10, fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-              <span style={{ color: "var(--text-dim)" }}>Action</span>
-              <span style={{ fontWeight: 500 }}>{contact.nextStep ?? "First touch"}</span>
-            </div>
-          </div>
+            {/* User-defined columns live alongside the built-ins so editing
+                one place keeps the board + drawer in sync. */}
+            {customCols.map((c) => {
+              const v = (contact.customFields ?? {})[c.id] ?? "";
+              return (
+                <DrawerField key={c.id} label={c.label}>
+                  <EditableCell
+                    value={v}
+                    onSave={(next) => onPatch(contact.id, { customFields: { [c.id]: next } })}
+                  />
+                </DrawerField>
+              );
+            })}
 
-          <div>
-            <div className="section-title">Add note</div>
-            <div style={{ display: "flex", gap: 8, padding: "10px 12px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 10 }}>
-              <input
-                style={{ flex: 1, fontSize: 12.5 }}
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
+            <DrawerField label="Notes" block>
+              <textarea
+                className="drawer-notes"
+                defaultValue={contact.notes ?? ""}
                 placeholder="Log a call, note, or what you learned…"
+                onBlur={(e) => {
+                  const v = e.target.value;
+                  if ((contact.notes ?? "") !== v) onPatch(contact.id, { notes: v });
+                }}
               />
-              <button
-                style={{ fontSize: 11.5, color: "var(--accent)", fontWeight: 500 }}
-                onClick={() => { if (note.trim()) onPatch(contact.id, { notes: note }); setNote(""); }}
-              >
-                Save
-              </button>
-            </div>
+            </DrawerField>
           </div>
         </div>
         <div className="drawer-foot">
@@ -1336,18 +1366,24 @@ export function CRMView({
 
   const enrichAll = async () => {
     if (!activeId || enriching) return;
-    if (contacts.length === 0) { onFlash("No contacts to enrich yet."); return; }
+    const needEmail = contacts.filter((c) => !c.email || !c.email.trim()).length;
+    if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
+    if (needEmail === 0) { onFlash("Every contact already has an email — nothing to enrich."); return; }
     setEnriching(true);
     try {
-      const r = await api.post<{ enriched: number; skipped: number; total: number }>(
+      const r = await api.post<{ enriched: number; skipped: number; alreadyHad?: number; total: number }>(
         `/api/crm/boards/${activeId}/enrich`,
       );
-      // Reload contacts to reflect changes.
       const fresh = await api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`);
       setContacts(fresh.contacts);
-      onFlash(`Enriched ${r.enriched} of ${r.total} (${r.skipped} had no Apollo match)`);
+      const had = r.alreadyHad ?? 0;
+      onFlash(
+        `Got email for ${r.enriched}` +
+        (r.skipped ? ` · ${r.skipped} no match` : "") +
+        (had ? ` · ${had} already had one` : ""),
+      );
     } catch (e) {
-      onFlash(`Enrich failed: ${(e as Error).message}`);
+      onFlash(`Get email failed: ${(e as Error).message}`);
     } finally {
       setEnriching(false);
     }
@@ -1386,8 +1422,8 @@ export function CRMView({
               onCustomColsChange={setCustomCols}
             />
           )}
-          <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Enrich all contacts on this board via Apollo.io">
-            <IconSparkle size={12} />{enriching ? "Enriching…" : "Enrich all"}
+          <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Fill email for contacts that don't have one yet (via Apollo.io)">
+            <IconMail size={12} />{enriching ? "Getting email…" : "Get email"}
           </button>
           <button className="pill-btn" onClick={() => setImportOpen(true)}>
             <IconUpload size={12} />Import CSV
@@ -1436,9 +1472,17 @@ export function CRMView({
           contact={openContact}
           idx={contacts.findIndex((c) => c.id === openContact.id)}
           onClose={() => setOpenContact(null)}
+          customCols={customCols}
           onPatch={(id, patch) => {
             patchContact(id, patch);
-            setOpenContact((c) => (c && c.id === id ? { ...c, ...patch } : c));
+            setOpenContact((c) => {
+              if (!c || c.id !== id) return c;
+              const merged: CrmContact = { ...c, ...patch };
+              if (patch.customFields) {
+                merged.customFields = { ...(c.customFields ?? {}), ...patch.customFields };
+              }
+              return merged;
+            });
           }}
           onDelete={deleteContact}
         />

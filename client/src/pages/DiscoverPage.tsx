@@ -427,30 +427,42 @@ export function DiscoverPage() {
     setDraft("");
     setView("thread");
     setStreaming(true);
-    const isFollowup = lastProspects.length > 0;
     const isFirstMessage = thread.length === 0;
-    const mode: "find" | "network" | "followup" = isFollowup ? "followup" : searchMode;
+    const havePriorResult = lastProspects.length > 0;
+    // If the user says things like "find more", "search the web", "on the
+    // internet" after a result, they mean a fresh search — not a filter.
+    const wantsNewSearch = /\b(more|another|additional|further|elsewhere|on the (web|internet)|search the web|search the internet)\b/i.test(text);
+
+    let mode: "find" | "network" | "followup" | "discover_more";
+    if (havePriorResult && wantsNewSearch && lastBrief) mode = "discover_more";
+    else if (havePriorResult) mode = "followup";
+    else mode = searchMode;
+
     setThread((t) => [
       ...t,
       { role: "user", text },
-      { role: "ai", thinking: true, steps: mode === "network" ? NETWORK_STEPS : mode === "followup" ? FOLLOWUP_STEPS : SEARCH_STEPS },
+      { role: "ai", thinking: true, steps:
+          mode === "network" ? NETWORK_STEPS :
+          mode === "followup" ? FOLLOWUP_STEPS :
+          SEARCH_STEPS,
+      },
     ]);
 
     try {
       const id = await ensureChatId(text);
-      // On the first message in a chat, rename the sidebar row to the brief
-      // so "New search" gets replaced with something meaningful.
-      if (isFirstMessage) {
-        const title = text.slice(0, 80);
-        setChatList((cs) => cs.map((c) => (c.id === id ? { ...c, title } : c)));
-        api.patch(`/api/chats/${id}`, { title }).catch(() => { /* non-fatal */ });
+      const body: Record<string, unknown> = { content: text, mode };
+      if (mode === "followup") body.previousProspects = lastProspects;
+      if (mode === "discover_more") {
+        body.previousProspects = lastProspects;
+        body.previousBrief = `${lastBrief}\n\nRefinement: ${text}`;
       }
-      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${id}/completion`, {
-        content: text,
-        mode,
-        previousProspects: isFollowup ? lastProspects : undefined,
-      });
-      applyResult(resp.result, text);
+      const resp = await api.post<{ result: CompletionResult; title?: string }>(`/api/chats/${id}/completion`, body);
+      // Use the server's AI-generated title on first send — much better than
+      // just truncating the raw brief.
+      if (isFirstMessage && resp.title) {
+        setChatList((cs) => cs.map((c) => (c.id === id ? { ...c, title: resp.title! } : c)));
+      }
+      applyResult(resp.result, mode === "discover_more" ? lastBrief : text);
     } catch (err) {
       appendError(err);
     } finally {

@@ -16,28 +16,36 @@ export async function runFind(
 ): Promise<CompletionResult> {
   assertKeys(provider, userKeys);
 
-  // Pre-flight: decide whether the brief is specific enough to search. If it
-  // isn't, return a short clarifying question instead of burning Tavily +
-  // LLM tokens on a vague query. The user's follow-up becomes the refined
-  // brief (client re-sends as a fresh find call after reading the question).
+  // Pre-flight: decide whether the brief is specific enough to search.
+  // We REQUIRE the user to tell us how many results they want — that's the
+  // most common cause of wasted searches + pointless re-runs.
+  let requestedCount = extractCount(userInput);
   try {
-    const clarify = await aiJson<{ ready: boolean; question?: string }>(
+    const clarify = await aiJson<{ ready: boolean; question?: string; count?: number }>(
       provider,
-      "You decide whether a prospecting brief is specific enough to run a web search. " +
-      "If the brief names a role/industry/geography (even roughly) and how many people, say ready. " +
-      "If it's vague (e.g. just 'find consultants'), ask ONE concise clarifying question — seniority, industry, location, headcount, or how many results.",
-      `Brief: ${userInput}\n\nReturn {"ready": true} or {"ready": false, "question": "<one line>"}. Never ask more than one thing.`,
+      "You screen a prospecting brief before running an expensive web search. " +
+      "Require (a) some targeting (role/seniority/industry/company/region) AND (b) a specific COUNT of how many prospects the user wants. " +
+      "If the brief is missing a count — even if the rest is clear — ask 'How many would you like? e.g. 10, 25, 50.' " +
+      "Otherwise if the targeting is too vague, ask ONE concise question about what's missing.",
+      `Brief: ${userInput}\n\nReturn {"ready": true, "count": <integer>} when the brief includes both a count and clear targeting. ` +
+      `Return {"ready": false, "question": "<one line>"} otherwise. Prioritize asking for the count first.`,
       { maxTokens: 200, userId, userKeys },
     );
     if (clarify.ready === false && clarify.question) {
-      return {
-        kind: "text",
-        content: clarify.question.trim(),
-      };
+      return { kind: "text", content: clarify.question.trim() };
+    }
+    if (typeof clarify.count === "number" && clarify.count > 0) {
+      requestedCount = Math.max(requestedCount, clarify.count);
     }
   } catch {
-    // If the clarify LLM call fails, just proceed with the search.
+    // If the clarify LLM call fails, just proceed with the search if the
+    // user already included a count; otherwise return a hard-coded prompt.
+    if (!requestedCount) {
+      return { kind: "text", content: "How many prospects would you like? e.g. 10, 25, 50." };
+    }
   }
+  // Cap to keep Tavily + LLM costs bounded. 50 is already a fat list.
+  const count = Math.min(Math.max(requestedCount || 8, 1), 50);
 
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
@@ -48,9 +56,12 @@ export async function runFind(
   // Cap at 3 Tavily calls per Find — keeps user quotas stretching further.
   const queries = (queriesObj.queries ?? []).slice(0, 3);
 
+  // Scale Tavily result width with the requested count so the LLM has
+  // enough raw material to synthesize N prospects.
+  const perQuery = Math.max(6, Math.ceil(count / queries.length) + 4);
   const searchResults = (
     await Promise.all(
-      queries.map((q) => tavilySearch(q, { maxResults: 7, userId, userKeys }).catch(() => [] as TavilyResult[])),
+      queries.map((q) => tavilySearch(q, { maxResults: perQuery, userId, userKeys }).catch(() => [] as TavilyResult[])),
     )
   ).flat();
 
@@ -58,9 +69,9 @@ export async function runFind(
     provider,
     "You extract structured prospect data from web search results. Be accurate: do not invent contact info.",
     `Brief: ${userInput}\n\nSearch results (${searchResults.length} total):\n${JSON.stringify(
-      searchResults.slice(0, 20).map((r) => ({ url: r.url, title: r.title, snippet: r.content.slice(0, 400) })),
-    )}\n\nReturn {"summary": "<1 short sentence summary>", "prospects": [<up to 8 Prospect objects>]}.\nEach Prospect: {id, name, title, company, loc?, email?, emailConf?, phone?, linkedin?, headcount?, funding?, signals: [{kind: "hot"|"fresh"|"match", text, when}], past: [{co, role, when}], matchPct}.\nOnly include contact info you're confident about from the sources.`,
-    { maxTokens: 4000, userId, userKeys },
+      searchResults.slice(0, Math.min(40, count * 3)).map((r) => ({ url: r.url, title: r.title, snippet: r.content.slice(0, 400) })),
+    )}\n\nReturn {"summary": "<1 short sentence summary>", "prospects": [<up to ${count} Prospect objects>]}.\nEach Prospect: {id, name, title, company, loc?, email?, emailConf?, phone?, linkedin?, headcount?, funding?, signals: [{kind: "hot"|"fresh"|"match", text, when}], past: [{co, role, when}], matchPct}.\nOnly include contact info you're confident about from the sources. Return as many DISTINCT prospects as you can find — up to ${count}.`,
+    { maxTokens: Math.min(8000, 500 + count * 250), userId, userKeys },
   );
 
   const prospects = (extracted.prospects ?? []).map((p, i) => ({
@@ -72,6 +83,17 @@ export async function runFind(
   }));
 
   return { kind: "prospects", summary: extracted.summary ?? "Results:", prospects };
+}
+
+/** Very simple count extractor — matches common phrasings ("find me 25 …",
+ *  "give me 10 prospects", "top 50"). Returns 0 if none found. */
+function extractCount(s: string): number {
+  const m = s.match(/\b(?:find|get|give|list|top|show|want|need)\s*(?:me\s+)?(?:up\s+to\s+)?(\d{1,3})\b/i)
+    ?? s.match(/\b(\d{1,3})\s*(?:prospects?|people|leads?|contacts?|results?)\b/i)
+    ?? s.match(/\b(\d{1,3})\b/);
+  if (!m) return 0;
+  const n = parseInt(m[1]!, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
 function assertKeys(provider: AiProvider, userKeys?: UserKeys) {
