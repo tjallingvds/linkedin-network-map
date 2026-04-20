@@ -137,14 +137,51 @@ function makeCustomColId(label: string): string {
   return `c_${slug}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-// --- Stage definitions — colors come from the design bundle. ---
-const STAGES: { id: CrmStage; label: string; color: string; tint: string }[] = [
-  { id: "new",       label: "New",       color: "oklch(0.72 0.04 280)", tint: "oklch(0.95 0.02 280 / 0.7)" },
-  { id: "contacted", label: "Contacted", color: "oklch(0.7 0.10 240)",  tint: "oklch(0.94 0.05 240 / 0.7)" },
-  { id: "replied",   label: "Replied",   color: "oklch(0.7 0.14 65)",   tint: "oklch(0.95 0.06 65 / 0.7)"  },
-  { id: "meeting",   label: "Meeting",   color: "oklch(0.65 0.16 165)", tint: "oklch(0.94 0.07 165 / 0.7)" },
-  { id: "closed",    label: "Closed",    color: "oklch(0.6 0.14 155)",  tint: "oklch(0.93 0.07 155 / 0.7)" },
+// --- Stage definitions ---
+// Stages are now user-editable per board — the defaults below seed new
+// boards, but the ColumnsMenu ▸ Stages editor lets users add, rename,
+// recolor, and remove them. The config lives in localStorage keyed by
+// board id; the server accepts any stage string.
+export interface StageDef { id: string; label: string; color: string; tint: string; }
+const STAGE_PALETTE: { color: string; tint: string }[] = [
+  { color: "oklch(0.72 0.04 280)", tint: "oklch(0.95 0.02 280 / 0.7)" },
+  { color: "oklch(0.7 0.10 240)",  tint: "oklch(0.94 0.05 240 / 0.7)" },
+  { color: "oklch(0.7 0.14 65)",   tint: "oklch(0.95 0.06 65 / 0.7)"  },
+  { color: "oklch(0.65 0.16 165)", tint: "oklch(0.94 0.07 165 / 0.7)" },
+  { color: "oklch(0.6 0.14 155)",  tint: "oklch(0.93 0.07 155 / 0.7)" },
+  { color: "oklch(0.62 0.16 25)",  tint: "oklch(0.95 0.06 25 / 0.7)"  },
+  { color: "oklch(0.62 0.14 300)", tint: "oklch(0.95 0.06 300 / 0.7)" },
+  { color: "oklch(0.65 0.14 110)", tint: "oklch(0.95 0.06 110 / 0.7)" },
 ];
+const DEFAULT_STAGES: StageDef[] = [
+  { id: "new",       label: "New",       ...STAGE_PALETTE[0]! },
+  { id: "contacted", label: "Contacted", ...STAGE_PALETTE[1]! },
+  { id: "replied",   label: "Replied",   ...STAGE_PALETTE[2]! },
+  { id: "meeting",   label: "Meeting",   ...STAGE_PALETTE[3]! },
+  { id: "closed",    label: "Closed",    ...STAGE_PALETTE[4]! },
+];
+// Back-compat alias — older code paths referenced STAGES.
+const STAGES = DEFAULT_STAGES;
+
+function stagesKey(boardId: string) { return `crm.stages.v1.${boardId}`; }
+function loadStages(boardId: string): StageDef[] {
+  if (!boardId) return DEFAULT_STAGES;
+  try {
+    const raw = localStorage.getItem(stagesKey(boardId));
+    if (!raw) return DEFAULT_STAGES;
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr) || arr.length === 0) return DEFAULT_STAGES;
+    return (arr as StageDef[]).filter((s) => s && typeof s.id === "string" && typeof s.label === "string");
+  } catch { return DEFAULT_STAGES; }
+}
+function saveStages(boardId: string, stages: StageDef[]) {
+  if (!boardId) return;
+  try { localStorage.setItem(stagesKey(boardId), JSON.stringify(stages)); } catch { /* noop */ }
+}
+function makeStageId(label: string): string {
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 32) || "stage";
+  return `${slug}_${Math.random().toString(36).slice(2, 6)}`;
+}
 
 // ========== CSV parsing ==========
 
@@ -363,7 +400,7 @@ function KanbanFieldsMenu({
 }
 
 function KanbanBoard({
-  contacts, onOpen, onMoveStage, onDelete, fields, customCols,
+  contacts, onOpen, onMoveStage, onDelete, fields, customCols, stages,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
@@ -371,13 +408,19 @@ function KanbanBoard({
   onDelete: (id: string) => void;
   fields: string[];
   customCols: CustomColumn[];
+  stages: StageDef[];
 }) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [overStage, setOverStage] = useState<CrmStage | null>(null);
+  const [overStage, setOverStage] = useState<string | null>(null);
+  const list = stages.length > 0 ? stages : DEFAULT_STAGES;
+  // Collect contacts whose stage id isn't in the current stage config so we
+  // can still render them in an "Other" column rather than losing track.
+  const validIds = new Set(list.map((s) => s.id));
+  const orphan = contacts.filter((c) => !validIds.has(c.stage));
 
   return (
     <div className="kanban">
-      {STAGES.map((stage) => {
+      {list.map((stage) => {
         const items = contacts.filter((p) => p.stage === stage.id);
         const isOver = overStage === stage.id && draggingId != null;
         return (
@@ -399,7 +442,7 @@ function KanbanBoard({
               setDraggingId(null);
               if (id) {
                 const src = contacts.find((c) => c.id === id);
-                if (src && src.stage !== stage.id) onMoveStage(id, stage.id);
+                if (src && src.stage !== stage.id) onMoveStage(id, stage.id as CrmStage);
               }
             }}
           >
@@ -433,6 +476,34 @@ function KanbanBoard({
           </div>
         );
       })}
+      {orphan.length > 0 && (
+        <div
+          className="kanban-col"
+          style={{ "--stage-tint": "oklch(0.96 0 0 / 0.7)", "--stage-color": "oklch(0.7 0 0)" } as React.CSSProperties}
+        >
+          <div className="kanban-head">
+            <span className="kanban-bar" />
+            <span className="kanban-title">Other</span>
+            <span className="kanban-count">{orphan.length}</span>
+          </div>
+          <div className="kanban-list">
+            {orphan.map((p) => (
+              <KanbanCard
+                key={p.id}
+                p={p}
+                idx={contacts.indexOf(p)}
+                onOpen={onOpen}
+                onDelete={onDelete}
+                onDragStart={(id) => setDraggingId(id)}
+                onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
+                dragging={draggingId === p.id}
+                fields={fields}
+                customCols={customCols}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -474,9 +545,18 @@ function EditableCell({
   );
 }
 
-function StageCell({ stage, onChange }: { stage: CrmStage; onChange: (s: CrmStage) => void }) {
+function StageCell({
+  stage, stages = DEFAULT_STAGES, onChange,
+}: {
+  stage: CrmStage;
+  stages?: StageDef[];
+  onChange: (s: CrmStage) => void;
+}) {
   const [open, setOpen] = useState(false);
-  const s = STAGES.find((x) => x.id === stage) ?? STAGES[0]!;
+  const list = stages.length > 0 ? stages : DEFAULT_STAGES;
+  // Fall back gracefully if the contact's stored stage doesn't exist in the
+  // current stages config (e.g. after deleting a stage).
+  const s = list.find((x) => x.id === stage) ?? { id: stage, label: stage || "—", color: "oklch(0.7 0 0)", tint: "oklch(0.95 0 0 / 0.7)" };
   return (
     <div className="stage-cell" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}>
       <span className="tbl-stage" style={{ "--stage-color": s.color, "--stage-tint": s.tint } as React.CSSProperties}>
@@ -484,8 +564,8 @@ function StageCell({ stage, onChange }: { stage: CrmStage; onChange: (s: CrmStag
       </span>
       {open && (
         <div className="stage-menu" onMouseLeave={() => setOpen(false)}>
-          {STAGES.map((st) => (
-            <button key={st.id} onClick={(e) => { e.stopPropagation(); onChange(st.id); setOpen(false); }}>
+          {list.map((st) => (
+            <button key={st.id} onClick={(e) => { e.stopPropagation(); onChange(st.id as CrmStage); setOpen(false); }}>
               <span className="stage-dot" style={{ background: st.color }} />
               {st.label}
             </button>
@@ -515,7 +595,7 @@ function TempCell({ temp, onChange }: { temp: CrmTemp; onChange: (t: CrmTemp) =>
 }
 
 function TableView({
-  contacts, onOpen, onPatch, columns, customCols,
+  contacts, onOpen, onPatch, columns, customCols, stages,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
@@ -523,6 +603,7 @@ function TableView({
   /** Ordered list of visible column ids. */
   columns: string[];
   customCols: CustomColumn[];
+  stages: StageDef[];
 }) {
   // Build the full registry (builtins + custom) on the fly so custom columns
   // get TableColumnDef shape without special-casing callsites.
@@ -570,7 +651,7 @@ function TableView({
       case "company": return <EditableCell value={p.company} onSave={(v) => onPatch(p.id, { company: v })} />;
       case "email":   return <EditableCell value={p.email}   onSave={(v) => onPatch(p.id, { email: v })} />;
       case "phone":   return <EditableCell value={p.phone}   onSave={(v) => onPatch(p.id, { phone: v })} />;
-      case "stage":   return <StageCell stage={p.stage} onChange={(v) => onPatch(p.id, { stage: v })} />;
+      case "stage":   return <StageCell stage={p.stage} stages={stages} onChange={(v) => onPatch(p.id, { stage: v })} />;
       case "temp":    return <TempCell  temp={p.temp}   onChange={(v) => onPatch(p.id, { temp: v })} />;
       case "sent":    return <EditableCell value={p.sent}    align="center" onSave={(v) => onPatch(p.id, { sent: Number(v) || 0 })} />;
       case "opens":   return <EditableCell value={p.opens}   align="center" onSave={(v) => onPatch(p.id, { opens: Number(v) || 0 })} />;
@@ -869,6 +950,126 @@ function BoardShareMenu({
   );
 }
 
+/** Per-board stage editor. Add, rename, recolor, reorder (delete moves the
+ *  contacts on that stage to the next remaining stage). Persisted to
+ *  localStorage. Server accepts any stage string. */
+function StagesMenu({
+  boardId, value, onChange, onReassign,
+}: {
+  boardId: string;
+  value: StageDef[];
+  onChange: (next: StageDef[]) => void;
+  /** Called when a stage is deleted so callers can move the contacts on it. */
+  onReassign: (fromId: string, toId: string) => void;
+}) {
+  const modal = useModal();
+  const [open, setOpen] = useState(false);
+  const persist = (next: StageDef[]) => { onChange(next); saveStages(boardId, next); };
+
+  const addStage = async () => {
+    const label = await modal.prompt({
+      title: "New stage", label: "Stage name",
+      placeholder: "e.g. Qualified", confirmLabel: "Add stage",
+    });
+    if (!label) return;
+    const palette = STAGE_PALETTE[value.length % STAGE_PALETTE.length]!;
+    persist([...value, { id: makeStageId(label), label, ...palette }]);
+  };
+  const renameStage = async (id: string) => {
+    const existing = value.find((s) => s.id === id);
+    if (!existing) return;
+    const label = await modal.prompt({
+      title: "Rename stage", label: "New name",
+      defaultValue: existing.label, confirmLabel: "Rename",
+    });
+    if (!label) return;
+    persist(value.map((s) => (s.id === id ? { ...s, label } : s)));
+  };
+  const recolorStage = (id: string, paletteIdx: number) => {
+    const c = STAGE_PALETTE[paletteIdx]!;
+    persist(value.map((s) => (s.id === id ? { ...s, color: c.color, tint: c.tint } : s)));
+  };
+  const removeStage = async (id: string) => {
+    if (value.length <= 1) return;
+    const target = value.find((s) => s.id === id);
+    if (!target) return;
+    const fallback = value.find((s) => s.id !== id)!;
+    const ok = await modal.confirm({
+      title: `Delete "${target.label}"?`,
+      message: `Any contacts in this stage will move to "${fallback.label}".`,
+      confirmLabel: "Delete stage",
+      destructive: true,
+    });
+    if (!ok) return;
+    persist(value.filter((s) => s.id !== id));
+    onReassign(id, fallback.id);
+  };
+  const move = (idx: number, dir: -1 | 1) => {
+    const j = idx + dir;
+    if (j < 0 || j >= value.length) return;
+    const next = value.slice();
+    [next[idx], next[j]] = [next[j]!, next[idx]!];
+    persist(next);
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="pill-btn" title="Edit pipeline stages" onClick={() => setOpen((o) => !o)}>
+        <IconList size={12} />Stages
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={() => setOpen(false)} />
+          <div className="board-menu" style={{ minWidth: 300, right: 0, left: "auto", maxHeight: "70vh", overflowY: "auto" }}>
+            <div className="bm-label">Pipeline stages</div>
+            {value.map((s, i) => (
+              <div key={s.id} className="bm-item" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
+                <span style={{ flex: 1, textAlign: "left", color: "var(--text)", fontWeight: 500 }}>{s.label}</span>
+                <button
+                  title="Move up"
+                  disabled={i === 0}
+                  onClick={(e) => { e.stopPropagation(); move(i, -1); }}
+                  style={{ fontSize: 10.5, color: i === 0 ? "var(--text-mute)" : "var(--text-dim)", padding: "2px 4px" }}
+                >↑</button>
+                <button
+                  title="Move down"
+                  disabled={i === value.length - 1}
+                  onClick={(e) => { e.stopPropagation(); move(i, +1); }}
+                  style={{ fontSize: 10.5, color: i === value.length - 1 ? "var(--text-mute)" : "var(--text-dim)", padding: "2px 4px" }}
+                >↓</button>
+                <button
+                  title="Rename"
+                  onClick={(e) => { e.stopPropagation(); renameStage(s.id); }}
+                  style={{ fontSize: 10.5, color: "var(--text-mute)", padding: "2px 6px" }}
+                >rename</button>
+                <button
+                  title="Cycle color"
+                  onClick={(e) => { e.stopPropagation(); recolorStage(s.id, (i + 1) % STAGE_PALETTE.length); }}
+                  style={{ fontSize: 10.5, color: "var(--text-mute)", padding: "2px 6px" }}
+                >color</button>
+                <button
+                  title={value.length <= 1 ? "Keep at least one stage" : "Delete"}
+                  disabled={value.length <= 1}
+                  onClick={(e) => { e.stopPropagation(); removeStage(s.id); }}
+                  style={{ fontSize: 10.5, color: value.length <= 1 ? "var(--text-mute)" : "var(--danger, oklch(0.55 0.2 25))", padding: "2px 6px" }}
+                >delete</button>
+              </div>
+            ))}
+            <div className="bm-sep" />
+            <button className="bm-item" onClick={addStage}>
+              <IconNewChat size={13} /><span>Add stage…</span>
+            </button>
+            <button className="bm-item" onClick={() => persist(DEFAULT_STAGES)}>
+              <IconArrowR size={13} /><span>Reset to defaults</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ColCheckbox({ on }: { on: boolean }) {
   return (
     <span
@@ -1099,12 +1300,13 @@ function AddContactModal({
 }: {
   boardName: string;
   onClose: () => void;
-  onAdd: (d: { name: string; title?: string; company?: string; email?: string }) => Promise<void>;
+  onAdd: (d: { name: string; title?: string; company?: string; email?: string; linkedin?: string }) => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
+  const [linkedin, setLinkedin] = useState("");
   const [saving, setSaving] = useState(false);
   const firstRef = useRef<HTMLInputElement>(null);
   useEffect(() => { firstRef.current?.focus(); }, []);
@@ -1119,6 +1321,7 @@ function AddContactModal({
         title: title.trim() || undefined,
         company: company.trim() || undefined,
         email: email.trim() || undefined,
+        linkedin: normalizeLinkedInInput(linkedin),
       });
     } finally { setSaving(false); }
   };
@@ -1157,6 +1360,11 @@ function AddContactModal({
               onKeyDown={(e) => { if (e.key === "Enter" && canSave) submit(); }}
               placeholder="maya@lumen.ai" style={{ padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 12.5, color: "var(--text)" }}/>
           </Field>
+          <Field label="LinkedIn">
+            <input value={linkedin} onChange={(e) => setLinkedin(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && canSave) submit(); }}
+              placeholder="linkedin.com/in/maya-okafor" style={{ padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 12.5, color: "var(--text)" }}/>
+          </Field>
         </div>
         <div className="im-foot">
           <button className="pill-btn" onClick={onClose}>Cancel</button>
@@ -1167,6 +1375,22 @@ function AddContactModal({
       </div>
     </>
   );
+}
+
+/** Accept whatever the user pastes — "linkedin.com/in/x", "www.linkedin.com/in/x",
+ *  "/in/x", a full https URL, or a bare username ("mayaokafor") — and return a
+ *  clean https://linkedin.com/in/… URL. Returns undefined for empty/unrecognised
+ *  input so the backend field stays null instead of a broken string. */
+function normalizeLinkedInInput(raw: string): string | undefined {
+  const t = raw.trim();
+  if (!t) return undefined;
+  if (/^https?:\/\//i.test(t)) return t.replace(/^http:\/\//i, "https://");
+  if (/^(www\.)?linkedin\.com\//i.test(t)) return `https://${t.replace(/^www\./i, "")}`;
+  if (/^\/?in\//i.test(t)) return `https://linkedin.com/${t.replace(/^\//, "")}`;
+  // Bare username — build a profile URL.
+  if (/^[a-z0-9][a-z0-9-]{2,}$/i.test(t)) return `https://linkedin.com/in/${t}`;
+  // Unrecognised — keep what the user typed so they can edit it later.
+  return t;
 }
 
 function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
@@ -1233,7 +1457,7 @@ function BoardSwitcher({
 // ========== CRMDrawer — per-contact side panel ==========
 
 export function CRMDrawer({
-  contact, idx, onClose, onPatch, onDelete, customCols = [],
+  contact, idx, onClose, onPatch, onDelete, customCols = [], stages = DEFAULT_STAGES,
 }: {
   contact: CrmContact;
   idx: number;
@@ -1242,14 +1466,16 @@ export function CRMDrawer({
   onDelete?: (id: string) => void;
   /** User-defined board columns so the drawer shows the same fields as the table. */
   customCols?: CustomColumn[];
+  stages?: StageDef[];
 }) {
   const modal = useModal();
-  const stage = STAGES.find((s) => s.id === contact.stage) ?? STAGES[0]!;
+  const stageList = stages.length > 0 ? stages : DEFAULT_STAGES;
+  const stage = stageList.find((s) => s.id === contact.stage) ?? stageList[0]!;
 
   const advanceStage = () => {
-    const i = STAGES.findIndex((s) => s.id === contact.stage);
-    const next = STAGES[Math.min(STAGES.length - 1, i + 1)]!;
-    onPatch(contact.id, { stage: next.id });
+    const i = stageList.findIndex((s) => s.id === contact.stage);
+    const next = stageList[Math.min(stageList.length - 1, i + 1)]!;
+    onPatch(contact.id, { stage: next.id as CrmStage });
   };
 
   return (
@@ -1287,7 +1513,7 @@ export function CRMDrawer({
               <div className="profile-name">{contact.name}</div>
               <div className="profile-title">{[contact.title, contact.company].filter(Boolean).join(" · ") || "—"}</div>
               <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                <StageCell stage={contact.stage} onChange={(v) => onPatch(contact.id, { stage: v })} />
+                <StageCell stage={contact.stage} stages={stageList} onChange={(v) => onPatch(contact.id, { stage: v })} />
                 <TempCell temp={contact.temp} onChange={(v) => onPatch(contact.id, { temp: v })} />
               </div>
             </div>
@@ -1421,6 +1647,7 @@ export function CRMView({
   const [visibleCols, setVisibleCols] = useState<string[]>(BUILTIN_COL_IDS);
   const [customCols, setCustomCols] = useState<CustomColumn[]>([]);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
+  const [stages, setStages] = useState<StageDef[]>(DEFAULT_STAGES);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -1442,6 +1669,7 @@ export function CRMView({
     setCustomCols(cc);
     setVisibleCols(loadColsConfig(activeId, cc.map((c) => c.id)));
     setKanbanFields(loadKanbanFields(activeId, cc.map((c) => c.id)));
+    setStages(loadStages(activeId));
   }, [activeId]);
 
   // Load contacts when active board changes, then poll every 8s so shared
@@ -1597,7 +1825,7 @@ export function CRMView({
     }
   };
 
-  const addContact = async (draft: { name: string; title?: string; company?: string; email?: string }) => {
+  const addContact = async (draft: { name: string; title?: string; company?: string; email?: string; linkedin?: string }) => {
     if (!activeId) return;
     try {
       const c = await api.post<CrmContact>(`/api/crm/boards/${activeId}/contacts`, {
@@ -1605,6 +1833,7 @@ export function CRMView({
         title: draft.title || null,
         company: draft.company || null,
         email: draft.email || null,
+        linkedin: draft.linkedin || null,
       });
       setContacts((cs) => [...cs, c]);
       setBoards((bs) => bs.map((b) => b.id === activeId ? { ...b, contactCount: (b.contactCount ?? 0) + 1 } : b));
@@ -1687,6 +1916,19 @@ export function CRMView({
               customCols={customCols}
             />
           )}
+          <StagesMenu
+            boardId={activeId}
+            value={stages}
+            onChange={setStages}
+            onReassign={async (fromId, toId) => {
+              // Move every contact on the removed stage to the fallback.
+              const affected = contacts.filter((c) => c.stage === fromId);
+              setContacts((cs) => cs.map((c) => c.stage === fromId ? { ...c, stage: toId as CrmStage } : c));
+              await Promise.all(affected.map((c) =>
+                api.patch(`/api/crm/contacts/${c.id}`, { stage: toId }).catch(() => { /* non-fatal */ }),
+              ));
+            }}
+          />
           <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Fill email for contacts that don't have one yet (via Apollo.io)">
             <IconMail size={12} />{enriching ? "Getting email…" : "Get email"}
           </button>
@@ -1707,6 +1949,7 @@ export function CRMView({
           onDelete={deleteContact}
           fields={kanbanFields}
           customCols={customCols}
+          stages={stages}
         />
       ) : (
         <TableView
@@ -1715,6 +1958,7 @@ export function CRMView({
           onPatch={patchContact}
           columns={visibleCols}
           customCols={customCols}
+          stages={stages}
         />
       )}
 
@@ -1740,6 +1984,7 @@ export function CRMView({
           idx={contacts.findIndex((c) => c.id === openContact.id)}
           onClose={() => setOpenContact(null)}
           customCols={customCols}
+          stages={stages}
           onPatch={(id, patch) => {
             patchContact(id, patch);
             setOpenContact((c) => {
