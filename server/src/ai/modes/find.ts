@@ -132,13 +132,22 @@ export async function runFind(
       if (collected.length >= targetCount) break;
     }
 
+    console.log(`[find] round ${round + 1}: got ${got.length} raw, added ${added} new (total ${collected.length}/${targetCount})`);
+
     // If a round produces almost nothing new, further rounds won't help —
     // the query space is exhausted. Break early to save credits.
     if (added < 3) break;
   }
 
-  // ── Post-filter: clean garbage + apply brief-based hard filters. ──
-  const cleaned = applyPostFilters(collected, parsed);
+  // ── Post-filter: clean garbage + apply brief-based hard filters.
+  //    If the strict filter (target-firm match) yields 0, fall back to the
+  //    loose filter (dedupe + clean only). A brief that names 40+ firms
+  //    often suffers LLM-extraction drift ("Booking Holdings" vs "Booking.com")
+  //    that would otherwise reject every candidate. ──
+  const strict = applyPostFilters(collected, parsed);
+  const loose = applyPostFilters(collected, null);
+  const cleaned = strict.length > 0 ? strict : loose;
+  console.log(`[find] collected=${collected.length} strict=${strict.length} loose=${loose.length} using=${cleaned.length}`);
 
   // ── Sort high-confidence first, then medium. ──
   const confOrder = { high: 0, medium: 1, low: 2 } as const;
@@ -153,7 +162,7 @@ export async function runFind(
       name: c.name,
       title: c.title,
       company: c.company,
-      linkedin: c.linkedin || undefined,
+      linkedin: normalizeLinkedInUrl(c.linkedin),
       signals,
       past: [],
       matchPct: c.confidence === "high" ? 92 : c.confidence === "medium" ? 78 : 60,
@@ -194,6 +203,7 @@ async function parseBrief(
 
 Rules:
 - Extract EXACT company names mentioned as targets.
+- Companies listed under tiers like "Tier 2 — Strong Fit", "Tier 3 — Interesting But Harder", "lower priority" etc. are STILL TARGETS. Include them in "firms". Only put a company in "excludeFirms" if the brief explicitly says to exclude / avoid / skip / not interested in that company.
 - For titles use SHORT searchable keywords ("COO", "Head of AI") — not verbose ones.
 - List titles in priority order (Tier 1 first).
 - For excludeFirms: include ALL name variations ("JPMorgan", "J.P. Morgan", ...).
@@ -392,7 +402,7 @@ async function extractChunk(args: {
 
 ${extractionHint ? extractionHint + "\n" : ""}${excludeClause}MANDATORY FILTERS — every candidate must pass ALL of these:
 1. FULL NAME: Must have a real first AND last name (skip initials, abbreviations, "John S.").
-2. CURRENT EMPLOYER: Must be verifiable from the search result. ${extractionHint ? "Must match a TARGET FIRM listed above." : ""}
+2. CURRENT EMPLOYER: Must be verifiable from the search result. ${extractionHint ? "Strongly prefer target firms, but companies mentioned in the brief (including tier-2/tier-3 or \"harder\" labels) also count. Do NOT reject a candidate simply because the company is not a top-tier target." : ""}
 3. CURRENT TITLE: Must be a real title from their profile, not inferred from article context.
 4. LINKEDIN PROFILE: Strongly prefer candidates with a linkedin.com/in/ URL in the search result.
 
@@ -487,6 +497,22 @@ function applyPostFilters(candidates: Candidate[], parsed: ParsedBrief | null): 
 // ──────────────────────────────────────────────────────────────────────────
 // Helpers (unchanged)
 // ──────────────────────────────────────────────────────────────────────────
+
+/** Normalise LinkedIn URLs returned by the LLM so <a href> actually works.
+ *  The extract prompt says "linkedin.com/in/ URL or empty"; in practice
+ *  models often return "linkedin.com/in/foo" with no protocol, which the
+ *  browser treats as a relative path. Prepend https:// when missing. */
+function normalizeLinkedInUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  const trimmed = url.trim();
+  if (!trimmed) return undefined;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^(www\.)?linkedin\.com\//i.test(trimmed)) return `https://${trimmed.replace(/^www\./i, "")}`;
+  if (/^linkedin\.com\//i.test(trimmed)) return `https://${trimmed}`;
+  // "/in/foo" → full URL; bare "in/foo" too.
+  if (/^\/?in\//i.test(trimmed)) return `https://linkedin.com/${trimmed.replace(/^\//, "")}`;
+  return undefined;
+}
 
 function extractCount(s: string): number {
   const m = s.match(/\b(?:find|get|give|list|top|show|want|need)\s*(?:me\s+)?(?:up\s+to\s+)?(\d{1,3})\b/i)
