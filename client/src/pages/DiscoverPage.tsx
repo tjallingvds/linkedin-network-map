@@ -460,10 +460,18 @@ export function DiscoverPage() {
         body.previousBrief = `${lastBrief}\n\nRefinement: ${text}`;
       }
       const resp = await api.post<{ result: CompletionResult; title?: string }>(`/api/chats/${id}/completion`, body);
-      // Use the server's AI-generated title on first send — much better than
-      // just truncating the raw brief.
-      if (isFirstMessage && resp.title) {
-        setChatList((cs) => cs.map((c) => (c.id === id ? { ...c, title: resp.title! } : c)));
+      // On first send, rename the sidebar row NO MATTER WHAT — either to the
+      // server's AI-generated title, or a truncated fallback so it never
+      // stays stuck as "New search".
+      if (isFirstMessage) {
+        const nextTitle = (resp.title && resp.title.trim())
+          ? resp.title.trim()
+          : text.slice(0, 80);
+        setChatList((cs) => cs.map((c) => (c.id === id ? { ...c, title: nextTitle } : c)));
+        // Persist the fallback too so other sessions / re-fetches agree.
+        if (!resp.title) {
+          api.patch(`/api/chats/${id}`, { title: nextTitle }).catch(() => { /* non-fatal */ });
+        }
       }
       applyResult(resp.result, mode === "discover_more" ? lastBrief : text);
     } catch (err) {

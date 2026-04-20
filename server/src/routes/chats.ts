@@ -186,9 +186,9 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     })
     .execute();
 
-  // If this is the very first user message in the chat, have the LLM
-  // synthesize a short title so the sidebar doesn't just say "New search".
-  // Cap at one title generation per chat.
+  // On the first user message, rename the chat to something descriptive.
+  // Try the LLM first; fall back to a truncation of the user's brief so
+  // the sidebar title NEVER stays "New search" past the first send.
   let newTitle: string | undefined;
   try {
     const userCountRow = await db
@@ -198,20 +198,31 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       .where("role", "=", "user")
       .executeTakeFirst();
     const userMsgCount = Number(userCountRow?.c ?? 0);
-    if (userMsgCount === 1 && (chat.title === "New search" || !chat.title.trim())) {
-      const t = await aiJson<{ title: string }>(
-        provider,
-        "You write a very short chat title (3-6 words, Title Case, no quotes, no trailing period).",
-        `Brief:\n${parsed.data.content}\n\nReturn {"title": "<3-6 word title>"}.`,
-        { maxTokens: 60, userId: req.user!.id, userKeys },
-      );
-      const candidate = t.title?.trim().replace(/^["']|["']$/g, "").slice(0, 80);
-      if (candidate) {
-        newTitle = candidate;
-        await db.updateTable("chats").set({ title: candidate }).where("id", "=", chat.id).execute();
+    const stillDefault = !chat.title.trim() || chat.title === "New search" || chat.title === "New chat";
+    if (userMsgCount === 1 && stillDefault) {
+      let candidate: string | undefined;
+      try {
+        const t = await aiJson<{ title: string }>(
+          provider,
+          "You write a very short chat title (3-6 words, Title Case, no quotes, no trailing period).",
+          `User's first message:\n${parsed.data.content}\n\nReturn {"title": "<3-6 word title>"}.`,
+          { maxTokens: 80, userId: req.user!.id, userKeys },
+        );
+        candidate = t.title?.trim().replace(/^["']|["']$/g, "").slice(0, 80) || undefined;
+      } catch (err) {
+        console.warn("chat title generation failed:", (err as Error).message);
       }
+      if (!candidate) {
+        // Fallback: first line of the user's brief, trimmed.
+        const firstLine = parsed.data.content.split(/\n/)[0]?.trim() ?? "";
+        candidate = firstLine.slice(0, 80) || "Untitled";
+      }
+      newTitle = candidate;
+      await db.updateTable("chats").set({ title: candidate }).where("id", "=", chat.id).execute();
     }
-  } catch { /* title generation is best-effort */ }
+  } catch (err) {
+    console.warn("chat title logic errored:", (err as Error).message);
+  }
 
   await db.updateTable("chats").set({ updated_at: new Date() as any }).where("id", "=", chat.id).execute();
 
