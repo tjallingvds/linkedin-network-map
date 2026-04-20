@@ -374,8 +374,11 @@ async function extractChunk(args: {
   userKeys?: UserKeys;
 }): Promise<Candidate[]> {
   const { provider, chunk, extractionHint, excludeNames, userId, userKeys } = args;
+  // 1500 chars per snippet captures the "and also X, Y, Z" tail of team
+  // pages and news articles where most of the extra names live. Previously
+  // 600 chars — enough for one bio, not enough for a listicle.
   const context = chunk
-    .map((r) => `[${r.title}] (${r.url})\n${(r.content ?? "").slice(0, 600)}`)
+    .map((r) => `[${r.title}] (${r.url})\n${(r.content ?? "").slice(0, 1500)}`)
     .join("\n\n---\n\n");
 
   const excludeClause = excludeNames.length
@@ -386,20 +389,23 @@ async function extractChunk(args: {
   try {
     const out = await aiJson<{ candidates: Candidate[] }>(
       provider,
-      `You extract real people (name + title + company) from LinkedIn-style search snippets.
+      `You extract real people (name + title + company) from web search snippets. Each snippet may mention MULTIPLE people — a team page, a press release, a conference speaker list, a news article naming several execs. PULL ALL OF THEM, not just the first.
 
 Return {"candidates": [...]} — each candidate:
 {"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/… URL or empty","evidence":"one-line reason from the snippet","confidence":"high"|"medium","source":"URL"}
 
 Inclusion rules (be generous, not precious):
+- If a snippet lists 6 executives, return 6 candidates. If it lists 20, return 20.
 - Include anyone who appears to be a real person with a real role at a real company, based on the snippet.
 - Full first + last name required. Skip "John S.", initials, or placeholder names.
-- Skip article bylines UNLESS the same snippet also shows the author holds the target-persona role at a target-persona company.
+- Skip article bylines UNLESS the byline holds the target-persona role at a target-persona company.
 - "high" confidence when name + title + company are clearly visible together (ideally with a LinkedIn URL). "medium" otherwise. Do NOT include people you're unsure are real.
 - Do NOT require a LinkedIn URL; use empty string if not in the snippet.
-- Return as many qualifying candidates as the snippets support — do NOT pre-filter to only "top" matches. Downstream code handles ranking.${hintClause}${excludeClause}`,
+- Do NOT pre-filter to only "top" matches. Downstream code handles ranking.${hintClause}${excludeClause}`,
       `Search results (${chunk.length}):\n${context}`,
-      { maxTokens: 4000, userId, userKeys },
+      // 8000 tokens ≈ 80-100 JSON candidate objects, room for chunks that
+      // hit a team page listing 30+ people.
+      { maxTokens: 8000, userId, userKeys },
     );
     return (out.candidates ?? []).filter((c) => c && c.name && c.company && c.title);
   } catch (e) {
