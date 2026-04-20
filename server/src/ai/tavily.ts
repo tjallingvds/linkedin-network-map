@@ -14,22 +14,33 @@ export interface TavilyResult {
 
 export async function tavilySearch(
   query: string,
-  opts: { maxResults?: number; depth?: "basic" | "advanced"; userId?: string; userKeys?: UserKeys } = {},
+  opts: {
+    maxResults?: number;
+    depth?: "basic" | "advanced";
+    includeDomains?: string[];
+    userId?: string;
+    userKeys?: UserKeys;
+  } = {},
 ): Promise<TavilyResult[]> {
   const apiKey = opts.userKeys?.tavily ?? env.TAVILY_API_KEY;
   if (!apiKey) throw new Error("TAVILY_API_KEY not set");
   const byok = !!opts.userKeys?.tavily;
 
+  const body: Record<string, unknown> = {
+    api_key: apiKey,
+    query,
+    search_depth: opts.depth ?? "basic",
+    max_results: opts.maxResults ?? 5,
+    include_answer: false,
+  };
+  if (opts.includeDomains && opts.includeDomains.length > 0) {
+    body.include_domains = opts.includeDomains;
+  }
+
   const r = await fetch("https://api.tavily.com/search", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key: apiKey,
-      query,
-      search_depth: opts.depth ?? "basic",
-      max_results: opts.maxResults ?? 5,
-      include_answer: false,
-    }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`tavily ${r.status}: ${await r.text()}`);
   const data = (await r.json()) as { results: TavilyResult[] };
