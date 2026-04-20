@@ -36,6 +36,12 @@ function buildHeaders(body?: unknown): HeadersInit {
   return h;
 }
 
+/** Max wait before we give up on a request. Completions can legitimately
+ *  take 60-90s (server heartbeat keeps the proxy happy) so the budget is
+ *  long, but it's NOT infinite — a stuck proxy / crashed server should
+ *  surface as "Load failed" rather than an eternal spinner. */
+const DEFAULT_TIMEOUT_MS = 120_000;
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   if (isMockApiEnabled()) {
     const mocked = await mockDispatch(method, path, body);
@@ -43,12 +49,28 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     // Fall through to real fetch for anything the mock doesn't handle.
   }
 
-  const r = await fetch(`${API_BASE}${path}`, {
-    method,
-    credentials: "include",
-    headers: buildHeaders(body),
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+  let r: Response;
+  try {
+    r = await fetch(`${API_BASE}${path}`, {
+      method,
+      credentials: "include",
+      headers: buildHeaders(body),
+      body: body ? JSON.stringify(body) : undefined,
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    // AbortError from the timeout OR a genuine network failure. Surface
+    // a uniform ApiError so the UI's catch handlers don't need to know
+    // which one fired.
+    if ((err as Error).name === "AbortError") {
+      throw new ApiError(0, null, `Request timed out after ${DEFAULT_TIMEOUT_MS / 1000}s — the server may be restarting. Try again in a moment.`);
+    }
+    throw new ApiError(0, null, (err as Error).message || "Network error");
+  }
+  clearTimeout(timer);
   if (!r.ok) {
     let payload: unknown = null;
     try { payload = await r.json(); } catch { /* ignore */ }
