@@ -57,6 +57,18 @@ app.use("/api/usage", requireAuth, usageRoutes);
 // JSON 404 for the API surface.
 app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));
 
+// ---- Legacy static app (pre-rewrite, self-contained browser app) ----
+// The pre-TS legacy version lives in /legacy at the repo root. It's a
+// pure static site (index.html + css/js + Three.js CDN), all auth and AI
+// calls are browser-side with user-provided keys. We mount it at /legacy
+// so the new app can escape-hatch to "the old thing that worked" while
+// we iron out the rewrite.
+const legacyDir = path.resolve(__dirname, "../../legacy");
+if (existsSync(path.join(legacyDir, "index.html"))) {
+  app.use("/legacy", express.static(legacyDir, { maxAge: "1h" }));
+  console.log(`✔ Serving legacy app from ${legacyDir} at /legacy`);
+}
+
 // ---- Static client ----
 // The server Dockerfile copies client/dist next to server/dist so this image
 // can serve the SPA from the same origin. Locally (dev), Vite serves the
@@ -65,7 +77,7 @@ const clientDist = path.resolve(__dirname, "../../client/dist");
 if (existsSync(path.join(clientDist, "index.html"))) {
   app.use(express.static(clientDist, { index: false, maxAge: "1h" }));
   app.get("*", (req, res, next) => {
-    if (req.path.startsWith("/api") || req.path === "/health") return next();
+    if (req.path.startsWith("/api") || req.path === "/health" || req.path.startsWith("/legacy")) return next();
     res.sendFile(path.join(clientDist, "index.html"));
   });
   console.log(`✔ Serving client from ${clientDist}`);

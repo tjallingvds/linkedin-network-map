@@ -122,11 +122,45 @@ export function Sidebar({
 
             <div className="sidebar-spacer" />
 
+            <LegacyLink />
             <UsageCard usage={usage} onOpenSettings={onOpenSettings} />
           </>
         )}
       </div>
     </aside>
+  );
+}
+
+/** Escape hatch to the pre-rewrite static app (served at /legacy by the
+ *  server). Always opens a fresh browser tab so it doesn't confuse the
+ *  SPA router. */
+function LegacyLink() {
+  return (
+    <a
+      href="/legacy/"
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 10px",
+        marginBottom: 6,
+        fontSize: 11.5,
+        color: "var(--text-dim)",
+        textDecoration: "none",
+        borderRadius: 6,
+        border: "1px solid var(--hairline)",
+      }}
+      title="Open the pre-rewrite legacy app (same-tab fallback while the new Find pipeline stabilises)"
+    >
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
+        <path d="M10 3h3v3" />
+        <path d="M13 3l-7 7" />
+        <path d="M12 9v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" />
+      </svg>
+      <span>Legacy version</span>
+    </a>
   );
 }
 

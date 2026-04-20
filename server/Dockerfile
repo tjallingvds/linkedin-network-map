@@ -39,6 +39,9 @@ COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/shared/src ./shared/src
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
+# Legacy (pre-rewrite) static browser app, served at /legacy as an escape
+# hatch from the new rewrite while it stabilises.
+COPY legacy ./legacy
 
 WORKDIR /app/server
 
