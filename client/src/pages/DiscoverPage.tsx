@@ -108,7 +108,10 @@ function InlineAddAllToBoard({
       {open && (
         <>
           <div className="board-menu-bg" onClick={() => setOpen(false)} />
-          <div className="board-menu" style={{ top: "calc(100% + 6px)", left: 0, right: "auto" }}>
+          {/* Opens upward — the button sits near the bottom of the results
+              area whose ancestor container clips overflow. Anchoring to the
+              bottom of the button keeps the board list on screen. */}
+          <div className="board-menu" style={{ bottom: "calc(100% + 6px)", top: "auto", left: 0, right: "auto" }}>
             <div className="bm-label">Add {count} prospect{count === 1 ? "" : "s"} to…</div>
             {boards.length === 0 && (
               <div style={{ padding: "8px 10px", fontSize: 12, color: "var(--text-mute)" }}>
@@ -901,12 +904,6 @@ export function DiscoverPage() {
                       </button>
                       <button className="pill-btn" onClick={exportCSV}>
                         <IconDownload size={12} />Export CSV
-                      </button>
-                      <button className="pill-btn" onClick={sendToSheets}>
-                        <IconSheet size={12} />Send to Sheets
-                      </button>
-                      <button className="pill-btn primary" onClick={() => draftOutreachFor()}>
-                        <IconSend size={12} />Draft outreach
                       </button>
                     </div>
                   </div>

@@ -514,8 +514,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 /* Composer */
 .composer-wrap {
-  padding: 12px 28px 16px;
-  background: linear-gradient(180deg, transparent, var(--shell) 40%);
+  /* Was 12px 28px 16px with a heavy gradient fade that visually added
+     ~30px of empty space above the input. Tightened so the selection
+     bar sits flush against the composer. */
+  padding: 4px 28px 12px;
+  background: var(--shell);
 }
 .composer {
   background: var(--panel); border: 1px solid var(--hairline-strong);
@@ -702,8 +705,10 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 /* Selection bar */
 .selection-bar {
   position: sticky; bottom: 0;
-  margin: 12px -28px -16px;
-  padding: 14px 28px;
+  margin: 10px -28px -16px;
+  /* Tightened from 14px to 8px vertical — users complained of a large
+     gap between this bar and the chat input below. */
+  padding: 8px 28px;
   background: var(--shell); backdrop-filter: blur(20px);
   border-top: 1px solid var(--hairline);
   display: flex; align-items: center; gap: 12px;

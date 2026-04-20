@@ -40,6 +40,7 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { id: "company",  label: "Company",    width: "1.1fr" },
   { id: "email",    label: "Email",      width: "1.2fr" },
   { id: "phone",    label: "Phone",      width: "130px" },
+  { id: "linkedin", label: "LinkedIn",   width: "1.2fr" },
   { id: "stage",    label: "Stage",      width: "120px" },
   { id: "temp",     label: "Temp",       width: "90px"  },
   { id: "sent",     label: "Sent",       width: "64px",  numeric: true },
@@ -651,6 +652,12 @@ function TableView({
       case "company": return <EditableCell value={p.company} onSave={(v) => onPatch(p.id, { company: v })} />;
       case "email":   return <EditableCell value={p.email}   onSave={(v) => onPatch(p.id, { email: v })} />;
       case "phone":   return <EditableCell value={p.phone}   onSave={(v) => onPatch(p.id, { phone: v })} />;
+      case "linkedin": return (
+        <EditableCell
+          value={p.linkedin}
+          onSave={(v) => onPatch(p.id, { linkedin: normalizeLinkedInInput(v) ?? v })}
+        />
+      );
       case "stage":   return <StageCell stage={p.stage} stages={stages} onChange={(v) => onPatch(p.id, { stage: v })} />;
       case "temp":    return <TempCell  temp={p.temp}   onChange={(v) => onPatch(p.id, { temp: v })} />;
       case "sent":    return <EditableCell value={p.sent}    align="center" onSave={(v) => onPatch(p.id, { sent: Number(v) || 0 })} />;
