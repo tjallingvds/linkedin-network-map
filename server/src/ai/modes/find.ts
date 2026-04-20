@@ -134,11 +134,11 @@ export async function runFind(
 
     console.log(`[find] round ${round + 1}: got ${got.length} raw, added ${added} new (total ${collected.length}/${targetCount})`);
 
-    // Stop early when further rounds aren't worth the Tavily spend:
-    //   (a) the query space is exhausted (<3 new this round), OR
-    //   (b) we're already at ≥80% of target (diminishing returns).
+    // Stop when the query space is exhausted (<3 new) or we've hit the
+    // target. Round 3 is capped by MAX_ROUNDS=2 below because the tail
+    // costs more per lead than it's worth.
     if (added < 3) break;
-    if (collected.length >= targetCount * 0.8) break;
+    if (collected.length >= targetCount) break;
   }
 
   // ── Post-filter: dedupe + clean garbage + drop explicitly excluded firms
@@ -255,11 +255,15 @@ async function parallelDiscovery(args: {
 }): Promise<Candidate[]> {
   const { provider, brief, extractionHint, targetCount, seenUrls, excludeNames, userId, userKeys } = args;
 
-  // Query count sized so total Tavily calls ≈ target (ONE call per query
-  // now that we skip the linkedin.com-first dead-weight call). Cap at 60 —
-  // each query returns up to 20 URLs = 1200 raw URLs, plenty of surface
-  // area without spending 700+ Tavily credits per search.
-  const numQueries = Math.min(60, Math.max(Math.ceil(targetCount * 0.7), 10));
+  // Tavily is the expensive part (2 credits per advanced call) — the LLM
+  // (DeepSeek) is effectively free. So we minimise Tavily fan-out and
+  // maximise extraction yield per call.
+  //
+  // Each advanced call returns up to 20 URLs. For target=100, 25 queries
+  // × 20 = 500 raw → ~200 usable after dedup/prefilter → 200 snippets × 3-5
+  // names each = 600-1000 candidate names. Comfortably covers the target.
+  // Cap at 35 so an extreme brief doesn't run away.
+  const numQueries = Math.min(35, Math.max(Math.ceil(targetCount * 0.25), 8));
 
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
@@ -325,23 +329,52 @@ Return {"queries": [...]} with exactly ${numQueries} queries.`,
   const allResults = allSearchResults.flat();
   if (allResults.length === 0) return [];
 
-  // Deduplicate by URL across this round AND against prior rounds.
-  const unique: TavilyResult[] = [];
+  // Dedup by URL across this round AND across prior rounds.
+  const urlDeduped: TavilyResult[] = [];
   for (const r of allResults) {
     const u = (r.url ?? "").toLowerCase();
     if (!u || seenUrls.has(u)) continue;
     seenUrls.add(u);
-    unique.push(r);
+    urlDeduped.push(r);
   }
-  if (unique.length === 0) return [];
 
-  // Chunk snippets for parallel extraction — chunks of 40 fit comfortably
-  // in a single LLM call without blowing the context or missing names in
-  // the middle of a 100-result dump.
-  const CHUNK_SIZE = 40;
+  // Dedup by content fingerprint — press releases mirrored across five
+  // sites read nearly identically in Tavily's snippet. No point paying
+  // five LLM calls to extract the same three names.
+  const contentSeen = new Set<string>();
+  const contentDeduped: TavilyResult[] = [];
+  for (const r of urlDeduped) {
+    const fp = (r.content ?? "").trim().slice(0, 300).toLowerCase().replace(/\s+/g, " ");
+    if (!fp) continue;
+    if (contentSeen.has(fp)) continue;
+    contentSeen.add(fp);
+    contentDeduped.push(r);
+  }
+
+  // Local pre-filter — drop snippets the LLM would reject anyway, BEFORE
+  // spending tokens on them. Two cheap heuristics cover most junk:
+  //   (a) content is too short to describe anyone (<120 chars).
+  //   (b) content contains no "FirstName LastName"-looking pattern, so
+  //       there's nobody to extract.
+  const NAME_PATTERN = /\b[A-Z][a-z]+(?:-[A-Z][a-z]+)?\s+[A-Z][a-z]+(?:-[A-Z][a-z]+)?\b/;
+  const filtered = contentDeduped.filter((r) => {
+    const c = r.content ?? "";
+    if (c.length < 120) return false;
+    if (!NAME_PATTERN.test(c)) return false;
+    return true;
+  });
+
+  console.log(`[find] tavily=${allResults.length} url-deduped=${urlDeduped.length} content-deduped=${contentDeduped.length} prefiltered=${filtered.length}`);
+
+  if (filtered.length === 0) return [];
+
+  // Bigger chunks = fewer LLM calls = less fixed-overhead per search.
+  // 80 snippets × ~800 chars avg ≈ 16K tokens input, leaves ample room
+  // for an 8K output dump. Claude / GPT-4o both fit this comfortably.
+  const CHUNK_SIZE = 80;
   const chunks: TavilyResult[][] = [];
-  for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
-    chunks.push(unique.slice(i, i + CHUNK_SIZE));
+  for (let i = 0; i < filtered.length; i += CHUNK_SIZE) {
+    chunks.push(filtered.slice(i, i + CHUNK_SIZE));
   }
 
   const extractionPromises = chunks.map((chunk) =>
@@ -374,11 +407,17 @@ async function extractChunk(args: {
   userKeys?: UserKeys;
 }): Promise<Candidate[]> {
   const { provider, chunk, extractionHint, excludeNames, userId, userKeys } = args;
-  // 1500 chars per snippet captures the "and also X, Y, Z" tail of team
-  // pages and news articles where most of the extra names live. Previously
-  // 600 chars — enough for one bio, not enough for a listicle.
+  // Pass Tavily content VERBATIM — no slicing. Upstream pre-filter + content-
+  // fingerprint dedup already dropped junk (404s, boilerplate, press-release
+  // mirrors), so every char that reaches us is something we paid Tavily for
+  // and want the LLM to see. Capped at 4000/snippet only as a runaway guard
+  // (normal Tavily advanced snippets are 300-1500 chars).
   const context = chunk
-    .map((r) => `[${r.title}] (${r.url})\n${(r.content ?? "").slice(0, 1500)}`)
+    .map((r) => {
+      const c = (r.content ?? "").trim();
+      const body = c.length > 4000 ? c.slice(0, 4000) + " …[truncated]" : c;
+      return `[${r.title}] (${r.url})\n${body}`;
+    })
     .join("\n\n---\n\n");
 
   const excludeClause = excludeNames.length
