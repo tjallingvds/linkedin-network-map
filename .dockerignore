@@ -4,7 +4,8 @@ node_modules
 **/build
 .git
 .github
-legacy
+# legacy/ is INCLUDED in the build context — the server serves it as a
+# static fallback at /legacy (see server/Dockerfile: COPY legacy ./legacy).
 *.log
 .env
 .env.*
