@@ -126,13 +126,36 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   // the LLM stops asking clarifying questions it already got answers to.
   const history = await db
     .selectFrom("messages")
-    .select(["role", "content", "created_at"])
+    .select(["role", "content", "result", "created_at"])
     .where("chat_id", "=", chat.id)
     .orderBy("created_at", "asc")
     .execute();
   const priorMessages = history
     .slice(0, -1) // drop the just-written user message; it's in `parsed.data.content`
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+
+  // Pull every prospect name surfaced earlier in this chat so Find doesn't
+  // re-surface them. The user saw "find people at X, Y, Z on the internet"
+  // return names that had already appeared in a prior turn's Goldman Sachs
+  // search — this is the fix.
+  const alreadyShownNames: string[] = [];
+  for (const m of history) {
+    if (m.role !== "assistant") continue;
+    const r = m.result as unknown;
+    if (!r || typeof r !== "object") continue;
+    const kind = (r as { kind?: string }).kind;
+    if (kind !== "prospects") continue;
+    const list = (r as { prospects?: Array<{ name?: string }> }).prospects ?? [];
+    for (const p of list) {
+      if (p && typeof p.name === "string" && p.name.trim()) {
+        alreadyShownNames.push(p.name.trim());
+      }
+    }
+  }
+  // Dedupe — same person can appear in multiple assistant turns.
+  const uniqAlreadyShown = Array.from(new Set(alreadyShownNames.map((n) => n.toLowerCase())))
+    .map((lc) => alreadyShownNames.find((n) => n.toLowerCase() === lc)!)
+    .filter(Boolean);
 
   // Decide NOW whether this turn should trigger AI title generation. We kick
   // it off BEFORE runFind so the 30-second Find pipeline doesn't starve the
@@ -196,7 +219,7 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   try {
     const userId = req.user!.id;
     if (parsed.data.mode === "find") {
-      result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages);
+      result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqAlreadyShown);
     } else if (parsed.data.mode === "network") {
       result = await runNetwork(provider, parsed.data.content, userId, userKeys);
     } else if (parsed.data.mode === "enrich") {

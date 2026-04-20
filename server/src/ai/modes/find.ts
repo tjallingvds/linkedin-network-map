@@ -57,6 +57,10 @@ export async function runFind(
   userId: string,
   userKeys?: UserKeys,
   priorMessages: PriorMessage[] = [],
+  /** Names already shown earlier in this chat — pre-seeded into seenNames
+   *  so a subsequent Find in the same chat doesn't re-surface them. Driven
+   *  from messages.result.prospects in the DB by chats.ts. */
+  alreadyShownNames: string[] = [],
 ): Promise<CompletionResult> {
   assertKeys(provider, userKeys);
 
@@ -104,17 +108,32 @@ export async function runFind(
   // ── Legacy: multi-round discover loop ────────────────────────────────────
   const allPeople: Candidate[] = [];
   const seenNames = new Set<string>();
+  // Pre-seed with names already shown earlier in this chat so cross-turn
+  // dedup works. Without this, turn 3 ("find everyone at JPM/Barclays/…")
+  // happily returned people turn 1 ("find everyone at Goldman Sachs")
+  // already surfaced — which the user saw and called out.
+  for (const n of alreadyShownNames) {
+    const key = n.toLowerCase().trim();
+    if (key) seenNames.add(key);
+  }
   const MAX_ROUNDS = 3;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const remaining = targetCount - allPeople.length;
     if (remaining <= 0) break;
 
+    // When round > 0, include the names we've found THIS request in the
+    // exclusion list for the query generator. When pre-seed has entries,
+    // surface the first slice on round 0 too so Tavily queries don't aim
+    // at the same LinkedIn profiles again.
+    const priorShownSlice = round === 0 && alreadyShownNames.length > 0
+      ? `\n\n(Already shown in earlier chat turns — do NOT return these: ${alreadyShownNames.slice(0, 80).join(", ")}.)`
+      : "";
     const roundQuery = round === 0
-      ? fullBrief
+      ? `${fullBrief}${priorShownSlice}`
       : `${fullBrief}\n\n(ROUND ${round + 1}: Find DIFFERENT people. Already found: ${
           allPeople.map((p) => p.name).join(", ")
-        }. Do NOT return these again.)`;
+        }${alreadyShownNames.length ? "; Also already shown earlier: " + alreadyShownNames.slice(0, 40).join(", ") : ""}. Do NOT return these again.)`;
 
     const roundPeople = await handleDiscovery({
       provider,
