@@ -175,6 +175,23 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       })()
     : Promise.resolve(undefined);
 
+  // ── Keep-alive heartbeat ─────────────────────────────────────────────
+  // Long-running Find / Enrich pipelines can run 30-120s. Railway's (and
+  // most cloud proxies') HTTP layer kills the TCP connection if no bytes
+  // flow on it for ~60s → user sees "Application failed to respond" and
+  // we waste every Tavily credit already spent.
+  //
+  // Send response headers and a single whitespace byte every 10s while the
+  // mode handler runs. JSON.parse ignores leading whitespace, so when we
+  // finally write the real {result,provider,title} body, the client
+  // parses it normally. No client change needed.
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("X-Accel-Buffering", "no"); // disable nginx-style buffering if present
+  res.flushHeaders?.();
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(" ");
+  }, 10_000);
+
   let result: CompletionResult;
   try {
     const userId = req.user!.id;
@@ -201,11 +218,20 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId, userKeys);
     }
   } catch (err) {
-    return res.status(500).json({
+    clearInterval(heartbeat);
+    // Headers have already been sent (heartbeat wrote bytes). Can't use
+    // res.status().json(), so write the error envelope directly and end.
+    const payload = JSON.stringify({
       error: "completion_failed",
       message: (err as Error).message,
     });
+    if (!res.writableEnded) {
+      res.write(payload);
+      res.end();
+    }
+    return;
   }
+  clearInterval(heartbeat);
 
   // Persist both a human-readable timeline stub AND the full structured
   // result so prospect cards can be rebuilt on chat reload.
@@ -254,7 +280,13 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
 
   await db.updateTable("chats").set({ updated_at: new Date() as any }).where("id", "=", chat.id).execute();
 
-  res.json({ result, provider, title: newTitle });
+  // Headers + heartbeat whitespace already sent — use res.write/res.end,
+  // NOT res.json (which calls setHeader again and errors). Client parses
+  // leading whitespace fine; JSON.parse ignores it.
+  if (!res.writableEnded) {
+    res.write(JSON.stringify({ result, provider, title: newTitle }));
+    res.end();
+  }
 });
 
 export default router;
