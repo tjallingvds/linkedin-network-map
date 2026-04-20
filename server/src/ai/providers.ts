@@ -21,7 +21,7 @@ export interface AiCallResult {
 
 const MODELS: Record<AiProvider, string> = {
   openai: "gpt-4o-mini",
-  anthropic: "claude-sonnet-4-5",
+  anthropic: "claude-sonnet-4-6",
   deepseek: "deepseek-chat",
 };
 
