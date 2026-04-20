@@ -134,9 +134,11 @@ export async function runFind(
 
     console.log(`[find] round ${round + 1}: got ${got.length} raw, added ${added} new (total ${collected.length}/${targetCount})`);
 
-    // If a round produces almost nothing new, further rounds won't help —
-    // the query space is exhausted. Break early to save credits.
+    // Stop early when further rounds aren't worth the Tavily spend:
+    //   (a) the query space is exhausted (<3 new this round), OR
+    //   (b) we're already at ≥80% of target (diminishing returns).
     if (added < 3) break;
+    if (collected.length >= targetCount * 0.8) break;
   }
 
   // ── Post-filter: dedupe + clean garbage + drop explicitly excluded firms
@@ -253,11 +255,11 @@ async function parallelDiscovery(args: {
 }): Promise<Candidate[]> {
   const { provider, brief, extractionHint, targetCount, seenUrls, excludeNames, userId, userKeys } = args;
 
-  // Match legacy: ~1.2× target with a floor of 10. For target=100 this is
-  // ~120 queries, which is what the old pipeline needed to saturate the
-  // LinkedIn-profile URL space. A soft ceiling of 120 keeps extreme inputs
-  // from fanning out indefinitely but doesn't clip normal large briefs.
-  const numQueries = Math.min(120, Math.max(Math.ceil(targetCount * 1.2), 10));
+  // Query count sized so total Tavily calls ≈ target (ONE call per query
+  // now that we skip the linkedin.com-first dead-weight call). Cap at 60 —
+  // each query returns up to 20 URLs = 1200 raw URLs, plenty of surface
+  // area without spending 700+ Tavily credits per search.
+  const numQueries = Math.min(60, Math.max(Math.ceil(targetCount * 0.7), 10));
 
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
@@ -298,37 +300,24 @@ Return {"queries": [...]} with exactly ${numQueries} queries.`,
   // Per-query result cap. Large targets pull 20; small pulls 10.
   const maxPerQuery = targetCount > 30 ? 20 : 10;
 
-  // Fire all searches in parallel. Try linkedin.com first, fall back to
-  // open web (biased with "LinkedIn profile" in the query) if the domain-
-  // restricted search comes back empty.
+  // Fire all searches in parallel. ONE Tavily call per query — open web,
+  // advanced depth, with "LinkedIn" baked into the query text so profile
+  // pages still rank. We previously did a linkedin.com domain-restricted
+  // call first, but Tavily's LinkedIn coverage is thin (LinkedIn blocks
+  // crawlers), so that call almost always returned empty and then fired
+  // the open-web call anyway — doubling the spend for no gain.
   const searchPromises = searchQueries.map(async (sq): Promise<TavilyResult[]> => {
     const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, " ").trim();
+    const withLinkedIn = /linkedin/i.test(cleanQuery) ? cleanQuery : `${cleanQuery} LinkedIn`;
     try {
-      const linked = await tavilySearch(cleanQuery, {
-        depth: "advanced",
-        maxResults: maxPerQuery,
-        includeDomains: ["linkedin.com"],
-        userId,
-        userKeys,
-      });
-      if (linked.length > 0) return linked;
-      return await tavilySearch(`${cleanQuery} LinkedIn profile`, {
+      return await tavilySearch(withLinkedIn, {
         depth: "advanced",
         maxResults: maxPerQuery,
         userId,
         userKeys,
       });
     } catch {
-      try {
-        return await tavilySearch(cleanQuery, {
-          depth: "basic",
-          maxResults: 10,
-          userId,
-          userKeys,
-        });
-      } catch {
-        return [];
-      }
+      return [];
     }
   });
 
