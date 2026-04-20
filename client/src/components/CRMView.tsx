@@ -1481,6 +1481,26 @@ function normalizeLinkedInInput(raw: string): string | undefined {
   return t;
 }
 
+/** Minimal markdown renderer for the LLM-generated background blob —
+ *  supports [label](url) inline links, `-`/`*` bullets, and newlines.
+ *  Escapes HTML specials so we don't have to trust the LLM output. */
+function renderBackgroundMarkdown(md: string): string {
+  const esc = (s: string) => s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+  const lines = md.split(/\r?\n/).map((line) => {
+    const bullet = /^\s*[-*]\s+/.test(line);
+    const body = esc(line.replace(/^\s*[-*]\s+/, "")).replace(
+      /\[([^\]]+)\]\((https?:[^)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:underline">$1</a>',
+    );
+    return bullet ? `• ${body}` : body;
+  });
+  return lines.join("<br/>");
+}
+
 function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1662,6 +1682,27 @@ export function CRMDrawer({
                 }}
               />
             </DrawerField>
+            {contact.background && (
+              <DrawerField label="Background (auto-researched)" block>
+                <div
+                  className="drawer-bg-block"
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 8,
+                    background: "var(--panel)",
+                    border: "1px solid var(--hairline)",
+                    fontSize: 12.5,
+                    lineHeight: 1.5,
+                    color: "var(--text)",
+                    whiteSpace: "pre-wrap",
+                  }}
+                  // Background is LLM-generated markdown with inline links.
+                  // Render it minimally — linkify [label](url) and preserve
+                  // bullets. Source: trusted backend, no user input.
+                  dangerouslySetInnerHTML={{ __html: renderBackgroundMarkdown(contact.background) }}
+                />
+              </DrawerField>
+            )}
             <DrawerField label="Notes" block>
               <textarea
                 className="drawer-notes"
@@ -1732,6 +1773,7 @@ export function CRMView({
   const [openContact, setOpenContact] = useState<CrmContact | null>(null);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
+  const [backgrounding, setBackgrounding] = useState(false);
   const [visibleCols, setVisibleCols] = useState<string[]>(BUILTIN_COL_IDS);
   const [customCols, setCustomCols] = useState<CustomColumn[]>([]);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
@@ -1956,6 +1998,34 @@ export function CRMView({
     }
   };
 
+  /** "Find backgrounds" — for every contact without a background, search
+   *  the web and ask the LLM to pull 2-4 specific, cited facts (recent
+   *  posts, talks, notable opinions). Stored in contact.background. */
+  const findBackgrounds = async () => {
+    if (!activeId || backgrounding) return;
+    if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
+    const needBg = contacts.filter((c) => !c.background || !c.background.trim()).length;
+    if (needBg === 0) { onFlash("Every contact already has a background — nothing to research."); return; }
+    setBackgrounding(true);
+    try {
+      const r = await api.post<{ filled: number; skipped: number; alreadyHad?: number; total: number }>(
+        `/api/crm/boards/${activeId}/background`,
+      );
+      const fresh = await api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`);
+      setContacts(fresh.contacts);
+      const had = r.alreadyHad ?? 0;
+      onFlash(
+        `Researched ${r.filled}` +
+        (r.skipped ? ` · ${r.skipped} no sources found` : "") +
+        (had ? ` · ${had} already had one` : ""),
+      );
+    } catch (e) {
+      onFlash(`Find backgrounds failed: ${(e as Error).message}`);
+    } finally {
+      setBackgrounding(false);
+    }
+  };
+
   if (loading) return <div style={{ padding: 24, color: "var(--text-dim)" }}>Loading CRM…</div>;
   if (!active) return <div style={{ padding: 24, color: "var(--text-dim)" }}>No boards yet.</div>;
 
@@ -2019,6 +2089,14 @@ export function CRMView({
           />
           <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Fill email for contacts that don't have one yet (via Apollo.io)">
             <IconMail size={12} />{enriching ? "Getting email…" : "Get email"}
+          </button>
+          <button
+            className="pill-btn"
+            disabled={backgrounding}
+            onClick={findBackgrounds}
+            title="Research each contact on the web — posts, talks, notable things they've said — with inline source links"
+          >
+            <IconSparkle size={12} />{backgrounding ? "Researching…" : "Find backgrounds"}
           </button>
           <button className="pill-btn" onClick={() => setImportOpen(true)}>
             <IconUpload size={12} />Import CSV

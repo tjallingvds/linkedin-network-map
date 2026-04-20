@@ -126,6 +126,9 @@ export interface CrmContact {
   notes: string | null;
   /** Free-form "what to personalize" hook for outreach. */
   messageNotes?: string | null;
+  /** AI-generated background (recent posts / talks / interests) with
+   *  inline source links. Populated by the "Find backgrounds" button. */
+  background?: string | null;
   /** User-defined columns: map of column-id → cell value. Optional for
    *  backward compat with clients that haven't loaded the new schema. */
   customFields?: Record<string, string>;

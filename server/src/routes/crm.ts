@@ -18,11 +18,16 @@ import { db } from "../db/index.js";
 import type { AuthedRequest } from "../auth/session.js";
 import { apolloMatchPerson, apolloConfigured } from "../integrations/apollo.js";
 import { extractUserKeys } from "../ai/user-keys.js";
+import { tavilySearch } from "../ai/tavily.js";
+import { aiJson } from "../ai/json.js";
+import { availableProviders } from "../ai/providers.js";
+import { env } from "../env.js";
 
 const router = Router();
 
 // ---- helpers ----
-const STAGES = ["new", "contacted", "replied", "meeting", "closed"] as const;
+// Stage labels are fully user-configurable now (stored client-side per board)
+// so the server only enforces a sane length bound. TEMPs stay enumerated.
 const TEMPS = ["hot", "warm", "cold"] as const;
 
 function toCamelContact(row: Record<string, unknown>) {
@@ -45,6 +50,7 @@ function toCamelContact(row: Record<string, unknown>) {
     source: row.source,
     notes: row.notes,
     messageNotes: row.message_notes ?? null,
+    background: (row.background as string | null | undefined) ?? null,
     customFields: (row.custom_fields ?? {}) as Record<string, string>,
     positionIdx: row.position_idx,
     createdAt: row.created_at,
@@ -208,7 +214,9 @@ const contactInput = z.object({
   email: z.string().nullish(),
   phone: z.string().nullish(),
   linkedin: z.string().nullish(),
-  stage: z.enum(STAGES).optional(),
+  // Stages are user-configurable per board (client-side config). Any short
+  // string is accepted — validation only guards length.
+  stage: z.string().min(1).max(40).optional(),
   temp: z.enum(TEMPS).optional(),
   sent: z.number().int().min(0).optional(),
   opens: z.number().int().min(0).optional(),
@@ -432,6 +440,100 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
   }
 
   res.json({ enriched, skipped, alreadyHad, total: rows.length });
+});
+
+/**
+ * Background-info enrichment. For every contact on the board with no
+ * existing `background`, run a Tavily search + LLM extraction to pull
+ * a few recent interesting items (posts, talks, funny/notable things
+ * they've said publicly) WITH source URLs. Stored as markdown in the
+ * contact's `background` column.
+ *
+ * Separate from /enrich (which uses Apollo for contact info) because:
+ *   - different data source (web vs. Apollo db)
+ *   - different cost profile (LLM + Tavily per contact)
+ *   - different field written
+ */
+router.post("/boards/:boardId/background", async (req: AuthedRequest, res) => {
+  const userKeys = extractUserKeys(req);
+  const tavilyKey = userKeys?.tavily ?? env.TAVILY_API_KEY;
+  if (!tavilyKey) {
+    return res.status(501).json({
+      error: "tavily_not_configured",
+      message: "Tavily key missing — add it in Settings → API keys to enable background lookup.",
+    });
+  }
+  const provider = availableProviders(userKeys)[0];
+  if (!provider) {
+    return res.status(501).json({
+      error: "llm_not_configured",
+      message: "No LLM provider configured — add an OpenAI / Anthropic / DeepSeek key in Settings.",
+    });
+  }
+  const board = await ensureBoard(req.user!.id, req.params.boardId);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+
+  const rows = await db
+    .selectFrom("crm_contacts")
+    .selectAll()
+    .where("board_id", "=", req.params.boardId)
+    .execute();
+
+  let filled = 0;
+  let skipped = 0;
+  let alreadyHad = 0;
+
+  for (const r of rows) {
+    if (r.background && r.background.trim().length > 0) { alreadyHad++; continue; }
+
+    // Query targets the person + company so Tavily surfaces their own
+    // posts, talks, and mentions rather than random people with the same
+    // name. LinkedIn URL, if we have it, narrows further.
+    const q = [r.name, r.company, "posts OR talk OR interview"].filter(Boolean).join(" ");
+    let results: Awaited<ReturnType<typeof tavilySearch>> = [];
+    try {
+      results = await tavilySearch(q, { depth: "advanced", maxResults: 5, userId: req.user!.id, userKeys });
+    } catch (err) {
+      console.warn(`[background] tavily failed for ${r.name}:`, (err as Error).message);
+    }
+    if (results.length === 0) { skipped++; continue; }
+
+    const context = results
+      .map((x) => `[${x.title}](${x.url})\n${(x.content ?? "").slice(0, 1500)}`)
+      .join("\n\n---\n\n");
+
+    let summary: string | null = null;
+    try {
+      const out = await aiJson<{ background: string }>(
+        provider,
+        "You write a short, factual background brief for a sales/BD rep about a single prospect. " +
+        "Pull 2-4 specific, recent, CONCRETE things from the search results: a post they wrote, a talk they gave, " +
+        "a product they shipped, a notable opinion or anecdote. Prefer the quirky and specific over generic platitudes. " +
+        "Cite EACH item inline with a markdown link to the source URL. " +
+        "Never invent facts not in the sources. Keep total length under 600 characters. " +
+        "No greeting, no preamble, no meta-commentary — just the bullet list.",
+        `Prospect: ${r.name}${r.title ? ", " + r.title : ""}${r.company ? " @ " + r.company : ""}\n\nSearch results:\n${context}\n\n` +
+        `Return {"background": "<markdown bullet list with inline [links](url), under 600 chars>"}.`,
+        { maxTokens: 900, userId: req.user!.id, userKeys },
+      );
+      const trimmed = out.background?.trim();
+      if (trimmed && trimmed.length > 0) summary = trimmed;
+    } catch (err) {
+      console.warn(`[background] aiJson failed for ${r.name}:`, (err as Error).message);
+    }
+
+    if (!summary) { skipped++; continue; }
+
+    await db
+      .updateTable("crm_contacts")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .set({ background: summary, updated_at: new Date() as any })
+      .where("id", "=", r.id)
+      .execute();
+    filled++;
+  }
+
+  res.json({ filled, skipped, alreadyHad, total: rows.length });
 });
 
 router.delete("/contacts/:id", async (req: AuthedRequest, res) => {

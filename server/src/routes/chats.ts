@@ -242,20 +242,15 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     }
   } catch (err) {
     clearInterval(heartbeat);
-    // Headers have already been sent (heartbeat wrote bytes). Can't use
-    // res.status().json(), so write the error envelope directly and end.
-    const payload = JSON.stringify({
-      error: "completion_failed",
-      message: (err as Error).message,
-    });
-    if (!res.writableEnded) {
-      res.write(payload);
-      res.end();
-    }
+    writeErrorEnvelope(res, (err as Error).message);
     return;
   }
   clearInterval(heartbeat);
 
+  // Everything past this point must also be wrapped so a DB / title failure
+  // can't leave the client staring at a whitespace-only response body
+  // (JSON.parse chokes with "Unexpected end of JSON input" when it does).
+  try {
   // Persist both a human-readable timeline stub AND the full structured
   // result so prospect cards can be rebuilt on chat reload.
   const timelineText =
@@ -310,6 +305,23 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     res.write(JSON.stringify({ result, provider, title: newTitle }));
     res.end();
   }
+  } catch (err) {
+    console.error("[completion] post-mode failure:", (err as Error).message);
+    writeErrorEnvelope(res, (err as Error).message);
+  }
 });
+
+/** After we flushed headers (for the heartbeat), Express's default error
+ *  handler can't send a 500 — it just closes the socket and the client
+ *  sees a whitespace-only body. Write a JSON error envelope ourselves so
+ *  response.json() succeeds with an {error, message} object. */
+function writeErrorEnvelope(res: import("express").Response, message: string): void {
+  if (res.writableEnded) return;
+  const payload = JSON.stringify({ error: "completion_failed", message });
+  try {
+    res.write(payload);
+    res.end();
+  } catch { /* socket already dead */ }
+}
 
 export default router;
