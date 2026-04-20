@@ -139,15 +139,12 @@ export async function runFind(
     if (added < 3) break;
   }
 
-  // ── Post-filter: clean garbage + apply brief-based hard filters.
-  //    If the strict filter (target-firm match) yields 0, fall back to the
-  //    loose filter (dedupe + clean only). A brief that names 40+ firms
-  //    often suffers LLM-extraction drift ("Booking Holdings" vs "Booking.com")
-  //    that would otherwise reject every candidate. ──
-  const strict = applyPostFilters(collected, parsed);
-  const loose = applyPostFilters(collected, null);
-  const cleaned = strict.length > 0 ? strict : loose;
-  console.log(`[find] collected=${collected.length} strict=${strict.length} loose=${loose.length} using=${cleaned.length}`);
+  // ── Post-filter: dedupe + clean garbage + drop explicitly excluded firms
+  //    / titles / seniority. Target-firm match is applied as a SOFT signal
+  //    that upgrades confidence (so target-firm people sort first) instead
+  //    of a hard filter that rejects everyone when the parser drifts. ──
+  const cleaned = applyPostFilters(collected, parsed);
+  console.log(`[find] collected=${collected.length} cleaned=${cleaned.length}`);
 
   // ── Sort high-confidence first, then medium. ──
   const confOrder = { high: 0, medium: 1, low: 2 } as const;
@@ -230,12 +227,13 @@ Rules:
 function buildExtractionHint(parsed: ParsedBrief | null): string {
   if (!parsed) return "";
   const lines: string[] = [];
-  if (parsed.context) lines.push(`LOOKING FOR: ${parsed.context}`);
-  if (parsed.firms.length) lines.push(`TARGET FIRMS (only extract people at these): ${parsed.firms.join(", ")}`);
-  if (parsed.titles.length) lines.push(`TARGET TITLES: ${parsed.titles.join(", ")}`);
-  if (parsed.excludeFirms.length) lines.push(`EXCLUDE firms: ${parsed.excludeFirms.join(", ")}`);
-  if (parsed.excludeTitles.length) lines.push(`EXCLUDE titles: ${parsed.excludeTitles.join(", ")}`);
-  if (parsed.excludeSeniority.length) lines.push(`EXCLUDE seniority: ${parsed.excludeSeniority.join(", ")}`);
+  if (parsed.context) lines.push(`Looking for: ${parsed.context}`);
+  // Cap lists so a 45-firm brief doesn't bloat every extract-chunk prompt.
+  if (parsed.firms.length) lines.push(`Target firms (prefer these, but don't reject nearby matches): ${parsed.firms.slice(0, 30).join(", ")}`);
+  if (parsed.titles.length) lines.push(`Target titles: ${parsed.titles.slice(0, 15).join(", ")}`);
+  if (parsed.excludeFirms.length) lines.push(`Exclude firms: ${parsed.excludeFirms.slice(0, 15).join(", ")}`);
+  if (parsed.excludeTitles.length) lines.push(`Exclude titles: ${parsed.excludeTitles.slice(0, 10).join(", ")}`);
+  if (parsed.excludeSeniority.length) lines.push(`Exclude seniority: ${parsed.excludeSeniority.slice(0, 10).join(", ")}`);
   return lines.join("\n");
 }
 
@@ -392,35 +390,25 @@ async function extractChunk(args: {
     .join("\n\n---\n\n");
 
   const excludeClause = excludeNames.length
-    ? `ALREADY CAPTURED (do NOT return these): ${excludeNames.slice(0, 80).join(", ")}\n`
+    ? `\nAlready captured — skip if you see them: ${excludeNames.slice(0, 60).join(", ")}`
     : "";
+  const hintClause = extractionHint ? `\nContext — this is who we're looking for:\n${extractionHint}` : "";
 
   try {
     const out = await aiJson<{ candidates: Candidate[] }>(
       provider,
-      `You are a lead-qualification filter, not a search engine. Your job is to extract ONLY candidates that pass mandatory filters, with evidence for each.
+      `You extract real people (name + title + company) from LinkedIn-style search snippets.
 
-${extractionHint ? extractionHint + "\n" : ""}${excludeClause}MANDATORY FILTERS — every candidate must pass ALL of these:
-1. FULL NAME: Must have a real first AND last name (skip initials, abbreviations, "John S.").
-2. CURRENT EMPLOYER: Must be verifiable from the search result. ${extractionHint ? "Strongly prefer target firms, but companies mentioned in the brief (including tier-2/tier-3 or \"harder\" labels) also count. Do NOT reject a candidate simply because the company is not a top-tier target." : ""}
-3. CURRENT TITLE: Must be a real title from their profile, not inferred from article context.
-4. LINKEDIN PROFILE: Strongly prefer candidates with a linkedin.com/in/ URL in the search result.
+Return {"candidates": [...]} — each candidate:
+{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/… URL or empty","evidence":"one-line reason from the snippet","confidence":"high"|"medium","source":"URL"}
 
-FAILURE MODES TO AVOID:
-- CLUSTER HARVESTING: If an article mentions 5 people at an event, do NOT extract all 5. Each person must independently pass the filters.
-- KEYWORD CONFLATION: A profile mentioning "AI" at a "bank" is NOT automatically qualified. Check the actual title and actual employer.
-- ARTICLE AUTHORS/COMMENTERS: Someone who wrote an article about AI in banking is NOT a lead unless they ARE the target persona.
-- STALE DATA: If the source is old, the person may have moved on. Lower confidence accordingly.
-
-CONFIDENCE SCORING — be strict:
-- "high": Current employer matches a target AND current title matches a target title AND you have a LinkedIn URL.
-- "medium": Two of the three are verified, or employer/title are close but not exact matches.
-- Do NOT include anyone you'd rate below medium. If you're not at least moderately confident, exclude them entirely.
-
-Return {"candidates": [...]} — ONLY qualified candidates. Each candidate shape:
-{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Specific reason they pass the filters","confidence":"high"|"medium","source":"URL"}
-
-Do NOT pad results. If only 2 people qualify, return 2.`,
+Inclusion rules (be generous, not precious):
+- Include anyone who appears to be a real person with a real role at a real company, based on the snippet.
+- Full first + last name required. Skip "John S.", initials, or placeholder names.
+- Skip article bylines UNLESS the same snippet also shows the author holds the target-persona role at a target-persona company.
+- "high" confidence when name + title + company are clearly visible together (ideally with a LinkedIn URL). "medium" otherwise. Do NOT include people you're unsure are real.
+- Do NOT require a LinkedIn URL; use empty string if not in the snippet.
+- Return as many qualifying candidates as the snippets support — do NOT pre-filter to only "top" matches. Downstream code handles ranking.${hintClause}${excludeClause}`,
       `Search results (${chunk.length}):\n${context}`,
       { maxTokens: 4000, userId, userKeys },
     );
@@ -444,7 +432,8 @@ function applyPostFilters(candidates: Candidate[], parsed: ParsedBrief | null): 
     if (!name.includes(" ")) return false;
     if (name.length < 4) return false;
     if (/^(not specified|unknown|n\/a|company representative|author)/i.test(name)) return false;
-    if (/^(not specified|unknown|n\/a)/i.test(c.title || "")) return false;
+    if (/^(not specified|unknown|n\/a|unknown company)/i.test(c.title || "")) return false;
+    if (/^(not specified|unknown|n\/a)/i.test(c.company || "")) return false;
     return true;
   });
 
@@ -481,17 +470,32 @@ function applyPostFilters(candidates: Candidate[], parsed: ParsedBrief | null): 
     });
   };
 
-  return list.filter((cand) => {
-    const title = (cand.title || "").toLowerCase();
-    if (companyMatches(cand.company, exFirms, exFirmWords)) return false;
-    if (exSeniority.some((s) => title.includes(s))) return false;
-    if (exTitles.some((t) => title.includes(t))) return false;
-    // Only enforce target firm match when the brief ACTUALLY names firms.
-    // Open-ended briefs ("find me 100 AI consultants") have no target list
-    // and should not be hard-filtered to zero.
-    if (targetFirms.length > 0 && !companyMatches(cand.company, targetFirms, targetFirmWords)) return false;
-    return true;
-  });
+  // Only hard-drop explicitly excluded firms / titles / seniority. Target-firm
+  // match is reserved for the RANKING step (below) so briefs that name many
+  // firms don't get silently nuked when the LLM's extracted company string
+  // drifts from the parsed target string.
+  return list
+    .filter((cand) => {
+      const title = (cand.title || "").toLowerCase();
+      if (companyMatches(cand.company, exFirms, exFirmWords)) return false;
+      if (exSeniority.some((s) => title.includes(s))) return false;
+      if (exTitles.some((t) => title.includes(t))) return false;
+      return true;
+    })
+    .map((cand) => {
+      // Stamp a soft "target-firm match" hint on candidates that land on a
+      // named target firm. applyPostFilters returns Candidate, so we can't
+      // add a field — instead we upgrade confidence when applicable so the
+      // sort step naturally floats target-firm people to the top.
+      if (
+        targetFirms.length > 0 &&
+        companyMatches(cand.company, targetFirms, targetFirmWords) &&
+        cand.confidence === "medium"
+      ) {
+        return { ...cand, confidence: "high" as const };
+      }
+      return cand;
+    });
 }
 
 // ──────────────────────────────────────────────────────────────────────────
