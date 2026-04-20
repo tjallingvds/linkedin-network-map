@@ -113,6 +113,12 @@ function saveCustomCols(boardId: string, cols: CustomColumn[]) {
   try { localStorage.setItem(customColsKey(boardId), JSON.stringify(cols)); } catch { /* noop */ }
 }
 
+/** Columns added to the built-in set AFTER the first release of this
+ *  feature. Existing users have a saved config that predates these, so
+ *  we auto-add them on load. Once the user toggles a new column off, it
+ *  gets written into the saved array and stays off from then on. */
+const AUTO_ADD_NEW_BUILTINS = ["linkedin"];
+
 function loadColsConfig(boardId: string, customIds: string[]): string[] {
   const all = [...BUILTIN_COL_IDS, ...customIds];
   if (!boardId) return all;
@@ -123,7 +129,12 @@ function loadColsConfig(boardId: string, customIds: string[]): string[] {
     if (!Array.isArray(arr)) return all;
     const valid = (arr as string[]).filter((id) => all.includes(id));
     const required = REQUIRED_COLS.filter((id) => !valid.includes(id));
-    return [...required, ...valid];
+    // Migrate: append any AUTO_ADD_NEW_BUILTINS the saved config doesn't
+    // know about. Prevents existing boards from hiding freshly-shipped
+    // columns just because their config was written before the column
+    // existed.
+    const migrated = AUTO_ADD_NEW_BUILTINS.filter((id) => !valid.includes(id));
+    return [...required, ...valid, ...migrated];
   } catch { return all; }
 }
 
@@ -546,6 +557,76 @@ function EditableCell({
   );
 }
 
+/** LinkedIn cell — renders the URL as a clickable link when not editing,
+ *  double-click to switch to an input. Keeps the cell inline (no extra
+ *  icon button column) so the table stays dense. */
+function LinkedInCell({
+  value, onSave,
+}: { value: string | null | undefined; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [v, setV] = useState(value ?? "");
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
+  useEffect(() => { setV(value ?? ""); }, [value]);
+  const commit = () => { setEditing(false); if (v !== (value ?? "")) onSave(v); };
+  if (editing) {
+    return (
+      <input
+        ref={ref}
+        className="ed-input"
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") { setV(value ?? ""); setEditing(false); }
+        }}
+        onClick={(e) => e.stopPropagation()}
+        placeholder="linkedin.com/in/..."
+      />
+    );
+  }
+  if (!value) {
+    return (
+      <span
+        className="ed-cell"
+        onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+        style={{ width: "100%", color: "var(--text-mute)" }}
+      >
+        <em>—</em>
+      </span>
+    );
+  }
+  // Shorten for display: strip protocol + trailing slash so the cell
+  // shows "linkedin.com/in/username" rather than a full https URL.
+  const display = value.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
+  return (
+    <span
+      className="ed-cell"
+      onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
+      onClick={(e) => e.stopPropagation()}
+      style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}
+      title="Double-click to edit"
+    >
+      <a
+        href={value}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          color: "var(--accent)",
+          textDecoration: "none",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          flex: 1,
+        }}
+      >
+        {display}
+      </a>
+    </span>
+  );
+}
+
 function StageCell({
   stage, stages = DEFAULT_STAGES, onChange,
 }: {
@@ -653,7 +734,7 @@ function TableView({
       case "email":   return <EditableCell value={p.email}   onSave={(v) => onPatch(p.id, { email: v })} />;
       case "phone":   return <EditableCell value={p.phone}   onSave={(v) => onPatch(p.id, { phone: v })} />;
       case "linkedin": return (
-        <EditableCell
+        <LinkedInCell
           value={p.linkedin}
           onSave={(v) => onPatch(p.id, { linkedin: normalizeLinkedInInput(v) ?? v })}
         />

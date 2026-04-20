@@ -386,7 +386,9 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; min-width: 0; position: relative; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 11px 24px; border-bottom: 1px solid var(--hairline);
+  /* Border removed — user requested the breadcrumb to sit flush with the
+     canvas below. Padding unchanged so the 54px row height is preserved. */
+  padding: 11px 24px;
   min-height: 54px; box-sizing: border-box;
 }
 .crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
@@ -518,7 +520,10 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
      ~30px of empty space above the input. Tightened so the selection
      bar sits flush against the composer. */
   padding: 4px 28px 12px;
-  background: var(--shell);
+  /* Transparent — the parent .app already paints --shell. Stacking a
+     second shell-with-alpha on top made the strip behind the composer
+     look visibly darker than the canvas above it. */
+  background: transparent;
 }
 .composer {
   background: var(--panel); border: 1px solid var(--hairline-strong);

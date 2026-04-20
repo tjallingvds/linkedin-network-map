@@ -706,13 +706,20 @@ export function DiscoverPage() {
     .map((s) => s[0]?.toUpperCase() ?? "")
     .join("");
 
-  // Breadcrumb reflects real state.
+  // Breadcrumb reflects real state. For Discover chats, prefer the chat's
+  // AI-generated title (same string the sidebar shows) over truncating the
+  // user's raw prompt — the title lives in chatList keyed by chatId and
+  // gets updated as soon as the server returns one from /completion.
   const breadcrumb = useMemo(() => {
     if (appMode === "crm") return ["Outreach CRM", crmViewMode === "kanban" ? "Pipeline board" : "All contacts"];
     if (view === "hero") return ["Discover", "New search"];
+    const current = chatId ? chatList.find((c) => c.id === chatId) : undefined;
+    if (current?.title && current.title !== "New search" && current.title !== "New chat") {
+      return ["Discover", current.title];
+    }
     const firstUser = thread.find((m): m is Extract<ThreadEntry, { role: "user" }> => m.role === "user")?.text;
     return ["Discover", firstUser ? firstUser.slice(0, 40) + (firstUser.length > 40 ? "…" : "") : "Untitled"];
-  }, [appMode, crmViewMode, view, thread]);
+  }, [appMode, crmViewMode, view, thread, chatId, chatList]);
 
   return (
     <div className="stage">
