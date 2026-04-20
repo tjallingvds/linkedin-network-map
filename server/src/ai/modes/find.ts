@@ -88,18 +88,24 @@ export async function runFind(
       }
     }
   }
-  const targetCount = Math.min(Math.max(requestedCount || 8, 1), 200);
+  // Internally cap at 40 per request so one HTTP round-trip reliably
+  // finishes inside Railway's request timeout. Users can click "discover
+  // more" to fetch the next batch. "Find 100" with a 5-minute server job
+  // doesn't help if Railway kills the TCP connection at 30 seconds.
+  const requestedTarget = Math.min(Math.max(requestedCount || 8, 1), 200);
+  const targetCount = Math.min(requestedTarget, 40);
 
   // ── 1. Parse the brief into structured filters. Non-fatal if it fails. ──
   const parsed = await parseBrief(provider, fullBrief, userId, userKeys);
   const extractionHint = buildExtractionHint(parsed);
 
-  // ── 2-7. Multi-round discovery loop. Each round runs the parallel
-  //        Tavily → chunked-extraction pipeline on the unseen space.
+  // ── 2-7. Single-round discovery. Multi-round was costing us timeouts
+  //        and yielding diminishing returns. If the user wants more, they
+  //        click "Find more" which runs discover_more with the exclude set. ──
   const collected: Candidate[] = [];
   const seenNames = new Set<string>();
   const seenUrls = new Set<string>();
-  const MAX_ROUNDS = 3;
+  const MAX_ROUNDS = 1;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const needed = targetCount - collected.length;
@@ -368,10 +374,13 @@ Return {"queries": [...]} with exactly ${numQueries} queries.`,
 
   if (filtered.length === 0) return [];
 
-  // Bigger chunks = fewer LLM calls = less fixed-overhead per search.
-  // 80 snippets × ~800 chars avg ≈ 16K tokens input, leaves ample room
-  // for an 8K output dump. Claude / GPT-4o both fit this comfortably.
-  const CHUNK_SIZE = 80;
+  // Smaller chunks run in parallel and each finishes FAST, which matters
+  // more than total-call-count because Railway's HTTP timeout is the
+  // actual constraint. 25 snippets × ~800 chars = 5K input tokens, output
+  // capped at ~2K tokens = ~30s worst-case at 60 tps DeepSeek output.
+  // Parallel Promise.all waits for slowest — several small chunks finish
+  // around the same time as one huge chunk used to.
+  const CHUNK_SIZE = 25;
   const chunks: TavilyResult[][] = [];
   for (let i = 0; i < filtered.length; i += CHUNK_SIZE) {
     chunks.push(filtered.slice(i, i + CHUNK_SIZE));
@@ -428,23 +437,24 @@ async function extractChunk(args: {
   try {
     const out = await aiJson<{ candidates: Candidate[] }>(
       provider,
-      `You extract real people (name + title + company) from web search snippets. Each snippet may mention MULTIPLE people — a team page, a press release, a conference speaker list, a news article naming several execs. PULL ALL OF THEM, not just the first.
+      `You extract real people (name + title + company) from web search snippets. Each snippet may mention MULTIPLE people — a team page, press release, speaker list, or article naming several execs. PULL ALL OF THEM.
 
-Return {"candidates": [...]} — each candidate:
-{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/… URL or empty","evidence":"one-line reason from the snippet","confidence":"high"|"medium","source":"URL"}
+Return {"candidates": [...]} — COMPACT JSON, each candidate:
+{"name":"Full Name","title":"Title","company":"Employer","linkedin":"linkedin.com/in/… or empty","confidence":"high"|"medium"}
 
-Inclusion rules (be generous, not precious):
-- If a snippet lists 6 executives, return 6 candidates. If it lists 20, return 20.
-- Include anyone who appears to be a real person with a real role at a real company, based on the snippet.
-- Full first + last name required. Skip "John S.", initials, or placeholder names.
-- Skip article bylines UNLESS the byline holds the target-persona role at a target-persona company.
-- "high" confidence when name + title + company are clearly visible together (ideally with a LinkedIn URL). "medium" otherwise. Do NOT include people you're unsure are real.
-- Do NOT require a LinkedIn URL; use empty string if not in the snippet.
-- Do NOT pre-filter to only "top" matches. Downstream code handles ranking.${hintClause}${excludeClause}`,
+Rules (be generous, not precious):
+- If a snippet lists 6 people, return 6. If 20, return 20.
+- Full first + last name required; skip initials and "John S."-style.
+- Skip article bylines unless the byline holds the target-persona role at a target-persona company.
+- "high" when name + title + company are all clearly visible together. "medium" otherwise.
+- LinkedIn URL optional (empty string if not in snippet).
+- Do NOT output an "evidence" or "source" field; keep JSON compact.${hintClause}${excludeClause}`,
       `Search results (${chunk.length}):\n${context}`,
-      // 8000 tokens ≈ 80-100 JSON candidate objects, room for chunks that
-      // hit a team page listing 30+ people.
-      { maxTokens: 8000, userId, userKeys },
+      // Output token budget is the wall-clock bottleneck (DeepSeek ~60 tps).
+      // 2500 tokens ≈ 25-30 compact candidate JSON objects per chunk ≈
+      // ~40s at 60 tps. With smaller chunks and parallel extraction the
+      // total wall-clock stays under Railway's request timeout.
+      { maxTokens: 2500, userId, userKeys },
     );
     return (out.candidates ?? []).filter((c) => c && c.name && c.company && c.title);
   } catch (e) {
