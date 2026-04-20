@@ -134,6 +134,47 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     .slice(0, -1) // drop the just-written user message; it's in `parsed.data.content`
     .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
+  // Decide NOW whether this turn should trigger AI title generation. We kick
+  // it off BEFORE runFind so the 30-second Find pipeline doesn't starve the
+  // title LLM call of API connection / rate limit budget — by the time runFind
+  // is done, titlePromise has long since resolved.
+  const userCountRow = await db
+    .selectFrom("messages")
+    .select(({ fn }) => [fn.count<number>("id").as("c")])
+    .where("chat_id", "=", chat.id)
+    .where("role", "=", "user")
+    .executeTakeFirst();
+  const userMsgCount = Number(userCountRow?.c ?? 0);
+  const stillDefault = !chat.title.trim() || chat.title === "New search" || chat.title === "New chat";
+  const shouldGenerateTitle = userMsgCount === 1 && stillDefault;
+
+  // Run title generation in parallel with the mode handler. Brief is
+  // truncated to 400 chars so a 3KB multi-tier brief doesn't drown the
+  // prompt in noise and cause Anthropic (no JSON mode) to truncate.
+  const titlePromise: Promise<string | undefined> = shouldGenerateTitle
+    ? (async () => {
+        const briefForTitle = parsed.data.content.slice(0, 400);
+        try {
+          const t = await aiJson<{ title: string }>(
+            provider,
+            "You write a very short chat title (3-6 words, Title Case, no quotes, no trailing period). Focus on WHAT is being searched (role + company segment), not the count or adjectives.",
+            `User's first message:\n${briefForTitle}\n\nReturn {"title": "<3-6 word title>"}. Examples: "Heads of Growth at Travel Aggregators", "CMOs in Healthcare Discovery", "AI Consultants for Banking".`,
+            { maxTokens: 150, userId: req.user!.id, userKeys },
+          );
+          const candidate = t.title?.trim().replace(/^["']|["']$/g, "").slice(0, 80);
+          if (candidate) {
+            console.log(`[title] generated: "${candidate}"`);
+            return candidate;
+          }
+          console.warn("[title] aiJson returned empty title");
+          return undefined;
+        } catch (err) {
+          console.warn("[title] aiJson failed:", (err as Error).message);
+          return undefined;
+        }
+      })()
+    : Promise.resolve(undefined);
+
   let result: CompletionResult;
   try {
     const userId = req.user!.id;
@@ -186,42 +227,29 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     })
     .execute();
 
-  // On the first user message, rename the chat to something descriptive.
-  // Try the LLM first; fall back to a truncation of the user's brief so
-  // the sidebar title NEVER stays "New search" past the first send.
+  // Resolve the AI title (kicked off BEFORE runFind so Find doesn't starve it).
+  // The outer try/catch is defensive — titlePromise already catches its own
+  // errors and resolves to undefined.
   let newTitle: string | undefined;
-  try {
-    const userCountRow = await db
-      .selectFrom("messages")
-      .select(({ fn }) => [fn.count<number>("id").as("c")])
-      .where("chat_id", "=", chat.id)
-      .where("role", "=", "user")
-      .executeTakeFirst();
-    const userMsgCount = Number(userCountRow?.c ?? 0);
-    const stillDefault = !chat.title.trim() || chat.title === "New search" || chat.title === "New chat";
-    if (userMsgCount === 1 && stillDefault) {
-      let candidate: string | undefined;
-      try {
-        const t = await aiJson<{ title: string }>(
-          provider,
-          "You write a very short chat title (3-6 words, Title Case, no quotes, no trailing period).",
-          `User's first message:\n${parsed.data.content}\n\nReturn {"title": "<3-6 word title>"}.`,
-          { maxTokens: 80, userId: req.user!.id, userKeys },
-        );
-        candidate = t.title?.trim().replace(/^["']|["']$/g, "").slice(0, 80) || undefined;
-      } catch (err) {
-        console.warn("chat title generation failed:", (err as Error).message);
-      }
-      if (!candidate) {
-        // Fallback: first line of the user's brief, trimmed.
-        const firstLine = parsed.data.content.split(/\n/)[0]?.trim() ?? "";
-        candidate = firstLine.slice(0, 80) || "Untitled";
-      }
-      newTitle = candidate;
-      await db.updateTable("chats").set({ title: candidate }).where("id", "=", chat.id).execute();
+  if (shouldGenerateTitle) {
+    let candidate: string | undefined;
+    try {
+      candidate = await titlePromise;
+    } catch (err) {
+      console.warn("[title] promise rejected:", (err as Error).message);
     }
-  } catch (err) {
-    console.warn("chat title logic errored:", (err as Error).message);
+    if (!candidate) {
+      // Deliberate fallback: "Search: <first 60 chars>" so the sidebar row
+      // is visibly DIFFERENT from the raw query. Users correctly called
+      // out that a fallback identical to the query looks like the AI step
+      // never ran.
+      const firstLine = parsed.data.content.split(/\n/)[0]?.trim() ?? "";
+      const truncated = firstLine.slice(0, 60).replace(/\s+\S*$/, "");
+      candidate = truncated ? `Search: ${truncated}` : "Untitled search";
+      console.warn(`[title] using fallback: "${candidate}"`);
+    }
+    newTitle = candidate;
+    await db.updateTable("chats").set({ title: candidate }).where("id", "=", chat.id).execute();
   }
 
   await db.updateTable("chats").set({ updated_at: new Date() as any }).where("id", "=", chat.id).execute();
