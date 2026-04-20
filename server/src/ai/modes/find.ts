@@ -1,18 +1,27 @@
 /**
- * Find mode — web discovery of new prospects matching a natural-language
- * brief. Rebuilt from the legacy "parallel discovery" pipeline that
- * reliably surfaces 100+ qualified leads:
+ * Find mode — 1:1 port of the legacy discovery pipeline
+ * (legacy/js/chat-discovery.js + legacy/js/enricher.js).
  *
- *   1. Parse the brief into structured firms / titles / exclusions (AI).
- *   2. Generate ~1.2× target count specific LinkedIn-flavoured queries.
- *   3. Fire Tavily in parallel — advanced depth, linkedin.com domain first,
- *      open-web fallback per query.
- *   4. Deduplicate URLs, chunk the snippets (40 per chunk), and extract
- *      candidates in parallel with a strict lead-qualification prompt.
- *   5. Clean + dedupe by name, apply brief-based hard filters (target firms
- *      must match, excluded firms must not).
- *   6. If we're short of target, run up to 3 rounds with exclusion lists.
- *   7. Sort high-confidence first, map to Prospect, return.
+ * Legacy flow:
+ *   1. _parseBrief → structured firms/titles/exclusions.
+ *   2. discover() — up to 3 rounds. Each round calls handleDiscovery,
+ *      which calls Enricher.discoverPeople → _parallelDiscovery:
+ *        a. Generate ~1.2× target LinkedIn-flavoured queries (floor 10).
+ *        b. Fire ALL in parallel:
+ *             - advanced Tavily with include_domains:['linkedin.com']
+ *             - if empty: advanced Tavily with "… LinkedIn profile" open web
+ *             - if throws: basic Tavily fallback
+ *        c. Dedupe by URL. Chunk snippets into 40s.
+ *        d. Extract in parallel with the strict lead-qualification prompt.
+ *   3. _filterDiscoveryResults: dedupe-by-name, clean bad entries, apply
+ *      brief filters (target-firm MUST match when firms listed; exclude
+ *      firms/titles/seniority drop).
+ *   4. Filter confidence != 'low', sort high → medium.
+ *
+ * Server-only additions that have no legacy equivalent:
+ *   • clarify gate (server-side UX; legacy had a separate discovery form)
+ *   • priorMessages folding (legacy kept one in-browser chat session)
+ *   • normalizeLinkedInUrl (fixes <a href> on LLM-returned URLs)
  */
 import type { AiProvider, CompletionResult, Prospect, ProspectSignal } from "@app/shared";
 import { env } from "../../env.js";
@@ -22,8 +31,6 @@ import type { UserKeys } from "../user-keys.js";
 
 export interface PriorMessage { role: "user" | "assistant"; content: string }
 
-// ── Intermediate shape the extraction round returns. Narrower than Prospect
-//    because we still need confidence to sort/filter before returning. ──
 interface Candidate {
   name: string;
   title: string;
@@ -59,7 +66,7 @@ export async function runFind(
     .join("\n");
   const fullBrief = priorUserText ? `${priorUserText}\n${userInput}` : userInput;
 
-  // ── Clarify gate (unchanged semantics): require targeting + count. ──
+  // ── Clarify gate (server UX) ─────────────────────────────────────────────
   let requestedCount = extractCount(fullBrief);
   const hasTargeting = looksTargeted(fullBrief);
 
@@ -88,78 +95,56 @@ export async function runFind(
       }
     }
   }
-  // Internally cap at 40 per request so one HTTP round-trip reliably
-  // finishes inside Railway's request timeout. Users can click "discover
-  // more" to fetch the next batch. "Find 100" with a 5-minute server job
-  // doesn't help if Railway kills the TCP connection at 30 seconds.
-  const requestedTarget = Math.min(Math.max(requestedCount || 8, 1), 200);
-  const targetCount = Math.min(requestedTarget, 40);
+  const targetCount = Math.min(Math.max(requestedCount || 8, 1), 200);
 
-  // ── 1. Parse the brief into structured filters. Non-fatal if it fails. ──
+  // ── Legacy: parse brief → build extractCtx ────────────────────────────────
   const parsed = await parseBrief(provider, fullBrief, userId, userKeys);
-  const extractionHint = buildExtractionHint(parsed);
+  const extractCtx = buildExtractCtx(parsed);
 
-  // ── 2-7. Single-round discovery. Multi-round was costing us timeouts
-  //        and yielding diminishing returns. If the user wants more, they
-  //        click "Find more" which runs discover_more with the exclude set. ──
-  const collected: Candidate[] = [];
+  // ── Legacy: multi-round discover loop ────────────────────────────────────
+  const allPeople: Candidate[] = [];
   const seenNames = new Set<string>();
-  const seenUrls = new Set<string>();
-  const MAX_ROUNDS = 1;
+  const MAX_ROUNDS = 3;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const needed = targetCount - collected.length;
-    if (needed <= 0) break;
+    const remaining = targetCount - allPeople.length;
+    if (remaining <= 0) break;
 
-    const roundBrief = round === 0
+    const roundQuery = round === 0
       ? fullBrief
-      : `${fullBrief}\n\n(ROUND ${round + 1}: Find DIFFERENT people. Already captured: ${
-          Array.from(seenNames).slice(0, 60).join(", ")
-        }. Do NOT return these.)`;
+      : `${fullBrief}\n\n(ROUND ${round + 1}: Find DIFFERENT people. Already found: ${
+          allPeople.map((p) => p.name).join(", ")
+        }. Do NOT return these again.)`;
 
-    const got = await parallelDiscovery({
+    const roundPeople = await handleDiscovery({
       provider,
-      brief: roundBrief,
-      extractionHint,
-      targetCount: needed,
-      seenUrls,
-      excludeNames: Array.from(seenNames),
+      query: roundQuery,
+      targetCount: remaining,
+      extractionHint: extractCtx,
+      parsed,
       userId,
       userKeys,
     });
 
-    let added = 0;
-    for (const c of got) {
-      const key = (c.name || "").toLowerCase().trim();
-      if (!key || seenNames.has(key)) continue;
-      seenNames.add(key);
-      collected.push(c);
-      added++;
-      if (collected.length >= targetCount) break;
+    if (roundPeople.length === 0) break;
+
+    let newCount = 0;
+    for (const p of roundPeople) {
+      const key = (p.name || "").toLowerCase().trim();
+      if (key && !seenNames.has(key)) {
+        seenNames.add(key);
+        allPeople.push(p);
+        newCount++;
+      }
     }
 
-    console.log(`[find] round ${round + 1}: got ${got.length} raw, added ${added} new (total ${collected.length}/${targetCount})`);
+    console.log(`[find] round ${round + 1}: ${roundPeople.length} raw, ${newCount} new (total ${allPeople.length}/${targetCount})`);
 
-    // Stop when the query space is exhausted (<3 new) or we've hit the
-    // target. Round 3 is capped by MAX_ROUNDS=2 below because the tail
-    // costs more per lead than it's worth.
-    if (added < 3) break;
-    if (collected.length >= targetCount) break;
+    if (newCount < 3) break;
   }
 
-  // ── Post-filter: dedupe + clean garbage + drop explicitly excluded firms
-  //    / titles / seniority. Target-firm match is applied as a SOFT signal
-  //    that upgrades confidence (so target-firm people sort first) instead
-  //    of a hard filter that rejects everyone when the parser drifts. ──
-  const cleaned = applyPostFilters(collected, parsed);
-  console.log(`[find] collected=${collected.length} cleaned=${cleaned.length}`);
-
-  // ── Sort high-confidence first, then medium. ──
-  const confOrder = { high: 0, medium: 1, low: 2 } as const;
-  cleaned.sort((a, b) => confOrder[a.confidence] - confOrder[b.confidence]);
-
-  // ── Map intermediate candidates to Prospect. ──
-  const prospects: Prospect[] = cleaned.slice(0, targetCount).map((c, i) => {
+  // ── Map Candidate → Prospect ─────────────────────────────────────────────
+  const prospects: Prospect[] = allPeople.slice(0, targetCount).map((c, i) => {
     const signals: ProspectSignal[] = [];
     if (c.evidence) signals.push({ kind: "match", text: c.evidence, when: "" });
     return {
@@ -182,9 +167,9 @@ export async function runFind(
   return { kind: "prospects", summary, prospects };
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Brief parsing
-// ──────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// Legacy: _parseBrief (chat-discovery.js)
+// ═════════════════════════════════════════════════════════════════════════
 
 async function parseBrief(
   provider: AiProvider,
@@ -196,26 +181,28 @@ async function parseBrief(
     const parsed = await aiJson<Partial<ParsedBrief>>(
       provider,
       `You extract structured search parameters from a research brief. Return a JSON object with:
+
 {
-  "firms": ["Company1", "Company2", ...],
-  "titles": ["COO", "Chief Data Officer", ...],
-  "excludeFirms": ["Goldman Sachs", "JPMorgan", ...],
-  "excludeTitles": ["title pattern", ...],
-  "excludeSeniority": ["Analyst", "Associate"],
-  "geography": ["US", "UK", ...],
-  "context": "1-2 sentence summary"
+  "firms": ["Company1", "Company2", ...],        // target companies to search
+  "titles": ["COO", "Chief Data Officer", ...],    // SHORT searchable title keywords (highest priority first)
+  "excludeFirms": ["Goldman Sachs", "JPMorgan", ...],  // companies to EXCLUDE — include common name variations (e.g. both "JPMorgan" and "J.P. Morgan")
+  "excludeTitles": ["title pattern", ...],        // title patterns to exclude
+  "excludeSeniority": ["Analyst", "Associate"],   // seniority levels to exclude
+  "geography": ["US", "UK", ...],                 // target regions
+  "context": "1-2 sentence summary of what kind of person we're looking for"
 }
 
 Rules:
-- Extract EXACT company names mentioned as targets.
-- Companies listed under tiers like "Tier 2 — Strong Fit", "Tier 3 — Interesting But Harder", "lower priority" etc. are STILL TARGETS. Include them in "firms". Only put a company in "excludeFirms" if the brief explicitly says to exclude / avoid / skip / not interested in that company.
-- For titles use SHORT searchable keywords ("COO", "Head of AI") — not verbose ones.
-- List titles in priority order (Tier 1 first).
-- For excludeFirms: include ALL name variations ("JPMorgan", "J.P. Morgan", ...).
-- Capture every firm and every title variant mentioned.
-- If no explicit targets, leave the list empty — don't invent.`,
-      `Brief:\n${brief}\n\nReturn ONLY the JSON object.`,
-      { maxTokens: 1200, userId, userKeys },
+- Extract the EXACT company names mentioned as targets
+- For titles, extract the SHORT searchable keyword (e.g. "COO", "Chief Data Officer", "CTO", "Head of AI") — NOT the full verbose title like "COO of Investment Banking Division"
+- List titles in priority order (Tier 1 first, then Tier 2, etc.)
+- Extract ALL explicit exclusions (companies, titles, seniority levels)
+- For excludeFirms: include ALL name variations (e.g. "JPMorgan", "J.P. Morgan", "JPMorgan Chase", "Morgan Stanley", "Goldman Sachs", "Bank of America", "Barclays", etc.)
+- Be thorough — capture every firm and every title variant mentioned
+
+Return ONLY the JSON object.`,
+      brief,
+      { maxTokens: 1500, userId, userKeys },
     );
     return {
       firms: parsed.firms ?? [],
@@ -232,269 +219,82 @@ Rules:
   }
 }
 
-function buildExtractionHint(parsed: ParsedBrief | null): string {
-  if (!parsed) return "";
-  const lines: string[] = [];
-  if (parsed.context) lines.push(`Looking for: ${parsed.context}`);
-  // Cap lists so a 45-firm brief doesn't bloat every extract-chunk prompt.
-  if (parsed.firms.length) lines.push(`Target firms (prefer these, but don't reject nearby matches): ${parsed.firms.slice(0, 30).join(", ")}`);
-  if (parsed.titles.length) lines.push(`Target titles: ${parsed.titles.slice(0, 15).join(", ")}`);
-  if (parsed.excludeFirms.length) lines.push(`Exclude firms: ${parsed.excludeFirms.slice(0, 15).join(", ")}`);
-  if (parsed.excludeTitles.length) lines.push(`Exclude titles: ${parsed.excludeTitles.slice(0, 10).join(", ")}`);
-  if (parsed.excludeSeniority.length) lines.push(`Exclude seniority: ${parsed.excludeSeniority.slice(0, 10).join(", ")}`);
-  return lines.join("\n");
+/** Matches legacy chat-discovery.js: `extractCtx` built only when firms exist. */
+function buildExtractCtx(parsed: ParsedBrief | null): string {
+  if (!parsed || parsed.firms.length === 0) return "";
+  let ctx = "";
+  if (parsed.context) ctx += `LOOKING FOR: ${parsed.context}\n`;
+  ctx += `TARGET FIRMS (only extract people at these): ${parsed.firms.join(", ")}\n`;
+  if (parsed.titles.length) ctx += `TARGET TITLES: ${parsed.titles.join(", ")}\n`;
+  if (parsed.excludeFirms.length) ctx += `EXCLUDE firms: ${parsed.excludeFirms.join(", ")}\n`;
+  if (parsed.excludeSeniority.length) ctx += `EXCLUDE seniority: ${parsed.excludeSeniority.join(", ")}\n`;
+  return ctx;
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Parallel Tavily discovery
-// ──────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// Legacy: handleDiscovery + _filterDiscoveryResults (chat-discovery.js)
+// ═════════════════════════════════════════════════════════════════════════
 
-async function parallelDiscovery(args: {
+async function handleDiscovery(args: {
   provider: AiProvider;
-  brief: string;
-  extractionHint: string;
+  query: string;
   targetCount: number;
-  seenUrls: Set<string>;
-  excludeNames: string[];
+  extractionHint: string;
+  parsed: ParsedBrief | null;
   userId: string;
   userKeys?: UserKeys;
 }): Promise<Candidate[]> {
-  const { provider, brief, extractionHint, targetCount, seenUrls, excludeNames, userId, userKeys } = args;
+  const { provider, query, targetCount, extractionHint, parsed, userId, userKeys } = args;
 
-  // Tavily is the expensive part (2 credits per advanced call) — the LLM
-  // (DeepSeek) is effectively free. So we minimise Tavily fan-out and
-  // maximise extraction yield per call.
-  //
-  // Each advanced call returns up to 20 URLs. For target=100, 25 queries
-  // × 20 = 500 raw → ~200 usable after dedup/prefilter → 200 snippets × 3-5
-  // names each = 600-1000 candidate names. Comfortably covers the target.
-  // Cap at 35 so an extreme brief doesn't run away.
-  const numQueries = Math.min(35, Math.max(Math.ceil(targetCount * 0.25), 8));
-
-  const queriesObj = await aiJson<{ queries: string[] }>(
+  const raw = await parallelDiscovery({
     provider,
-    `You generate LinkedIn search queries to find specific people. Generate exactly ${numQueries} queries from the research brief below.
-
-${extractionHint ? `STRUCTURED FILTERS (use these exact firms, titles, and exclusions):\n${extractionHint}\n` : ""}
-QUERY FORMAT — prefer queries that name a specific company when the brief lists target firms:
-  GOOD: "COO Houlihan Lokey"
-  GOOD: "Head of AI Evercore OR Moelis OR PJT Partners"
-  GOOD: "Chief Data Officer Lazard"
-  BAD:  "AI leaders investment banking" (too vague — finds thought pieces)
-  BAD:  "mid-market bank COO" (no company — finds articles)
-
-STRATEGY for ${numQueries} queries:
-- Read the full brief to understand WHO we're looking for and WHY.
-- When target firms are listed, pair each firm with 1-2 target titles.
-- Group 2-3 similar firms with OR for broader coverage.
-- Vary the title across queries so you don't search the same role 20 times.
-- When no specific firms are given, vary by sub-specialty, region, and
-  seniority to maximise distinct-profile coverage.
-- Every query self-sufficient, 6-12 words.
-- Do NOT generate queries for any EXCLUDED firms listed in the brief.
-
-Return {"queries": [...]} with exactly ${numQueries} queries.`,
-    brief,
-    { maxTokens: 2000, userId, userKeys },
-  );
-
-  let searchQueries = (queriesObj.queries ?? []).filter((q): q is string => typeof q === "string" && q.trim().length > 0);
-  if (searchQueries.length < 3) {
-    searchQueries = [
-      `${brief.slice(0, 80)} LinkedIn`,
-      `${brief.slice(0, 80)} professionals`,
-      `${brief.slice(0, 80)} profile`,
-    ];
-  }
-
-  // Per-query result cap. Large targets pull 20; small pulls 10.
-  const maxPerQuery = targetCount > 30 ? 20 : 10;
-
-  // Fire all searches in parallel. ONE Tavily call per query — open web,
-  // advanced depth, with "LinkedIn" baked into the query text so profile
-  // pages still rank. We previously did a linkedin.com domain-restricted
-  // call first, but Tavily's LinkedIn coverage is thin (LinkedIn blocks
-  // crawlers), so that call almost always returned empty and then fired
-  // the open-web call anyway — doubling the spend for no gain.
-  const searchPromises = searchQueries.map(async (sq): Promise<TavilyResult[]> => {
-    const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, " ").trim();
-    const withLinkedIn = /linkedin/i.test(cleanQuery) ? cleanQuery : `${cleanQuery} LinkedIn`;
-    try {
-      return await tavilySearch(withLinkedIn, {
-        depth: "advanced",
-        maxResults: maxPerQuery,
-        userId,
-        userKeys,
-      });
-    } catch {
-      return [];
-    }
+    query,
+    targetCount,
+    extractionHint,
+    userId,
+    userKeys,
   });
 
-  const allSearchResults = await Promise.all(searchPromises);
-  const allResults = allSearchResults.flat();
-  if (allResults.length === 0) return [];
+  if (raw.length === 0) return [];
 
-  // Dedup by URL across this round AND across prior rounds.
-  const urlDeduped: TavilyResult[] = [];
-  for (const r of allResults) {
-    const u = (r.url ?? "").toLowerCase();
-    if (!u || seenUrls.has(u)) continue;
-    seenUrls.add(u);
-    urlDeduped.push(r);
-  }
+  // Legacy _filterDiscoveryResults
+  let people = raw;
+  people = dedupByName(people);
+  people = cleanBadEntries(people);
+  people = applyBriefFilters(people, parsed);
 
-  // Dedup by content fingerprint — press releases mirrored across five
-  // sites read nearly identically in Tavily's snippet. No point paying
-  // five LLM calls to extract the same three names.
-  const contentSeen = new Set<string>();
-  const contentDeduped: TavilyResult[] = [];
-  for (const r of urlDeduped) {
-    const fp = (r.content ?? "").trim().slice(0, 300).toLowerCase().replace(/\s+/g, " ");
-    if (!fp) continue;
-    if (contentSeen.has(fp)) continue;
-    contentSeen.add(fp);
-    contentDeduped.push(r);
-  }
+  // Legacy handleDiscovery tail: drop low confidence, sort high→medium.
+  people = people.filter((p) => p.confidence !== "low");
+  const confOrder: Record<string, number> = { high: 0, medium: 1 };
+  people.sort((a, b) => (confOrder[a.confidence] ?? 1) - (confOrder[b.confidence] ?? 1));
 
-  // Local pre-filter — drop snippets the LLM would reject anyway, BEFORE
-  // spending tokens on them. Two cheap heuristics cover most junk:
-  //   (a) content is too short to describe anyone (<120 chars).
-  //   (b) content contains no "FirstName LastName"-looking pattern, so
-  //       there's nobody to extract.
-  const NAME_PATTERN = /\b[A-Z][a-z]+(?:-[A-Z][a-z]+)?\s+[A-Z][a-z]+(?:-[A-Z][a-z]+)?\b/;
-  const filtered = contentDeduped.filter((r) => {
-    const c = r.content ?? "";
-    if (c.length < 120) return false;
-    if (!NAME_PATTERN.test(c)) return false;
-    return true;
-  });
+  return people;
+}
 
-  console.log(`[find] tavily=${allResults.length} url-deduped=${urlDeduped.length} content-deduped=${contentDeduped.length} prefiltered=${filtered.length}`);
-
-  if (filtered.length === 0) return [];
-
-  // Smaller chunks run in parallel and each finishes FAST, which matters
-  // more than total-call-count because Railway's HTTP timeout is the
-  // actual constraint. 25 snippets × ~800 chars = 5K input tokens, output
-  // capped at ~2K tokens = ~30s worst-case at 60 tps DeepSeek output.
-  // Parallel Promise.all waits for slowest — several small chunks finish
-  // around the same time as one huge chunk used to.
-  const CHUNK_SIZE = 25;
-  const chunks: TavilyResult[][] = [];
-  for (let i = 0; i < filtered.length; i += CHUNK_SIZE) {
-    chunks.push(filtered.slice(i, i + CHUNK_SIZE));
-  }
-
-  const extractionPromises = chunks.map((chunk) =>
-    extractChunk({ provider, chunk, extractionHint, excludeNames, userId, userKeys }),
-  );
-  const extractedChunks = await Promise.all(extractionPromises);
-  const people = extractedChunks.flat();
-
-  // Dedupe by name within this round — later rounds dedupe against the
-  // global seenNames set.
+function dedupByName(people: Candidate[]): Candidate[] {
   const seen = new Set<string>();
   return people.filter((p) => {
-    const key = (p.name || "").toLowerCase().trim();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// Lead-qualification extraction per chunk
-// ──────────────────────────────────────────────────────────────────────────
-
-async function extractChunk(args: {
-  provider: AiProvider;
-  chunk: TavilyResult[];
-  extractionHint: string;
-  excludeNames: string[];
-  userId: string;
-  userKeys?: UserKeys;
-}): Promise<Candidate[]> {
-  const { provider, chunk, extractionHint, excludeNames, userId, userKeys } = args;
-  // Pass Tavily content VERBATIM — no slicing. Upstream pre-filter + content-
-  // fingerprint dedup already dropped junk (404s, boilerplate, press-release
-  // mirrors), so every char that reaches us is something we paid Tavily for
-  // and want the LLM to see. Capped at 4000/snippet only as a runaway guard
-  // (normal Tavily advanced snippets are 300-1500 chars).
-  const context = chunk
-    .map((r) => {
-      const c = (r.content ?? "").trim();
-      const body = c.length > 4000 ? c.slice(0, 4000) + " …[truncated]" : c;
-      return `[${r.title}] (${r.url})\n${body}`;
-    })
-    .join("\n\n---\n\n");
-
-  const excludeClause = excludeNames.length
-    ? `\nAlready captured — skip if you see them: ${excludeNames.slice(0, 60).join(", ")}`
-    : "";
-  const hintClause = extractionHint ? `\nContext — this is who we're looking for:\n${extractionHint}` : "";
-
-  try {
-    const out = await aiJson<{ candidates: Candidate[] }>(
-      provider,
-      `You extract real people (name + title + company) from web search snippets. Each snippet may mention MULTIPLE people — a team page, press release, speaker list, or article naming several execs. PULL ALL OF THEM.
-
-Return {"candidates": [...]} — COMPACT JSON, each candidate:
-{"name":"Full Name","title":"Title","company":"Employer","linkedin":"linkedin.com/in/… or empty","confidence":"high"|"medium"}
-
-Rules (be generous, not precious):
-- If a snippet lists 6 people, return 6. If 20, return 20.
-- Full first + last name required; skip initials and "John S."-style.
-- Skip article bylines unless the byline holds the target-persona role at a target-persona company.
-- "high" when name + title + company are all clearly visible together. "medium" otherwise.
-- LinkedIn URL optional (empty string if not in snippet).
-- Do NOT output an "evidence" or "source" field; keep JSON compact.${hintClause}${excludeClause}`,
-      `Search results (${chunk.length}):\n${context}`,
-      // Output token budget is the wall-clock bottleneck (DeepSeek ~60 tps).
-      // 2500 tokens ≈ 25-30 compact candidate JSON objects per chunk ≈
-      // ~40s at 60 tps. With smaller chunks and parallel extraction the
-      // total wall-clock stays under Railway's request timeout.
-      { maxTokens: 2500, userId, userKeys },
-    );
-    return (out.candidates ?? []).filter((c) => c && c.name && c.company && c.title);
-  } catch (e) {
-    console.warn("extractChunk failed:", (e as Error).message);
-    return [];
-  }
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// Post-filter pipeline
-// ──────────────────────────────────────────────────────────────────────────
-
-function applyPostFilters(candidates: Candidate[], parsed: ParsedBrief | null): Candidate[] {
-  let list = candidates.slice();
-
-  // Clean garbage entries — single-word names, "unknown", etc.
-  list = list.filter((c) => {
-    const name = (c.name || "").trim();
-    if (!name.includes(" ")) return false;
-    if (name.length < 4) return false;
-    if (/^(not specified|unknown|n\/a|company representative|author)/i.test(name)) return false;
-    if (/^(not specified|unknown|n\/a|unknown company)/i.test(c.title || "")) return false;
-    if (/^(not specified|unknown|n\/a)/i.test(c.company || "")) return false;
-    return true;
-  });
-
-  // Drop explicit low-confidence stragglers (extractChunk shouldn't return
-  // these but be defensive).
-  list = list.filter((c) => c.confidence !== "low");
-
-  // Dedupe by name (case-insensitive).
-  const seen = new Set<string>();
-  list = list.filter((c) => {
-    const key = c.name.toLowerCase().trim().replace(/\s+/g, " ");
+    if (!p.name) return false;
+    const key = p.name.toLowerCase().trim().replace(/\s+/g, " ");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
 
-  if (!parsed) return list;
+function cleanBadEntries(people: Candidate[]): Candidate[] {
+  return people.filter((p) => {
+    const name = (p.name || "").trim();
+    if (!name.includes(" ")) return false;
+    if (name.length < 4) return false;
+    if (/^(not specified|unknown|n\/a|company representative|author)/i.test(name)) return false;
+    if (/^(not specified|unknown|n\/a)/i.test(p.title || "")) return false;
+    return true;
+  });
+}
+
+function applyBriefFilters(people: Candidate[], parsed: ParsedBrief | null): Candidate[] {
+  if (!parsed) return people;
 
   const exFirms = parsed.excludeFirms.map((f) => f.toLowerCase());
   const exTitles = parsed.excludeTitles.map((t) => t.toLowerCase());
@@ -504,60 +304,233 @@ function applyPostFilters(candidates: Candidate[], parsed: ParsedBrief | null): 
   const exFirmWords = exFirms.map((f) => f.split(/[\s,&]+/).filter((w) => w.length > 2));
   const targetFirmWords = targetFirms.map((f) => f.split(/[\s,&]+/).filter((w) => w.length > 2));
 
-  const companyMatches = (company: string, list: string[], words: string[][]): boolean => {
+  const companyMatchesExcluded = (company: string): boolean => {
     if (!company) return false;
     const c = company.toLowerCase();
-    if (list.some((x) => c.includes(x) || x.includes(c))) return true;
-    return words.some((ws) => {
-      const matches = ws.filter((w) => c.includes(w));
-      return matches.length >= 2 || (ws.length === 1 && matches.length === 1);
+    if (exFirms.some((ef) => c.includes(ef) || ef.includes(c))) return true;
+    return exFirmWords.some((words) => {
+      const matches = words.filter((w) => c.includes(w));
+      return matches.length >= 2 || (words.length === 1 && matches.length === 1);
     });
   };
 
-  // Only hard-drop explicitly excluded firms / titles / seniority. Target-firm
-  // match is reserved for the RANKING step (below) so briefs that name many
-  // firms don't get silently nuked when the LLM's extracted company string
-  // drifts from the parsed target string.
-  return list
-    .filter((cand) => {
-      const title = (cand.title || "").toLowerCase();
-      if (companyMatches(cand.company, exFirms, exFirmWords)) return false;
-      if (exSeniority.some((s) => title.includes(s))) return false;
-      if (exTitles.some((t) => title.includes(t))) return false;
-      return true;
-    })
-    .map((cand) => {
-      // Stamp a soft "target-firm match" hint on candidates that land on a
-      // named target firm. applyPostFilters returns Candidate, so we can't
-      // add a field — instead we upgrade confidence when applicable so the
-      // sort step naturally floats target-firm people to the top.
-      if (
-        targetFirms.length > 0 &&
-        companyMatches(cand.company, targetFirms, targetFirmWords) &&
-        cand.confidence === "medium"
-      ) {
-        return { ...cand, confidence: "high" as const };
-      }
-      return cand;
+  const companyMatchesTarget = (company: string): boolean => {
+    if (!company) return false;
+    const c = company.toLowerCase();
+    if (targetFirms.some((tf) => c.includes(tf) || tf.includes(c))) return true;
+    return targetFirmWords.some((words) => {
+      const matches = words.filter((w) => c.includes(w));
+      return matches.length >= 2 || (words.length === 1 && matches.length === 1);
     });
+  };
+
+  const before = people.length;
+  const filtered = people.filter((p) => {
+    const title = (p.title || "").toLowerCase();
+    if (companyMatchesExcluded(p.company)) return false;
+    if (exSeniority.some((es) => title.includes(es))) return false;
+    if (exTitles.some((et) => title.includes(et))) return false;
+    if (targetFirms.length > 0 && !companyMatchesTarget(p.company)) return false;
+    return true;
+  });
+  console.log(`[find] brief filter: ${before} → ${filtered.length}`);
+  return filtered;
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Helpers (unchanged)
-// ──────────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// Legacy: Enricher._parallelDiscovery (enricher.js)
+// ═════════════════════════════════════════════════════════════════════════
 
-/** Normalise LinkedIn URLs returned by the LLM so <a href> actually works.
- *  The extract prompt says "linkedin.com/in/ URL or empty"; in practice
- *  models often return "linkedin.com/in/foo" with no protocol, which the
- *  browser treats as a relative path. Prepend https:// when missing. */
+async function parallelDiscovery(args: {
+  provider: AiProvider;
+  query: string;
+  targetCount: number;
+  extractionHint: string;
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<Candidate[]> {
+  const { provider, query, targetCount, extractionHint, userId, userKeys } = args;
+
+  // Legacy: max(ceil(targetCount * 1.2), 10)
+  const numQueries = Math.max(Math.ceil(targetCount * 1.2), 10);
+
+  const queriesObj = await aiJson<{ queries: string[] }>(
+    provider,
+    `You generate LinkedIn search queries to find specific people. Generate exactly ${numQueries} queries from the research brief below.
+
+${extractionHint ? `STRUCTURED FILTERS (use these exact firms, titles, and exclusions):\n${extractionHint}\n` : ""}
+QUERY FORMAT — every query MUST name a specific company from the brief:
+  GOOD: "COO Houlihan Lokey"
+  GOOD: "Head of AI Evercore OR Moelis OR PJT Partners"
+  GOOD: "Chief Data Officer Lazard"
+  GOOD: "Raymond James Head of AI strategy"
+  BAD:  "AI leaders investment banking" (no company name — finds articles, not people)
+  BAD:  "mid-market bank COO" (no company name — too vague)
+  BAD:  "digital transformation financial services" (finds thought leadership, not profiles)
+
+STRATEGY for ${numQueries} queries:
+- Read the full brief to understand WHO we're looking for and WHY
+- Pair each target firm with 1-2 target titles from the brief
+- Group 2-3 similar firms with OR for broader coverage
+- Every query must contain at least one specific company name from the brief
+- Vary the title across queries so you don't search the same role 20 times
+- Do NOT generate queries for any EXCLUDED firms listed in the brief or filters above
+
+Return {"queries": [...]} — exactly ${numQueries} queries.`,
+    query,
+    { maxTokens: 2000, userId, userKeys },
+  );
+
+  let searchQueries = (queriesObj.queries ?? []).filter(
+    (q): q is string => typeof q === "string" && q.trim().length > 0,
+  );
+  if (searchQueries.length < 3) {
+    searchQueries = [
+      `${query.slice(0, 80)} LinkedIn`,
+      `${query.slice(0, 80)} professionals`,
+    ];
+  }
+
+  // Legacy: maxPerQuery = targetCount > 30 ? 20 : 10
+  const maxPerQuery = targetCount > 30 ? 20 : 10;
+
+  const searchPromises = searchQueries.map(async (sq): Promise<TavilyResult[]> => {
+    const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, " ").trim();
+    try {
+      // 1. Advanced + include_domains: linkedin.com
+      const linked = await tavilySearch(cleanQuery, {
+        depth: "advanced",
+        maxResults: maxPerQuery,
+        includeDomains: ["linkedin.com"],
+        userId,
+        userKeys,
+      });
+      if (linked.length > 0) return linked;
+      // 2. Advanced + "LinkedIn profile" suffix, open web
+      return await tavilySearch(`${cleanQuery} LinkedIn profile`, {
+        depth: "advanced",
+        maxResults: maxPerQuery,
+        userId,
+        userKeys,
+      });
+    } catch {
+      // 3. Basic fallback
+      try {
+        return await tavilySearch(cleanQuery, {
+          depth: "basic",
+          maxResults: 10,
+          userId,
+          userKeys,
+        });
+      } catch {
+        return [];
+      }
+    }
+  });
+
+  const allSearchResults = await Promise.all(searchPromises);
+  const allResults = allSearchResults.flat();
+  if (allResults.length === 0) return [];
+
+  // Dedupe by URL
+  const seenUrls = new Set<string>();
+  const unique: TavilyResult[] = [];
+  for (const r of allResults) {
+    if (!r.url || seenUrls.has(r.url)) continue;
+    seenUrls.add(r.url);
+    unique.push(r);
+  }
+
+  console.log(`[find] parallel: ${searchQueries.length} queries → ${allResults.length} raw → ${unique.length} unique URLs`);
+
+  // Legacy CHUNK_SIZE = 40
+  const CHUNK_SIZE = 40;
+  const chunks: TavilyResult[][] = [];
+  for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
+    chunks.push(unique.slice(i, i + CHUNK_SIZE));
+  }
+
+  const extractionPromises = chunks.map((chunk) =>
+    extractChunk({ provider, chunk, extractionHint, userId, userKeys }),
+  );
+  const extractedChunks = await Promise.all(extractionPromises);
+  const allPeople = extractedChunks.flat();
+
+  // Dedupe by name (parallelDiscovery's own dedup — handleDiscovery will
+  // dedupe again after the filter pipeline)
+  const nameSet = new Set<string>();
+  return allPeople.filter((p) => {
+    if (!p.name) return false;
+    const key = p.name.toLowerCase().trim();
+    if (nameSet.has(key)) return false;
+    nameSet.add(key);
+    return true;
+  });
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Legacy: extraction prompt (enricher.js _parallelDiscovery chunk prompt)
+// ═════════════════════════════════════════════════════════════════════════
+
+async function extractChunk(args: {
+  provider: AiProvider;
+  chunk: TavilyResult[];
+  extractionHint: string;
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<Candidate[]> {
+  const { provider, chunk, extractionHint, userId, userKeys } = args;
+  // Legacy passed r.content verbatim (no slicing).
+  const context = chunk
+    .map((r) => `[${r.title}] (${r.url})\n${r.content ?? ""}`)
+    .join("\n\n---\n\n");
+
+  try {
+    const out = await aiJson<{ candidates: Candidate[] }>(
+      provider,
+      `You are a lead qualification filter, not a search engine. Your job is to extract ONLY candidates that pass mandatory filters, with evidence for each.
+
+${extractionHint ? extractionHint + "\n" : ""}MANDATORY FILTERS — every candidate must pass ALL of these:
+1. FULL NAME: Must have a real first AND last name (skip initials, abbreviations, "John S.")
+2. CURRENT EMPLOYER: Must be verifiable from the search result. ${extractionHint ? "Must match a TARGET FIRM listed above." : ""}
+3. CURRENT TITLE: Must be a real title from their LinkedIn profile, not inferred from article context
+4. LINKEDIN PROFILE: Strongly prefer candidates with a linkedin.com/in/ URL in the search result
+
+FAILURE MODES TO AVOID:
+- CLUSTER HARVESTING: If an article mentions 5 people at an event, do NOT extract all 5. Each person must independently pass the filters.
+- KEYWORD CONFLATION: A profile mentioning "AI" at a "bank" is NOT automatically qualified. Check the actual title and actual employer.
+- ARTICLE AUTHORS/COMMENTERS: Someone who wrote an article about AI in banking is NOT a lead. Only extract people who ARE the target persona, not people who WRITE ABOUT the target persona.
+- STALE DATA: If the source is old, the person may have moved on. Note uncertainty.
+
+CONFIDENCE SCORING — be strict:
+- "high": Current employer is a target firm AND current title matches a target title AND you have a LinkedIn URL. All three verified.
+- "medium": Two of the three are verified, or employer/title are close but not exact matches.
+- Do NOT include anyone you'd rate below medium. If you're not at least moderately confident they match, exclude them entirely.
+
+Return {"candidates": [...]} of ONLY qualified candidates (high or medium confidence). Each candidate:
+{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Specific reason they pass the filters","confidence":"high"|"medium","source":"URL"}
+
+Do NOT pad results. If only 2 people qualify, return 2.`,
+      context,
+      { maxTokens: 4000, userId, userKeys },
+    );
+    return (out.candidates ?? []).filter((c) => c && c.name && c.company && c.title);
+  } catch (e) {
+    console.warn("extractChunk failed:", (e as Error).message);
+    return [];
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Helpers (non-legacy: clarify gate heuristics + LinkedIn URL normalization)
+// ═════════════════════════════════════════════════════════════════════════
+
 function normalizeLinkedInUrl(url?: string): string | undefined {
   if (!url) return undefined;
   const trimmed = url.trim();
   if (!trimmed) return undefined;
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   if (/^(www\.)?linkedin\.com\//i.test(trimmed)) return `https://${trimmed.replace(/^www\./i, "")}`;
-  if (/^linkedin\.com\//i.test(trimmed)) return `https://${trimmed}`;
-  // "/in/foo" → full URL; bare "in/foo" too.
   if (/^\/?in\//i.test(trimmed)) return `https://linkedin.com/${trimmed.replace(/^\//, "")}`;
   return undefined;
 }
