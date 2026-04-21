@@ -3,7 +3,7 @@
  * enrichment lives in the CRM (per-board "Enrich with Apollo" button).
  * Outreach drafts are triggered from the selection bar.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CompletionResult, CrmBoard, OutreachDraft, Prospect } from "@app/shared";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
@@ -178,6 +178,16 @@ export function DiscoverPage() {
   const [view, setView] = useState<"hero" | "thread">("hero");
   const [thread, setThread] = useState<ThreadEntry[]>([]);
   const [draft, setDraft] = useState("");
+  const draftRef = useRef<HTMLTextAreaElement>(null);
+  // Auto-size the composer textarea: height tracks scrollHeight so the box
+  // grows upward as the user adds lines and all text stays visible. Capped
+  // at ~12 lines so a pathological paste doesn't eat the viewport.
+  useLayoutEffect(() => {
+    const el = draftRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+  }, [draft]);
   const [streaming, setStreaming] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openProspect, setOpenProspect] = useState<Prospect | null>(null);
@@ -927,6 +937,7 @@ export function DiscoverPage() {
                     <IconSparkle size={16} style={{ color: "var(--accent)" }} />
                   </div>
                   <textarea
+                    ref={draftRef}
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     onKeyDown={(e) => {
