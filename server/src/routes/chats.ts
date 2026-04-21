@@ -168,8 +168,12 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     .where("role", "=", "user")
     .executeTakeFirst();
   const userMsgCount = Number(userCountRow?.c ?? 0);
-  const stillDefault = !chat.title.trim() || chat.title === "New search" || chat.title === "New chat";
-  const shouldGenerateTitle = userMsgCount === 1 && stillDefault;
+  // Always generate an AI title on the first user message. The client seeds
+  // the chat row with a truncated copy of the user's text (so the sidebar
+  // has *something* before the LLM returns) — if we also gated on
+  // "title === New search", we'd never run the AI title pass for any chat
+  // created normally via ensureChatId. Just trust userMsgCount.
+  const shouldGenerateTitle = userMsgCount === 1;
 
   // Run title generation in parallel with the mode handler. Brief is
   // truncated to 400 chars so a 3KB multi-tier brief doesn't drown the

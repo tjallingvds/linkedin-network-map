@@ -73,8 +73,14 @@ export async function runFind(
   // ── Clarify gate (server UX) ─────────────────────────────────────────────
   let requestedCount = extractCount(fullBrief);
   const hasTargeting = looksTargeted(fullBrief);
+  // Specific-person lookups ("find someone named X at Y", "identify Bert Shannon
+  // at Morgan Stanley") don't need a count — they're a 1-person search. Skip
+  // clarify entirely so the user isn't bounced through "how many?" / "what
+  // role?" prompts when they've already named the person.
+  const isNameLookup = looksLikeSpecificPersonLookup(fullBrief);
+  if (isNameLookup && !requestedCount) requestedCount = 1;
 
-  if (!requestedCount || !hasTargeting) {
+  if ((!requestedCount || !hasTargeting) && !isNameLookup) {
     try {
       const clarify = await aiJson<{ ready: boolean; question?: string; count?: number }>(
         provider,
@@ -561,6 +567,15 @@ function extractCount(s: string): number {
   if (!m) return 0;
   const n = parseInt(m[1]!, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** True when the brief clearly names a specific person we should identify
+ *  (first+last name plus "find/identify/who is/named ..." phrasing). These
+ *  are 1-person lookups — bypass the count/targeting clarify loop. */
+function looksLikeSpecificPersonLookup(s: string): boolean {
+  if (!/\b[A-Z][a-z]+\s+[A-Z][a-zA-Z]+\b/.test(s)) return false;
+  const hay = s.toLowerCase();
+  return /(find|identify|locate|who\s+is|looking\s+for|search\s+for|look\s+up|someone\s+(?:named|called)|person\s+(?:named|called)|name(?:d)?\s+(?:like|similar\s+to)|similar\s+to)/.test(hay);
 }
 
 function looksTargeted(s: string): boolean {
