@@ -14,6 +14,7 @@
  */
 import { Router } from "express";
 import { z } from "zod";
+import { sql } from "kysely";
 import { db } from "../db/index.js";
 import type { AuthedRequest } from "../auth/session.js";
 import { apolloMatchPerson, apolloConfigured } from "../integrations/apollo.js";
@@ -473,6 +474,15 @@ router.post("/boards/:boardId/background", async (req: AuthedRequest, res) => {
   const board = await ensureBoard(req.user!.id, req.params.boardId);
   if (!board) return res.status(404).json({ error: "board_not_found" });
 
+  // Belt-and-suspenders: guarantee the background column exists even if the
+  // migration never ran (shouldn't happen, but the user hit a case where
+  // backgrounds weren't persisting — this makes the endpoint self-healing).
+  try {
+    await sql`ALTER TABLE crm_contacts ADD COLUMN IF NOT EXISTS background TEXT`.execute(db);
+  } catch (err) {
+    console.warn("[background] ensure-column failed:", (err as Error).message);
+  }
+
   const rows = await db
     .selectFrom("crm_contacts")
     .selectAll()
@@ -524,13 +534,25 @@ router.post("/boards/:boardId/background", async (req: AuthedRequest, res) => {
 
     if (!summary) { skipped++; continue; }
 
-    await db
-      .updateTable("crm_contacts")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .set({ background: summary, updated_at: new Date() as any })
-      .where("id", "=", r.id)
-      .execute();
-    filled++;
+    try {
+      const writeResult = await db
+        .updateTable("crm_contacts")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .set({ background: summary, updated_at: new Date() as any })
+        .where("id", "=", r.id)
+        .execute();
+      const rowsAffected = Number(writeResult[0]?.numUpdatedRows ?? 0);
+      if (rowsAffected === 0) {
+        console.warn(`[background] 0 rows updated for ${r.name} (id=${r.id}) — background not persisted`);
+        skipped++;
+        continue;
+      }
+      console.log(`[background] saved for ${r.name} (${summary.length} chars)`);
+      filled++;
+    } catch (err) {
+      console.error(`[background] DB write failed for ${r.name}:`, (err as Error).message);
+      skipped++;
+    }
   }
 
   res.json({ filled, skipped, alreadyHad, total: rows.length });
