@@ -455,8 +455,17 @@ export function DiscoverPage() {
       /^\s*(?:no|nope|not (?:these|right|good|it)|actually|wait)\b/i.test(text) ||
       /\b(?:start over|redo|try again|different (?:search|prospects)|new search)\b/i.test(text);
 
+    // Deep research intent: "tell me everything about X", "background on X",
+    // "deep dive on X". Must route to FIND (not discover_more — which would
+    // just return more people — and not followup — which would just filter
+    // the existing list). Find has a dedicated person-background branch that
+    // pulls non-obvious facts with citations.
+    const wantsPersonBackground =
+      /\b(?:background\s+(?:on|for|info)|deep[-\s]?dive\s+(?:on|into)|research\s+(?:on|about)|tell\s+me\s+(?:everything|more|all)\s+about|what\s+(?:do\s+you\s+know|can\s+you\s+find)\s+about|everything\s+(?:you\s+can\s+find\s+)?about|recent\s+(?:posts?|talks?|interviews?))\b/i.test(text);
+
     let mode: "find" | "network" | "followup" | "discover_more";
-    if (havePriorResult && wantsNewSearch && lastBrief) mode = "discover_more";
+    if (wantsPersonBackground) mode = "find";
+    else if (havePriorResult && wantsNewSearch && lastBrief) mode = "discover_more";
     else if (havePriorResult) mode = "followup";
     else mode = searchMode;
 

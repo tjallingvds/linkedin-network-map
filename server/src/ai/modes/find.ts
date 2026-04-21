@@ -29,6 +29,7 @@ import { aiJson } from "../json.js";
 import { tavilySearch, type TavilyResult } from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
 import { looksLikeDecisionMakerMap, runDecisionMakers } from "./decision-makers.js";
+import { looksLikePersonBackground, runPersonBackground } from "./person-background.js";
 
 export interface PriorMessage { role: "user" | "assistant"; content: string }
 
@@ -70,6 +71,19 @@ export async function runFind(
     .map((m) => m.content)
     .join("\n");
   const fullBrief = priorUserText ? `${priorUserText}\n${userInput}` : userInput;
+
+  // ── Person-background fast path ─────────────────────────────────────────
+  // "Tell me everything about Francois Buet-Golfouse at Barclays" — pull
+  // non-obvious colour (posts, talks, papers, interviews) with citations.
+  // Checked BEFORE decision-makers + name-lookup because those two would
+  // respectively try to map a buying committee or return a ranked "who is
+  // this?" list, neither of which is what the user asked for.
+  if (looksLikePersonBackground(fullBrief)) {
+    const bg = await runPersonBackground({ provider, brief: fullBrief, userId, userKeys });
+    if (bg) return bg;
+    // Fall through only if target extraction failed (pronoun with no
+    // antecedent anywhere in the conversation).
+  }
 
   // ── Decision-maker / buying-committee fast path ─────────────────────────
   // "I want to sell X to Morgan Stanley, map the decision makers and how
