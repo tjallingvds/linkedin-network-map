@@ -441,9 +441,19 @@ export function DiscoverPage() {
     setStreaming(true);
     const isFirstMessage = thread.length === 0;
     const havePriorResult = lastProspects.length > 0;
-    // If the user says things like "find more", "search the web", "on the
-    // internet" after a result, they mean a fresh search — not a filter.
-    const wantsNewSearch = /\b(more|another|additional|further|elsewhere|on the (web|internet)|search the web|search the internet)\b/i.test(text);
+    // Followup vs fresh-search routing. Trigger a fresh search whenever the
+    // message reads as a re-ask, not a filter. Matches:
+    //   - "find more" / "another" / "on the web" (explicit "more" intent)
+    //   - "no …" / "not these" / "that's wrong" / "different" (rejection)
+    //   - "find me 100" / "get me 50 people" (count-driven re-ask —
+    //     users keep bumping the count when the first result under-delivered;
+    //     filtering a 1-person list never gives them more)
+    //   - "start over" / "redo" / "try again"
+    const wantsNewSearch =
+      /\b(more|another|additional|further|elsewhere|on the (web|internet)|search the web|search the internet)\b/i.test(text) ||
+      /\b(?:find|get|give|show|need|want)\s+(?:me\s+)?(?:up\s+to\s+)?\d{1,3}\b/i.test(text) ||
+      /^\s*(?:no|nope|not (?:these|right|good|it)|actually|wait)\b/i.test(text) ||
+      /\b(?:start over|redo|try again|different (?:search|prospects)|new search)\b/i.test(text);
 
     let mode: "find" | "network" | "followup" | "discover_more";
     if (havePriorResult && wantsNewSearch && lastBrief) mode = "discover_more";

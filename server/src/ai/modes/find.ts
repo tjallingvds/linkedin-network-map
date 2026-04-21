@@ -109,28 +109,47 @@ export async function runFind(
     // Fall through to the generic pipeline only if name extraction failed.
   }
 
+  // "all / everyone / every" with no explicit number means "a big list, pick a
+  // sensible default" — NOT count=1. Past regression: the clarify LLM was
+  // returning {ready:true, count:1} for briefs like "find me all people at X"
+  // and the user got a single prospect back. Default to 50 when the user said
+  // "all" and also skip the clarify round-trip so they don't get quizzed.
+  const saysAll = /\b(?:all|every(?:one|body)?|each)\s+(?:of\s+the\s+)?(?:people|person|employees|contacts|prospects|staff|folks)?\b/i.test(fullBrief);
+  if (saysAll && !requestedCount) {
+    requestedCount = 50;
+  }
+
   if ((!requestedCount || !hasTargeting) && !isNameLookup) {
     try {
       const clarify = await aiJson<{ ready: boolean; question?: string; count?: number }>(
         provider,
         "You screen a prospecting brief before running a web search. " +
         "Require (a) some targeting (role/seniority/industry/company/region) AND (b) a specific COUNT of how many prospects the user wants. " +
-        "If a count is missing, ask 'How many would you like? e.g. 10, 25, 50.' " +
+        "If a count is missing, ask 'How many would you like? e.g. 25, 50, 100, 200.' — do NOT invent a count. " +
+        "NEVER return count=1 unless the user literally typed '1' or 'one' — 'find me people' without a number means they want MANY, not one. " +
         "If targeting is missing, ask ONE concise question about what's missing. " +
         "The brief includes the ENTIRE conversation so a bare number like \"100\" on its own line IS a count answer to an earlier clarify.",
-        `Brief (oldest → newest):\n${fullBrief}\n\nReturn {"ready": true, "count": <integer>} when both are clear. ` +
+        `Brief (oldest → newest):\n${fullBrief}\n\nReturn {"ready": true, "count": <integer ≥ 5>} when both are clear. ` +
         `Return {"ready": false, "question": "<one line>"} otherwise.`,
         { maxTokens: 200, userId, userKeys },
       );
       if (clarify.ready === false && clarify.question) {
         return { kind: "text", content: clarify.question.trim() };
       }
-      if (typeof clarify.count === "number" && clarify.count > 0) {
+      if (typeof clarify.count === "number" && clarify.count > 1) {
+        // Reject count=1 — almost certainly a hallucination for a multi-
+        // prospect brief. Name lookups (count=1) were handled above.
         requestedCount = Math.max(requestedCount, clarify.count);
+      } else if (typeof clarify.count === "number" && clarify.count === 1 && !requestedCount) {
+        // LLM tried to stick us with count=1; ask the user instead.
+        return {
+          kind: "text",
+          content: "How many prospects would you like? e.g. 25, 50, 100, 200.",
+        };
       }
     } catch {
       if (!requestedCount) {
-        return { kind: "text", content: "How many prospects would you like? e.g. 10, 25, 50." };
+        return { kind: "text", content: "How many prospects would you like? e.g. 25, 50, 100, 200." };
       }
     }
   }
