@@ -596,12 +596,32 @@ async function runNameLookup(args: {
   const variants = uniqueNames([parsed.name, ...parsed.variants]);
   console.log(`[name-lookup] target="${parsed.name}" company="${parsed.company ?? "(unspecified)"}" variants=${variants.length}`);
 
-  // Step 2 — run one LinkedIn-scoped Tavily search per variant, in parallel.
+  // Step 2 — run Tavily searches in parallel. Two complementary strategies:
+  //   (a) name-first: one query per variant ("Burt Shannon" Morgan Stanley)
+  //   (b) reverse: company + role context (Morgan Stanley "AI implementation"
+  //       OR "backoffice automation") — catches the case where the name is
+  //       further off than any variant we guessed, so variant-based search
+  //       finds nothing AT the company.
   const company = parsed.company?.trim() ?? "";
-  const tavilyQueries = variants.map((v) => {
-    const q = company ? `"${v}" ${company}` : `"${v}"`;
-    return q;
-  });
+  const nameQueries = variants.map((v) => (company ? `"${v}" ${company}` : `"${v}"`));
+  const reverseQueries: string[] = [];
+  if (company && parsed.roleContext) {
+    const phrases = Array.from(new Set(
+      parsed.roleContext
+        .split(/\s+and\s+|,|;/i)
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 4)
+        .slice(0, 4),
+    ));
+    if (phrases.length) {
+      reverseQueries.push(
+        `${company} ${phrases.map((p) => `"${p}"`).join(" OR ")}`,
+      );
+    } else {
+      reverseQueries.push(`${company} "${parsed.roleContext.slice(0, 60)}"`);
+    }
+  }
+  const tavilyQueries = [...nameQueries, ...reverseQueries];
 
   const searchResults = await Promise.all(
     tavilyQueries.map(async (q) => {
@@ -656,20 +676,24 @@ async function runNameLookup(args: {
   try {
     const out = await aiJson<{ candidates: Candidate[] }>(
       provider,
-      `You extract LinkedIn profiles that plausibly match a specific person. The user is looking for someone whose name was mis-transcribed from a call, so the NAME is the PRIMARY match signal — not the title.
+      `You extract LinkedIn profiles that plausibly match a specific person. The user heard a name on a call (transcription possibly wrong) and wants to ID them on LinkedIn.
 
 Target name: "${parsed.name}"${companyHint}
 Known name variants: ${variants.join(", ")}
-${parsed.roleContext ? `Context (secondary signal): ${parsed.roleContext}` : ""}
+${parsed.roleContext ? `Role context (helpful signal): ${parsed.roleContext}` : ""}
 
-RULES
-- Only extract people whose name is phonetically or visually close to one of the known variants. A good match shares first-letter + syllable count; a weak match shares just the last name.
-- It's fine if their title doesn't match the role context — the role context is a tiebreaker, not a filter.
-- Do NOT return people who only match the company and title — the user didn't ask for a title-based search.
-- Prefer results with a linkedin.com/in/ URL.
+TWO KINDS OF CANDIDATES ARE OK:
+  A. Name-close candidate: name is phonetically / visually close to a variant above.
+  B. Company+role candidate: name is further from the variants, but the person's CURRENT employer is ${company ? `"${company}"` : "the target company"} AND their role matches the role context. This catches mis-transcribed names.
 
-Return {"candidates": [...]} with at most 8 items:
-{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Why this name is plausibly the target","confidence":"high"|"medium"|"low","source":"URL"}`,
+HARD RULES
+- "company" field MUST be the person's CURRENT employer — the one listed as their *most recent* Experience on LinkedIn, or stated in the snippet as where they work now. NEVER put a firm that's merely mentioned in a recommendation, event, prior role, or client list.
+- If the snippet doesn't clearly state the current employer, skip that person entirely.
+- Prefer results with a linkedin.com/in/ URL; skip article authors and commenters.
+- Do NOT return someone who's NEITHER name-close NOR at the target company.
+
+Return {"candidates": [...]} with at most 10 items:
+{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Why this is plausibly the target (name similarity or company+role fit)","confidence":"high"|"medium"|"low","source":"URL"}`,
       context,
       { maxTokens: 3000, userId, userKeys },
     );
@@ -685,43 +709,75 @@ Return {"candidates": [...]} with at most 8 items:
     };
   }
 
-  // Step 4 — rank by edit-distance to the closest variant. Tie-break on
-  // company match and role-context match.
+  // Step 4 — score by edit-distance to the closest variant; HARD FILTER by
+  // company when one was specified (Morgan Stanley is not a tiebreaker — if
+  // the user said Morgan Stanley, results at Sonablate/Standard Electric are
+  // noise and should not show up at all). Role context remains a tiebreaker.
   const wantCompany = (company || "").toLowerCase();
   const wantRole = (parsed.roleContext || "").toLowerCase();
-  const scored = extracted
-    .map((c) => {
-      const nameScore = bestNameSimilarity(c.name, variants);
-      const companyMatch =
-        wantCompany && (c.company || "").toLowerCase().includes(wantCompany) ? 1 : 0;
-      const roleMatch =
-        wantRole &&
-        [c.title, c.evidence]
-          .filter(Boolean)
-          .some((s) => {
-            const hay = String(s).toLowerCase();
-            return wantRole
-              .split(/\W+/)
-              .filter((w) => w.length > 3)
-              .some((w) => hay.includes(w));
-          })
-          ? 1
-          : 0;
-      return { c, nameScore, companyMatch, roleMatch };
-    })
-    .sort((a, b) => {
-      if (a.nameScore !== b.nameScore) return a.nameScore - b.nameScore;
-      if (a.companyMatch !== b.companyMatch) return b.companyMatch - a.companyMatch;
-      return b.roleMatch - a.roleMatch;
-    });
+  const scored = extracted.map((c) => {
+    const nameScore = bestNameSimilarity(c.name, variants);
+    const companyHay = (c.company || "").toLowerCase();
+    const companyMatch =
+      wantCompany &&
+      (companyHay.includes(wantCompany) || wantCompany.includes(companyHay && companyHay.length > 3 ? companyHay : "\0"))
+        ? 1
+        : 0;
+    const roleMatch =
+      wantRole &&
+      [c.title, c.evidence]
+        .filter(Boolean)
+        .some((s) => {
+          const hay = String(s).toLowerCase();
+          return wantRole
+            .split(/\W+/)
+            .filter((w) => w.length > 3)
+            .some((w) => hay.includes(w));
+        })
+        ? 1
+        : 0;
+    return { c, nameScore, companyMatch, roleMatch };
+  });
 
-  // Drop results whose NAME distance is too far (garbage the LLM returned).
+  // Drop name-far candidates UNLESS they're at the target company (the reverse
+  // search exists precisely to catch names that are further off than any
+  // variant — filtering those out here would defeat it).
   const MAX_DISTANCE = 5;
-  const ranked = scored.filter((s) => s.nameScore <= MAX_DISTANCE);
+  let ranked = scored.filter((s) => s.nameScore <= MAX_DISTANCE || s.companyMatch === 1);
+
+  // Hard company filter. If the user said "at Morgan Stanley", we only want
+  // people AT Morgan Stanley — better to return nothing than noise.
+  if (wantCompany) {
+    const atCompany = ranked.filter((s) => s.companyMatch === 1);
+    if (atCompany.length > 0) {
+      ranked = atCompany;
+    } else {
+      const nearMisses = ranked
+        .slice(0, 3)
+        .map((s) => `${s.c.name} (${s.c.company || "unknown"})`)
+        .join(", ");
+      return {
+        kind: "text",
+        content:
+          `No public LinkedIn match for "${parsed.name}"-like names at ${company}. ` +
+          (nearMisses
+            ? `Closest web hits at other companies: ${nearMisses}. `
+            : "") +
+          `Try adding a team ("AI COE", "operations transformation"), a location, or any middle name you remember.`,
+      };
+    }
+  }
+
+  ranked.sort((a, b) => {
+    if (a.nameScore !== b.nameScore) return a.nameScore - b.nameScore;
+    if (a.companyMatch !== b.companyMatch) return b.companyMatch - a.companyMatch;
+    return b.roleMatch - a.roleMatch;
+  });
+
   if (ranked.length === 0) {
     return {
       kind: "text",
-      content: `Couldn't confidently match "${parsed.name}"${company ? ` at ${company}` : ""}. The closest web hits were: ${scored.slice(0, 3).map((s) => s.c.name).join(", ")}.`,
+      content: `Couldn't confidently match "${parsed.name}"${company ? ` at ${company}` : ""}.`,
     };
   }
 
