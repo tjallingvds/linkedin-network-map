@@ -80,6 +80,22 @@ export async function runFind(
   const isNameLookup = looksLikeSpecificPersonLookup(fullBrief);
   if (isNameLookup && !requestedCount) requestedCount = 1;
 
+  // ── Name-lookup fast path ────────────────────────────────────────────────
+  // The multi-prospect pipeline below extracts people BY TITLE — the user's
+  // target name ("Bert Shannon") falls off the floor. When we detect a
+  // specific-person lookup, run a dedicated branch that queries variants of
+  // the name and ranks candidates by phonetic/edit-distance similarity.
+  if (isNameLookup) {
+    const nameResult = await runNameLookup({
+      provider,
+      brief: fullBrief,
+      userId,
+      userKeys,
+    });
+    if (nameResult) return nameResult;
+    // Fall through to the generic pipeline only if name extraction failed.
+  }
+
   if ((!requestedCount || !hasTargeting) && !isNameLookup) {
     try {
       const clarify = await aiJson<{ ready: boolean; question?: string; count?: number }>(
@@ -544,6 +560,287 @@ Do NOT pad results. If only 2 people qualify, return 2.`,
     console.warn("extractChunk failed:", (e as Error).message);
     return [];
   }
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Name-lookup branch — "find someone called X at Y"
+// ═════════════════════════════════════════════════════════════════════════
+
+interface NameBrief {
+  /** The user's best guess at the person's name, as written (e.g. "Bert Shannon"). */
+  name: string;
+  /** Alternate spellings / phonetic variants. LLM-generated, user's guess included. */
+  variants: string[];
+  /** Company the person works at, if named. */
+  company?: string;
+  /** 1-line description of what they do (role, team, focus) — used to pick
+   *  between near-duplicate name hits, not to filter the initial search. */
+  roleContext?: string;
+}
+
+async function runNameLookup(args: {
+  provider: AiProvider;
+  brief: string;
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<CompletionResult | null> {
+  const { provider, brief, userId, userKeys } = args;
+
+  // Step 1 — extract the target name + variants from the brief.
+  const parsed = await extractNameBrief(provider, brief, userId, userKeys);
+  if (!parsed || !parsed.name) {
+    console.warn("[name-lookup] could not extract name — falling back to generic Find");
+    return null;
+  }
+
+  const variants = uniqueNames([parsed.name, ...parsed.variants]);
+  console.log(`[name-lookup] target="${parsed.name}" company="${parsed.company ?? "(unspecified)"}" variants=${variants.length}`);
+
+  // Step 2 — run one LinkedIn-scoped Tavily search per variant, in parallel.
+  const company = parsed.company?.trim() ?? "";
+  const tavilyQueries = variants.map((v) => {
+    const q = company ? `"${v}" ${company}` : `"${v}"`;
+    return q;
+  });
+
+  const searchResults = await Promise.all(
+    tavilyQueries.map(async (q) => {
+      try {
+        const linked = await tavilySearch(q, {
+          depth: "advanced",
+          maxResults: 8,
+          includeDomains: ["linkedin.com"],
+          userId,
+          userKeys,
+        });
+        if (linked.length > 0) return linked;
+        // Fallback: open web with "LinkedIn" suffix.
+        return await tavilySearch(`${q} LinkedIn`, {
+          depth: "advanced",
+          maxResults: 8,
+          userId,
+          userKeys,
+        });
+      } catch {
+        return [] as TavilyResult[];
+      }
+    }),
+  );
+  const flat = searchResults.flat();
+
+  // Dedup by URL.
+  const seenUrls = new Set<string>();
+  const unique: TavilyResult[] = [];
+  for (const r of flat) {
+    if (!r.url || seenUrls.has(r.url)) continue;
+    seenUrls.add(r.url);
+    unique.push(r);
+  }
+  console.log(`[name-lookup] ${tavilyQueries.length} queries → ${flat.length} raw → ${unique.length} unique URLs`);
+
+  if (unique.length === 0) {
+    return {
+      kind: "text",
+      content: `Couldn't find a public profile matching "${parsed.name}"${company ? ` at ${company}` : ""}. Double-check the name spelling or add more context (role, team, location).`,
+    };
+  }
+
+  // Step 3 — extract candidates from the LinkedIn snippets. Name-match
+  // prompt, NOT title-match, so we don't anchor on "COO Morgan Stanley".
+  const context = unique
+    .slice(0, 40)
+    .map((r) => `[${r.title}] (${r.url})\n${r.content ?? ""}`)
+    .join("\n\n---\n\n");
+  const companyHint = company ? ` at ${company}` : "";
+  let extracted: Candidate[] = [];
+  try {
+    const out = await aiJson<{ candidates: Candidate[] }>(
+      provider,
+      `You extract LinkedIn profiles that plausibly match a specific person. The user is looking for someone whose name was mis-transcribed from a call, so the NAME is the PRIMARY match signal — not the title.
+
+Target name: "${parsed.name}"${companyHint}
+Known name variants: ${variants.join(", ")}
+${parsed.roleContext ? `Context (secondary signal): ${parsed.roleContext}` : ""}
+
+RULES
+- Only extract people whose name is phonetically or visually close to one of the known variants. A good match shares first-letter + syllable count; a weak match shares just the last name.
+- It's fine if their title doesn't match the role context — the role context is a tiebreaker, not a filter.
+- Do NOT return people who only match the company and title — the user didn't ask for a title-based search.
+- Prefer results with a linkedin.com/in/ URL.
+
+Return {"candidates": [...]} with at most 8 items:
+{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Why this name is plausibly the target","confidence":"high"|"medium"|"low","source":"URL"}`,
+      context,
+      { maxTokens: 3000, userId, userKeys },
+    );
+    extracted = (out.candidates ?? []).filter((c) => c && c.name && c.company);
+  } catch (e) {
+    console.warn("[name-lookup] extraction failed:", (e as Error).message);
+  }
+
+  if (extracted.length === 0) {
+    return {
+      kind: "text",
+      content: `Couldn't confidently match "${parsed.name}"${company ? ` at ${company}` : ""} to a LinkedIn profile. Try adding a middle name, team, or location.`,
+    };
+  }
+
+  // Step 4 — rank by edit-distance to the closest variant. Tie-break on
+  // company match and role-context match.
+  const wantCompany = (company || "").toLowerCase();
+  const wantRole = (parsed.roleContext || "").toLowerCase();
+  const scored = extracted
+    .map((c) => {
+      const nameScore = bestNameSimilarity(c.name, variants);
+      const companyMatch =
+        wantCompany && (c.company || "").toLowerCase().includes(wantCompany) ? 1 : 0;
+      const roleMatch =
+        wantRole &&
+        [c.title, c.evidence]
+          .filter(Boolean)
+          .some((s) => {
+            const hay = String(s).toLowerCase();
+            return wantRole
+              .split(/\W+/)
+              .filter((w) => w.length > 3)
+              .some((w) => hay.includes(w));
+          })
+          ? 1
+          : 0;
+      return { c, nameScore, companyMatch, roleMatch };
+    })
+    .sort((a, b) => {
+      if (a.nameScore !== b.nameScore) return a.nameScore - b.nameScore;
+      if (a.companyMatch !== b.companyMatch) return b.companyMatch - a.companyMatch;
+      return b.roleMatch - a.roleMatch;
+    });
+
+  // Drop results whose NAME distance is too far (garbage the LLM returned).
+  const MAX_DISTANCE = 5;
+  const ranked = scored.filter((s) => s.nameScore <= MAX_DISTANCE);
+  if (ranked.length === 0) {
+    return {
+      kind: "text",
+      content: `Couldn't confidently match "${parsed.name}"${company ? ` at ${company}` : ""}. The closest web hits were: ${scored.slice(0, 3).map((s) => s.c.name).join(", ")}.`,
+    };
+  }
+
+  const prospects: Prospect[] = ranked.slice(0, 5).map(({ c, nameScore, companyMatch, roleMatch }, i) => {
+    const signals: ProspectSignal[] = [];
+    const similarity = nameScore === 0 ? "exact name match" : `~${nameScore}-char edit distance from "${parsed.name}"`;
+    signals.push({ kind: "match", text: similarity, when: "" });
+    if (c.evidence) signals.push({ kind: "match", text: c.evidence, when: "" });
+    const matchPct =
+      nameScore === 0 ? 95 :
+      nameScore <= 2 ? 85 :
+      nameScore <= 4 ? 72 : 60;
+    const bump = companyMatch * 3 + roleMatch * 2;
+    return {
+      id: `p${Date.now()}-${i}`,
+      name: c.name,
+      title: c.title,
+      company: c.company,
+      linkedin: normalizeLinkedInUrl(c.linkedin),
+      signals,
+      past: [],
+      matchPct: Math.min(99, matchPct + bump),
+    };
+  });
+
+  const top = ranked[0]!;
+  const summary =
+    prospects.length === 1
+      ? `Likely match: ${top.c.name} (${top.c.title}${top.c.company ? `, ${top.c.company}` : ""}).`
+      : `${prospects.length} plausible name matches — closest first.`;
+
+  return { kind: "prospects", summary, prospects };
+}
+
+async function extractNameBrief(
+  provider: AiProvider,
+  brief: string,
+  userId: string,
+  userKeys?: UserKeys,
+): Promise<NameBrief | null> {
+  try {
+    const out = await aiJson<NameBrief>(
+      provider,
+      `You extract a person-lookup brief. The user heard a name on a call and the transcription may be wrong — they want to ID the person on LinkedIn.
+
+Return JSON:
+{
+  "name": "best guess at the person's name, as the user wrote it",
+  "variants": ["5-10 plausible phonetic/spelling variants of the name — vary first name AND last name; include common homophones (Bert/Burt/Bart/Bret/Brett, Shannon/Shanahan/Sheehan/Channon/Cannon/Hannon)"],
+  "company": "company they work at, if mentioned",
+  "roleContext": "1-line description of their role/focus (backoffice automation, AI implementation, etc.), if mentioned"
+}
+
+Rules:
+- If no name is in the brief, return {"name": ""}.
+- Variants must be DIFFERENT NAMES — do NOT repeat the same name with capitalisation changes.
+- Include the original name in variants.
+- Keep variants as "First Last" strings.
+- Return ONLY the JSON object.`,
+      brief,
+      { maxTokens: 500, userId, userKeys },
+    );
+    if (!out || typeof out.name !== "string" || !out.name.trim()) return null;
+    return {
+      name: out.name.trim(),
+      variants: Array.isArray(out.variants) ? out.variants.filter((v): v is string => typeof v === "string") : [],
+      company: typeof out.company === "string" ? out.company.trim() : undefined,
+      roleContext: typeof out.roleContext === "string" ? out.roleContext.trim() : undefined,
+    };
+  } catch (e) {
+    console.warn("[name-lookup] extractNameBrief failed:", (e as Error).message);
+    return null;
+  }
+}
+
+function uniqueNames(arr: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of arr) {
+    const t = s.trim();
+    if (!t) continue;
+    const k = t.toLowerCase().replace(/\s+/g, " ");
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out.slice(0, 12);
+}
+
+/** Normalized Levenshtein distance against the closest variant. */
+function bestNameSimilarity(candidate: string, variants: string[]): number {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z\s]/g, "").replace(/\s+/g, " ").trim();
+  const c = norm(candidate);
+  let best = Infinity;
+  for (const v of variants) {
+    const d = levenshtein(norm(v), c);
+    if (d < best) best = d;
+  }
+  return best === Infinity ? 99 : best;
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    let curr = i;
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const temp = prev[j];
+      curr = a[i - 1] === b[j - 1] ? diag : 1 + Math.min(diag, prev[j], curr);
+      diag = temp;
+      prev[j] = curr;
+    }
+  }
+  return prev[b.length];
 }
 
 // ═════════════════════════════════════════════════════════════════════════
