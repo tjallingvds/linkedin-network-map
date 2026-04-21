@@ -127,7 +127,6 @@ function InlineAddAllToBoard({
                   try { await onAdd(b.id); } finally { setBusy(false); setOpen(false); }
                 }}
               >
-                <span style={{ fontSize: 15 }}>{b.emoji}</span>
                 <span style={{ flex: 1, textAlign: "left" }}>{b.name}</span>
                 <span className="board-count">{b.contactCount ?? 0}</span>
               </button>
@@ -228,7 +227,7 @@ export function DiscoverPage() {
   const boardLists = useMemo(
     () => boards.map((b) => ({
       id: `board:${b.id}`,
-      label: `${b.emoji} ${b.name}`,
+      label: b.name,
       count: b.contactCount ?? 0,
     })),
     [boards],
@@ -323,7 +322,7 @@ export function DiscoverPage() {
     });
     if (!name) return;
     try {
-      const b = await api.post<CrmBoard>("/api/crm/boards", { name, emoji: "📣" });
+      const b = await api.post<CrmBoard>("/api/crm/boards", { name });
       const updated = [...boards, { ...b, contactCount: 0 }];
       setBoards(updated);
       setAppMode("crm");
@@ -591,7 +590,7 @@ export function DiscoverPage() {
     });
     if (!name) return;
     try {
-      const board = await api.post<CrmBoard>("/api/crm/boards", { name, emoji: "✨" });
+      const board = await api.post<CrmBoard>("/api/crm/boards", { name });
       ensureChatCustomCols(board.id);
       await api.post(`/api/crm/boards/${board.id}/contacts/bulk`, {
         contacts: chosen.map((p) => ({
@@ -907,7 +906,6 @@ export function DiscoverPage() {
                               )}
                               {boards.map((b) => (
                                 <button key={b.id} className="bm-item" onClick={() => addSelectedToBoard(b.id)}>
-                                  <span style={{ fontSize: 15 }}>{b.emoji}</span>
                                   <span style={{ flex: 1, textAlign: "left" }}>{b.name}</span>
                                   <span className="board-count">{b.contactCount ?? 0}</span>
                                 </button>

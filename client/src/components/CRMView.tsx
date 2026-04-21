@@ -1176,7 +1176,6 @@ function ColCheckbox({ on }: { on: boolean }) {
 export interface ImportOptions {
   destination: "active" | "new";
   newBoardName: string;
-  newBoardEmoji: string;
   autoEnrich: boolean;
 }
 
@@ -1188,7 +1187,6 @@ function ImportModal({
   const [saving, setSaving] = useState(false);
   const [destination, setDestination] = useState<"active" | "new">("active");
   const [newBoardName, setNewBoardName] = useState("");
-  const [newBoardEmoji, setNewBoardEmoji] = useState("📣");
   const [autoEnrich, setAutoEnrich] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -1200,8 +1198,6 @@ function ImportModal({
     "name,title,company,email,linkedin,stage,temp\n" +
     "Maya Okafor,VP Engineering,Lumen AI,maya@lumen.ai,https://linkedin.com/in/maya,new,hot\n" +
     "Ravi Mehta,Head of Eng,Glyphic,ravi@glyphic.co,,contacted,warm";
-
-  const EMOJIS = ["📣", "🎯", "🧲", "💼", "🌱", "🚀", "🔥", "📊", "✨", "🧭", "⭐", "📌"];
 
   const onPickFile = async (file: File) => {
     const raw = await file.text();
@@ -1219,7 +1215,6 @@ function ImportModal({
       await onImport(preview, {
         destination,
         newBoardName: newBoardName.trim() || "Imported list",
-        newBoardEmoji,
         autoEnrich,
       });
       onClose();
@@ -1265,13 +1260,6 @@ function ImportModal({
 
               {destination === "new" && (
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10 }}>
-                  <select
-                    value={newBoardEmoji}
-                    onChange={(e) => setNewBoardEmoji(e.target.value)}
-                    style={{ fontSize: 15, padding: "6px 8px", border: "1px solid var(--hairline)", borderRadius: 8, background: "var(--panel)" }}
-                  >
-                    {EMOJIS.map((e) => <option key={e} value={e}>{e}</option>)}
-                  </select>
                   <input
                     value={newBoardName}
                     onChange={(e) => setNewBoardName(e.target.value)}
@@ -1327,7 +1315,7 @@ function ImportModal({
             <div className="im-body">
               <div style={{ fontSize: 11.5, color: "var(--text-mute)", marginBottom: 8 }}>
                 Preview — {preview.length} contact{preview.length === 1 ? "" : "s"} will be added
-                {destination === "new" ? <> to a new board <strong>{newBoardEmoji} {newBoardName.trim() || "Imported list"}</strong></> : <> to <strong>{boardName}</strong></>}.
+                {destination === "new" ? <> to a new board <strong>{newBoardName.trim() || "Imported list"}</strong></> : <> to <strong>{boardName}</strong></>}.
               </div>
               <div className="im-preview">
                 <div className="im-prev-head">
@@ -1527,7 +1515,6 @@ function BoardSwitcher({
   return (
     <div className="board-switcher">
       <button className="board-btn" onClick={() => setOpen((o) => !o)}>
-        <span style={{ fontSize: 15 }}>{active.emoji}</span>
         <span className="board-name">{active.name}</span>
         <span className="board-count">{active.contactCount ?? 0}</span>
         <IconChevD size={12} />
@@ -1540,7 +1527,6 @@ function BoardSwitcher({
             {boards.map((b) => (
               <button key={b.id} className={`bm-item ${b.id === activeId ? "active" : ""}`}
                 onClick={() => { onSelect(b.id); setOpen(false); }}>
-                <span style={{ fontSize: 15 }}>{b.emoji}</span>
                 <span style={{ flex: 1, textAlign: "left" }}>{b.name}</span>
                 <span className="board-count">{b.contactCount ?? 0}</span>
               </button>
@@ -1848,10 +1834,8 @@ export function CRMView({
       confirmLabel: "Create board",
     });
     if (!name) return;
-    const emojis = ["📣", "🎯", "🧲", "💼", "🌱", "🚀", "🔥", "📊", "✨", "🧭"];
-    const emoji = emojis[boards.length % emojis.length];
     try {
-      const b = await api.post<CrmBoard>("/api/crm/boards", { name, emoji });
+      const b = await api.post<CrmBoard>("/api/crm/boards", { name });
       setBoards((bs) => { const next = [...bs, { ...b, contactCount: 0 }]; onBoardsChange?.(next); return next; });
       setActiveId(b.id);
       setContacts([]);
@@ -1889,7 +1873,6 @@ export function CRMView({
       if (opts.destination === "new") {
         createdBoard = await api.post<CrmBoard>("/api/crm/boards", {
           name: opts.newBoardName,
-          emoji: opts.newBoardEmoji,
         });
         boardId = createdBoard.id;
       }
