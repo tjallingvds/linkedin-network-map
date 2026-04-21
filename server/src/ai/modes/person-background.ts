@@ -33,12 +33,31 @@ interface ParsedTarget {
 
 /** Trigger condition. The user is asking for a deep research pass on a
  *  person who has already been identified (either earlier in the chat or
- *  named directly in the latest turn). */
+ *  named directly in the latest turn). Typo-tolerant — users routinely
+ *  type "everyting" / "finde out" / "whatever you can". */
 export function looksLikePersonBackground(s: string): boolean {
   const hay = s.toLowerCase();
+  // Keyword-style triggers — any one of these + a name triggers the branch.
   const deepDiveIntent =
-    /\b(?:background|deep[-\s]?dive|research(?:\s+(?:on|about))?|tell\s+me\s+(?:everything|more|all)|what\s+(?:do\s+you\s+know|can\s+you\s+find)\s+about|find\s+(?:out|stuff)\s+about|everything\s+(?:you\s+can\s+find\s+)?about|know\s+more\s+about|who\s+is\s+(?!he\b|she\b|they\b))\b/.test(hay) ||
-    /\b(?:recent\s+posts?|talks?|interviews?|opinions?|podcasts?|panels?)\b/.test(hay);
+    // "background" / "deep dive" / "research" — direct.
+    /\b(?:background|deep[-\s]?dive|research)\b/.test(hay) ||
+    // "tell me everything/more/all/whatever" (typo-tolerant on everything).
+    /\btell\s+me\s+(?:every[a-z]{3,6}|more|all|whatever|what\s+you\s+(?:can|know))\b/.test(hay) ||
+    // "find out everything/anything/stuff/whatever [you can]" about/on.
+    /\bfind(?:e)?\s+(?:out\s+)?(?:every[a-z]{3,6}|any[a-z]{3,6}|stuff|whatever|all|what(?:ever)?)\b/.test(hay) ||
+    // "what do you know / what can you find / what can you tell" about/on.
+    /\bwhat\s+(?:do\s+you\s+know|can\s+you\s+(?:find|tell|dig))\b/.test(hay) ||
+    // "whatever you (can) find/tell/know/dig" — common paraphrase.
+    /\bwhatever\s+(?:you\s+(?:can|could)\s+)?(?:find|tell|know|dig)\b/.test(hay) ||
+    // "everything/anything you can find/know/tell" about/on.
+    /\b(?:every[a-z]{3,6}|any[a-z]{3,6})\s+(?:you\s+can\s+)?(?:find|tell|know|dig)\b/.test(hay) ||
+    // "know more" / "learn more" / "dig into" about/on.
+    /\b(?:know|learn)\s+more\b|\bdig\s+(?:into|up)\b/.test(hay) ||
+    // "who is …" (but not pronouns — those are follow-ups with no name).
+    /\bwho\s+is\s+(?!he\b|she\b|they\b|that\b|this\b)/.test(hay) ||
+    // Artefact-specific signals — user is asking for colour, not another list.
+    /\b(?:recent\s+posts?|talks?|interviews?|opinions?|podcasts?|panels?|papers?)\b/.test(hay);
+
   // Require a proper name somewhere (first+last, or a single proper noun
   // if preceded by "about/on/for"). Keeps it from firing on generic
   // "what do you know about banks" style briefs.
