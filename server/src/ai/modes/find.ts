@@ -28,6 +28,7 @@ import { env } from "../../env.js";
 import { aiJson } from "../json.js";
 import { tavilySearch, type TavilyResult } from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
+import { looksLikeDecisionMakerMap, runDecisionMakers } from "./decision-makers.js";
 
 export interface PriorMessage { role: "user" | "assistant"; content: string }
 
@@ -69,6 +70,18 @@ export async function runFind(
     .map((m) => m.content)
     .join("\n");
   const fullBrief = priorUserText ? `${priorUserText}\n${userInput}` : userInput;
+
+  // ── Decision-maker / buying-committee fast path ─────────────────────────
+  // "I want to sell X to Morgan Stanley, map the decision makers and how
+  // they relate" — fan out a tailored role search, assign committee roles,
+  // write a narrative. Runs BEFORE clarify so the user isn't asked "how
+  // many?" for what's structurally a 1-company org map.
+  if (looksLikeDecisionMakerMap(fullBrief)) {
+    const dm = await runDecisionMakers(provider, fullBrief, userId, userKeys);
+    if (dm) return dm;
+    // Fall through to the generic pipeline only if parsing failed (no
+    // company extractable).
+  }
 
   // ── Clarify gate (server UX) ─────────────────────────────────────────────
   let requestedCount = extractCount(fullBrief);

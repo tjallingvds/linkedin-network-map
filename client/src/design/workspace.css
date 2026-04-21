@@ -625,6 +625,10 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .ai-summary { font-size: 13.5px; line-height: 1.55; color: var(--text); margin-bottom: 14px; max-width: 760px; }
 .ai-summary strong { font-weight: 600; color: var(--text); }
+.ai-summary p { margin: 0 0 10px; }
+.ai-summary p:last-child { margin-bottom: 0; }
+.ai-summary ul { margin: 6px 0 10px; padding-left: 18px; }
+.ai-summary li { margin-bottom: 4px; }
 .ai-summary .pill-inline {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 1px 7px; border-radius: 999px;
