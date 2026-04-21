@@ -356,7 +356,8 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 .nav-item {
   display: flex; align-items: center; gap: 9px;
-  padding: 6px 10px; border-radius: 7px;
+  padding: 8px 10px; border-radius: 7px;
+  min-height: 34px;
   color: var(--text-dim); font-size: 13px;
   transition: background 120ms, color 120ms;
   text-align: left; width: 100%; position: relative;
