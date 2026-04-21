@@ -338,7 +338,18 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .search-input input { flex: 1; font-size: 12.5px; color: var(--text); }
 .search-input input::placeholder { color: var(--text-mute); }
 
-.nav-section { display: flex; flex-direction: column; gap: 1px; }
+.nav-section { display: flex; flex-direction: column; gap: 1px; min-height: 0; }
+/* Past searches can grow unbounded — cap the list so it scrolls internally
+   instead of pushing CRM boards + usage card off-screen. */
+.nav-scroll {
+  display: flex; flex-direction: column; gap: 1px;
+  max-height: 280px; overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline) transparent;
+}
+.nav-scroll::-webkit-scrollbar { width: 6px; }
+.nav-scroll::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 3px; }
+.nav-scroll::-webkit-scrollbar-track { background: transparent; }
 .nav-label {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--text-mute); padding: 10px 10px 4px;

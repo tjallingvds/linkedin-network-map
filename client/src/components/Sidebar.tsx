@@ -105,6 +105,7 @@ export function Sidebar({
               onDelete={onDeleteSearch}
               onAdd={onNewChat}
               addTitle="New search"
+              scrollable
             />
 
             <NavSection
@@ -173,7 +174,7 @@ function filterByQuery(items: NavEntry[], q: string): NavEntry[] {
 }
 
 function NavSection({
-  label, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete, onAdd, addTitle,
+  label, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete, onAdd, addTitle, scrollable,
 }: {
   label: string;
   items: NavEntry[];
@@ -185,7 +186,27 @@ function NavSection({
   onDelete?: (id: string) => void | Promise<void>;
   onAdd?: () => void;
   addTitle?: string;
+  /** When true, the items list scrolls internally (capped height) so long
+   *  lists don't push everything below (CRM boards, usage) out of view. */
+  scrollable?: boolean;
 }) {
+  const rows =
+    items.length === 0 && emptyMsg ? (
+      <div style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--text-mute)" }}>{emptyMsg}</div>
+    ) : (
+      items.map((s) => (
+        <NavRow
+          key={s.id}
+          entry={s}
+          icon={icon}
+          active={activeNav === s.id}
+          onSelect={onSelect}
+          onRename={onRename}
+          onDelete={onDelete}
+        />
+      ))
+    );
+
   return (
     <div className="nav-section">
       <div className="nav-label">
@@ -196,21 +217,7 @@ function NavSection({
           </button>
         )}
       </div>
-      {items.length === 0 && emptyMsg ? (
-        <div style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--text-mute)" }}>{emptyMsg}</div>
-      ) : (
-        items.map((s) => (
-          <NavRow
-            key={s.id}
-            entry={s}
-            icon={icon}
-            active={activeNav === s.id}
-            onSelect={onSelect}
-            onRename={onRename}
-            onDelete={onDelete}
-          />
-        ))
-      )}
+      {scrollable ? <div className="nav-scroll">{rows}</div> : rows}
     </div>
   );
 }
