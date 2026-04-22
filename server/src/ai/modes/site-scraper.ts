@@ -75,8 +75,12 @@ export async function runSiteScraper(args: {
   } catch {
     return { kind: "text", content: `Couldn't parse <code>${escapeHtml(root)}</code> as a URL.` };
   }
-  const rootHost = registrableDomain(rootUrl.hostname);
-  console.log(`[scrape] root=${rootUrl.href} host=${rootHost}`);
+  const rootHost = rootUrl.hostname.toLowerCase();
+  // If the user gave us a path prefix ("/academy", "/docs"), confine the
+  // crawl to that subtree so a link out to the marketing root doesn't pull
+  // unrelated content. Empty string = no path constraint.
+  const rootPathPrefix = stripFile(rootUrl.pathname).replace(/\/+$/, "");
+  console.log(`[scrape] root=${rootUrl.href} host=${rootHost} pathPrefix="${rootPathPrefix}"`);
 
   // BFS crawl. We keep three structures: visited (canonical URL strings),
   // queue (next layer + depth), and pages (successful fetches).
@@ -104,7 +108,17 @@ export async function runSiteScraper(args: {
           continue;
         }
         if (abs.protocol !== "http:" && abs.protocol !== "https:") continue;
-        if (registrableDomain(abs.hostname) !== rootHost) continue;
+        // Subdomain-bounded: stay on the root host or anything under it
+        // (academy.celonis.com → academy.celonis.com, learn.academy.celonis.com)
+        // but NEVER drift up to celonis.com / www.celonis.com. The previous
+        // registrable-domain check let academy.celonis.com → celonis.com slip
+        // through and the synthesised brief was full of marketing-site noise.
+        const linkHost = abs.hostname.toLowerCase();
+        if (linkHost !== rootHost && !linkHost.endsWith("." + rootHost)) continue;
+        // Path-prefix bound: when the root URL had a path ("/academy"),
+        // require links to live under it so /events / /careers don't sneak
+        // back into the crawl.
+        if (rootPathPrefix && !abs.pathname.toLowerCase().startsWith(rootPathPrefix.toLowerCase())) continue;
         // Drop the fragment + trailing slash so we don't re-visit /about
         // and /about#team and /about/ as three pages.
         abs.hash = "";
@@ -138,26 +152,23 @@ export async function runSiteScraper(args: {
   try {
     const out = await aiJson<{ summary: string }>(
       provider,
-      `You write a structured research brief for a sales / BD reader from a website crawl.
+      `You write a research brief from a website crawl. The crawl is BOUNDED to a specific URL the user gave you (and pages under it). Stay strictly inside that scope.
 
-The reader needs to QUICKLY understand:
-  • What the company does (1 sentence + 1 short paragraph of nuance).
-  • Their actual product(s) / offering(s) — concrete, not marketing speak.
-  • Who's mentioned by name (founders / leadership / advisors / authors).
-  • Recent news, posts, milestones (with cited links).
-  • Anything quirky or non-obvious worth bringing up in outreach.
+HARD RULES
+  - The brief covers ONLY what's on the crawled pages below. Do not pull in anything you "know" about the parent organisation, related products, or news that isn't in the snippets. If the crawl only covers their academy / docs / a single section, the brief covers that section — full stop.
+  - Cite every specific claim with an inline markdown link [label](url) pointing at one of the crawled pages. No claim without a citation that's in the snippets.
+  - If the snippets are thin (login walls, JS-rendered SPA, sparse content), say so honestly in 1 sentence and stop. Don't pad.
+  - Skip generic platitudes ("seasoned team", "innovative platform"). If a line could describe any site in their space, cut it.
+  - Output HTML only: <p>, <strong>, <em>, <ul>, <li>, <a href>, <br>. No other tags, no inline styles, no <h1>-<h6>.
+  - 600-1500 characters of prose. Cite 4-10 distinct pages.
 
-STRICT RULES
-  - Cite every specific claim with an inline markdown link [label](url).
-  - Skip generic platitudes ("seasoned team", "innovative platform"). If a
-    line could describe any company in their space, cut it.
-  - Output HTML only: <p>, <strong>, <em>, <ul>, <li>, <a href>, <br>. No
-    other tags, no inline styles, no <h1>-<h6>.
-  - 800-1500 characters of prose. Cite 4-10 distinct pages.
-  - End with a short "Outreach hooks:" <ul> of 2-4 specific things to
-    reference in a first-touch message.
+STRUCTURE — adapt headings to what's actually on the crawled section. Examples:
+  - For an academy / learning portal: courses / tracks offered, certifications, levels, who it's aimed at.
+  - For a docs site: products covered, API surface, getting-started path, integrations.
+  - For a marketing site: what they do, products, named people, recent news.
+  - End with a short "Outreach hooks:" <ul> of 2-4 specific, page-grounded things.
 
-Return {"summary": "<p>…</p><p><strong>What they do.</strong> …</p><ul>…</ul>"}`,
+Return {"summary": "<p>…</p>"}`,
       `Site: ${rootUrl.href}\nPages crawled: ${pages.length}\n\n${snippets}`,
       { maxTokens: 3000, userId, userKeys },
     );
@@ -173,7 +184,7 @@ Return {"summary": "<p>…</p><p><strong>What they do.</strong> …</p><ul>…</
       .slice(0, 30)
       .map((p) => `<li><a href="${escapeAttr(p.url)}" target="_blank" rel="noreferrer">${escapeHtml(p.title || p.url)}</a></li>`)
       .join("");
-    html = `<p>Crawled <strong>${pages.length}</strong> pages on <code>${escapeHtml(rootHost)}</code>. Synthesis step failed — here's the page index:</p><ul>${list}</ul>`;
+    html = `<p>Crawled <strong>${pages.length}</strong> pages under <code>${escapeHtml(rootHost + (rootPathPrefix || ""))}</code>. Synthesis step failed — here's the page index:</p><ul>${list}</ul>`;
   }
 
   return { kind: "text", content: html };
@@ -278,13 +289,12 @@ function normalizeUrl(s: string): string {
   }
 }
 
-/** Strip the leftmost label of a hostname IF the result still has a TLD.
- *  Crude but enough to keep "blog.acme.com" and "acme.com" inside the
- *  same crawl scope. Doesn't try to handle public-suffix edge cases. */
-function registrableDomain(host: string): string {
-  const parts = host.toLowerCase().split(".");
-  if (parts.length <= 2) return parts.join(".");
-  return parts.slice(-2).join(".");
+/** If the URL pathname ends in a filename like "/index.html" or
+ *  "/whatever.aspx", drop the filename and return the directory. Used to
+ *  derive the path-prefix scope from the root URL the user gave us. */
+function stripFile(pathname: string): string {
+  const m = pathname.match(/^(.*\/)[^/]*\.[a-z0-9]{2,5}$/i);
+  return m ? m[1]! : pathname;
 }
 
 // ─── HTML safety + helpers ────────────────────────────────────────────────
