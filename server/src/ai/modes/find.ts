@@ -30,6 +30,7 @@ import { tavilySearch, type TavilyResult } from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
 import { looksLikeDecisionMakerMap, runDecisionMakers } from "./decision-makers.js";
 import { looksLikePersonBackground, runPersonBackground } from "./person-background.js";
+import { looksLikeSiteScrape, runSiteScraper } from "./site-scraper.js";
 
 export interface PriorMessage { role: "user" | "assistant"; content: string }
 
@@ -71,6 +72,16 @@ export async function runFind(
     .map((m) => m.content)
     .join("\n");
   const fullBrief = priorUserText ? `${priorUserText}\n${userInput}` : userInput;
+
+  // ── Site-scraper fast path ──────────────────────────────────────────────
+  // "scrape acme.com" / "crawl https://… and tell me everything" — fetch
+  // the site (bounded crawl) and synthesise a structured brief. Runs first
+  // because a URL in the brief is a strong signal that overrides the
+  // person/people branches.
+  if (looksLikeSiteScrape(fullBrief)) {
+    const scrape = await runSiteScraper({ provider, brief: fullBrief, userId, userKeys });
+    if (scrape) return scrape;
+  }
 
   // ── Person-background fast path ─────────────────────────────────────────
   // "Tell me everything about Francois Buet-Golfouse at Barclays" — pull

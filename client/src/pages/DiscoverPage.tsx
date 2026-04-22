@@ -463,8 +463,15 @@ export function DiscoverPage() {
     const wantsPersonBackground =
       /\b(?:background\s+(?:on|for|info)|deep[-\s]?dive\s+(?:on|into)|research\s+(?:on|about)|tell\s+me\s+(?:everything|more|all)\s+about|what\s+(?:do\s+you\s+know|can\s+you\s+find)\s+about|everything\s+(?:you\s+can\s+find\s+)?about|recent\s+(?:posts?|talks?|interviews?))\b/i.test(text);
 
+    // Site-scraper intent: any explicit scrape/crawl verb plus a URL in the
+    // text. Route to FIND so the dedicated site-scraper branch fires —
+    // otherwise discover_more / followup would ignore the URL.
+    const wantsSiteScrape =
+      /\b(?:scrape|crawl|extract\s+(?:from|the\s+content)|read|summari[sz]e)\b/i.test(text) &&
+      /(?:https?:\/\/[^\s<>"']+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[\w./-]*)?)/i.test(text);
+
     let mode: "find" | "network" | "followup" | "discover_more";
-    if (wantsPersonBackground) mode = "find";
+    if (wantsSiteScrape || wantsPersonBackground) mode = "find";
     else if (havePriorResult && wantsNewSearch && lastBrief) mode = "discover_more";
     else if (havePriorResult) mode = "followup";
     else mode = searchMode;
