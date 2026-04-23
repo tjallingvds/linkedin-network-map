@@ -42,6 +42,10 @@ interface Candidate {
   evidence?: string;
   confidence: "high" | "medium" | "low";
   source?: string;
+  /** Prior employers surfaced from the snippet. Only populated for past-
+   *  employment intents so we can verify the candidate actually worked at
+   *  a target firm before filtering. */
+  pastCompanies?: string[];
 }
 
 interface ParsedBrief {
@@ -62,6 +66,15 @@ interface ParsedBrief {
    *  "Head of Technology IB where Technology means the sector being covered
    *  (tech-sector coverage banker, not an AI implementer)". */
   antiPatterns: string[];
+  /** Employment-tense intent. "current" = target firms are the person's
+   *  current employer (default). "past" = target firms are somewhere in
+   *  the person's past experience AND they're no longer there (e.g.
+   *  "find people who USED TO work at Celonis / UiPath"). */
+  employmentIntent: "current" | "past";
+  /** Firms the person must have worked at in the past (only populated
+   *  when employmentIntent = "past"). When set, the target-firm filter
+   *  matches PAST experience and the "not currently there" check runs. */
+  pastFirms: string[];
 }
 
 export async function runFind(
@@ -309,19 +322,19 @@ async function parseBrief(
   "excludeSeniority": ["Analyst", "Associate"],
   "geography": ["US", "UK", ...],
   "context": "2-4 sentence summary of what KIND of person qualifies — role semantics, not just titles",
-  "archetypes": [
-    "One short paragraph per role archetype named in the brief. Copy the title examples AND the disambiguation rules verbatim. E.g. 'Divisional COO of Investment Banking — runs tool rollouts, owns vendor contracts. Titles: COO IB, COO CIB, Head of IB Operations. Exclude firm-wide COO and COO of non-IB divisions.'"
-  ],
-  "antiPatterns": [
-    "One short line per anti-pattern named in the brief — the 'looks like a match but isn't' cases. Copy verbatim. E.g. 'Head of Technology Investment Banking = tech-sector coverage banker (exclude) — they do tech-sector M&A, they don't deploy technology.'"
-  ]
+  "archetypes": ["..."],
+  "antiPatterns": ["..."],
+  "employmentIntent": "current" | "past",
+  "pastFirms": ["Celonis", "UiPath", ...]
 }
 
 Rules:
 - Extract EXACT company names mentioned as targets.
 - titles = SHORT searchable keywords ("COO", "Head of AI"), not verbose titles.
-- archetypes: if the brief numbers or names role categories (e.g. "1. DIVISIONAL COO", "Archetype 2: Head of Productivity"), capture each as a separate entry WITH its disambiguation rules and exclusions. These are what downstream filters use to drop look-alike roles, so preserve the nuance verbatim.
-- antiPatterns: capture every "exclude X where Y" or "avoid Z" clause the brief lists. This is the single highest-signal field for filtering — be thorough.
+- archetypes: if the brief numbers or names role categories (e.g. "1. DIVISIONAL COO", "Archetype 2: Head of Productivity"), capture each as a separate entry WITH its disambiguation rules and exclusions.
+- antiPatterns: capture every "exclude X where Y" or "avoid Z" clause the brief lists.
+- employmentIntent: set to "past" when the brief clearly asks for people who USED TO work at the target firms and are no longer there. Trigger phrases: "ex-", "former", "formerly at", "used to work at", "previously at", "have left", "alumni of", "recent leavers from", "departed X". Default to "current" otherwise.
+- pastFirms: when employmentIntent = "past", move the target firms to pastFirms AND leave "firms" EMPTY (so current-employer filters pass through). The extractor will then filter on past experience. When employmentIntent = "current", leave pastFirms empty.
 - Include ALL excludeFirm name variations (e.g. "JPMorgan", "J.P. Morgan").
 - If the brief lists no archetypes or anti-patterns, return empty arrays.
 
@@ -329,6 +342,7 @@ Return ONLY the JSON object.`,
       brief,
       { maxTokens: 3000, userId, userKeys },
     );
+    const employmentIntent: "current" | "past" = parsed.employmentIntent === "past" ? "past" : "current";
     return {
       firms: parsed.firms ?? [],
       titles: parsed.titles ?? [],
@@ -339,6 +353,8 @@ Return ONLY the JSON object.`,
       context: parsed.context ?? "",
       archetypes: Array.isArray(parsed.archetypes) ? parsed.archetypes.filter((a): a is string => typeof a === "string") : [],
       antiPatterns: Array.isArray(parsed.antiPatterns) ? parsed.antiPatterns.filter((a): a is string => typeof a === "string") : [],
+      employmentIntent,
+      pastFirms: Array.isArray(parsed.pastFirms) ? parsed.pastFirms.filter((a): a is string => typeof a === "string") : [],
     };
   } catch (e) {
     console.warn("parseBrief failed:", (e as Error).message);
@@ -352,10 +368,19 @@ Return ONLY the JSON object.`,
  *  keywords and accepts look-alike roles (e.g. "Head of Technology IB" as
  *  a tech-sector coverage MD when the brief wanted tech-for-IB-division). */
 function buildExtractCtx(parsed: ParsedBrief | null): string {
-  if (!parsed || parsed.firms.length === 0) return "";
+  if (!parsed) return "";
+  const hasCurrentTargets = parsed.firms.length > 0;
+  const hasPastTargets = parsed.employmentIntent === "past" && parsed.pastFirms.length > 0;
+  if (!hasCurrentTargets && !hasPastTargets) return "";
   let ctx = "";
   if (parsed.context) ctx += `LOOKING FOR: ${parsed.context}\n`;
-  ctx += `TARGET FIRMS (only extract people at these): ${parsed.firms.join(", ")}\n`;
+  if (hasPastTargets) {
+    ctx += `PAST EMPLOYER TARGETS (match on PRIOR experience, NOT current employer): ${parsed.pastFirms.join(", ")}\n`;
+    ctx += `INTENT: find people who USED TO work at one of these firms AND have since LEFT. The candidate's CURRENT company must NOT be one of these firms. Their LinkedIn Experience must list one of these firms in a prior role.\n`;
+  }
+  if (hasCurrentTargets) {
+    ctx += `TARGET FIRMS (only extract people currently at these): ${parsed.firms.join(", ")}\n`;
+  }
   if (parsed.titles.length) ctx += `TARGET TITLES (keywords): ${parsed.titles.join(", ")}\n`;
   if (parsed.archetypes.length) {
     ctx += `\nROLE ARCHETYPES — a candidate MUST plausibly match one of these. Match on role SEMANTICS, not just title keywords:\n`;
@@ -538,29 +563,29 @@ function applyBriefFilters(people: Candidate[], parsed: ParsedBrief | null): Can
   const exTitles = parsed.excludeTitles.map((t) => t.toLowerCase());
   const exSeniority = parsed.excludeSeniority.map((s) => s.toLowerCase());
   const targetFirms = parsed.firms.map((f) => f.toLowerCase());
+  const pastFirms = parsed.pastFirms.map((f) => f.toLowerCase());
+  const pastMode = parsed.employmentIntent === "past" && pastFirms.length > 0;
 
   const exFirmWords = exFirms.map((f) => f.split(/[\s,&]+/).filter((w) => w.length > 2));
   const targetFirmWords = targetFirms.map((f) => f.split(/[\s,&]+/).filter((w) => w.length > 2));
+  const pastFirmWords = pastFirms.map((f) => f.split(/[\s,&]+/).filter((w) => w.length > 2));
 
-  const companyMatchesExcluded = (company: string): boolean => {
-    if (!company) return false;
-    const c = company.toLowerCase();
-    if (exFirms.some((ef) => c.includes(ef) || ef.includes(c))) return true;
-    return exFirmWords.some((words) => {
-      const matches = words.filter((w) => c.includes(w));
+  const textMatchesAnyFirm = (text: string, firms: string[], firmWords: string[][]): boolean => {
+    if (!text) return false;
+    const t = text.toLowerCase();
+    if (firms.some((f) => t.includes(f) || f.includes(t))) return true;
+    return firmWords.some((words) => {
+      const matches = words.filter((w) => t.includes(w));
       return matches.length >= 2 || (words.length === 1 && matches.length === 1);
     });
   };
 
-  const companyMatchesTarget = (company: string): boolean => {
-    if (!company) return false;
-    const c = company.toLowerCase();
-    if (targetFirms.some((tf) => c.includes(tf) || tf.includes(c))) return true;
-    return targetFirmWords.some((words) => {
-      const matches = words.filter((w) => c.includes(w));
-      return matches.length >= 2 || (words.length === 1 && matches.length === 1);
-    });
-  };
+  const companyMatchesExcluded = (company: string) =>
+    textMatchesAnyFirm(company, exFirms, exFirmWords);
+  const companyMatchesTarget = (company: string) =>
+    textMatchesAnyFirm(company, targetFirms, targetFirmWords);
+  const companyMatchesPastTarget = (company: string) =>
+    textMatchesAnyFirm(company, pastFirms, pastFirmWords);
 
   const before = people.length;
   const filtered = people.filter((p) => {
@@ -569,9 +594,19 @@ function applyBriefFilters(people: Candidate[], parsed: ParsedBrief | null): Can
     if (exSeniority.some((es) => title.includes(es))) return false;
     if (exTitles.some((et) => title.includes(et))) return false;
     if (targetFirms.length > 0 && !companyMatchesTarget(p.company)) return false;
+    if (pastMode) {
+      // Current employer must NOT be a past-target firm — the person has left.
+      if (companyMatchesPastTarget(p.company)) return false;
+      // And there must be evidence of past employment at a target firm —
+      // either in the extracted pastCompanies list or in the evidence text.
+      const pastHit =
+        (p.pastCompanies ?? []).some((c) => textMatchesAnyFirm(c, pastFirms, pastFirmWords)) ||
+        textMatchesAnyFirm(p.evidence ?? "", pastFirms, pastFirmWords);
+      if (!pastHit) return false;
+    }
     return true;
   });
-  console.log(`[find] brief filter: ${before} → ${filtered.length}`);
+  console.log(`[find] brief filter (pastMode=${pastMode}): ${before} → ${filtered.length}`);
   return filtered;
 }
 
@@ -597,22 +632,29 @@ async function parallelDiscovery(args: {
     `You generate LinkedIn search queries to find specific people. Generate exactly ${numQueries} queries from the research brief below.
 
 ${extractionHint ? `STRUCTURED FILTERS (use these exact firms, titles, and exclusions):\n${extractionHint}\n` : ""}
-QUERY FORMAT — every query MUST name a specific company from the brief:
+QUERY FORMAT — every query MUST name at least one specific company from the brief:
   GOOD: "COO Houlihan Lokey"
   GOOD: "Head of AI Evercore OR Moelis OR PJT Partners"
-  GOOD: "Chief Data Officer Lazard"
-  GOOD: "Raymond James Head of AI strategy"
   BAD:  "AI leaders investment banking" (no company name — finds articles, not people)
-  BAD:  "mid-market bank COO" (no company name — too vague)
   BAD:  "digital transformation financial services" (finds thought leadership, not profiles)
 
+PAST-EMPLOYER INTENT — if the structured filters above mention "PAST EMPLOYER TARGETS" (people who USED TO work at a firm and have LEFT), craft different queries:
+  GOOD: "ex-Celonis VP Sales"
+  GOOD: "formerly at UiPath Head of Revenue"
+  GOOD: "previously Signavio OR Workfusion GTM"
+  GOOD: "UiPath alumni Chief Revenue Officer"
+  GOOD: "\\"left Celonis\\" partnerships"
+  - Prefix queries with "ex-", "former", "formerly at", "previously at", "alumni of".
+  - Also include news/announcement searches ("Celonis departures", "UiPath layoffs sales").
+  - NEVER just query the company + title (that returns current employees, which is the wrong intent).
+
 STRATEGY for ${numQueries} queries:
-- Read the full brief to understand WHO we're looking for and WHY
-- Pair each target firm with 1-2 target titles from the brief
-- Group 2-3 similar firms with OR for broader coverage
-- Every query must contain at least one specific company name from the brief
-- Vary the title across queries so you don't search the same role 20 times
-- Do NOT generate queries for any EXCLUDED firms listed in the brief or filters above
+- Read the full brief to understand WHO we're looking for and WHY.
+- Pair each target firm with 1-2 target titles from the brief.
+- Group 2-3 similar firms with OR for broader coverage.
+- Every query must contain at least one specific company name from the brief.
+- Vary the title across queries so you don't search the same role 20 times.
+- Do NOT generate queries for any EXCLUDED firms listed in the brief or filters above.
 
 Return {"queries": [...]} — exactly ${numQueries} queries.`,
     query,
@@ -802,9 +844,10 @@ THE ONLY SOURCE OF TRUTH IS THE SNIPPETS BELOW.
 
 MANDATORY FILTERS — every candidate must pass ALL of these:
 1. FULL NAME: Written verbatim in a snippet. Real first AND last name (skip initials, "John S.").
-2. CURRENT EMPLOYER: Stated in the snippet as their current employer. ${extractionHint ? "Must match a TARGET FIRM listed above." : ""}
+2. CURRENT EMPLOYER: Stated in the snippet as their current employer. ${extractionHint ? "If filters above list TARGET FIRMS, current employer must match one. If filters list PAST EMPLOYER TARGETS instead, current employer must NOT be any of those past-target firms — the person has LEFT." : ""}
 3. CURRENT TITLE: Stated in the snippet (LinkedIn headline, bio line, press quote attribution). Do NOT infer from article context.
 4. LINKEDIN PROFILE: Strongly prefer candidates with a linkedin.com/in/ URL in the snippet.
+${extractionHint && /PAST EMPLOYER TARGETS/.test(extractionHint) ? `5. PAST EMPLOYMENT at a target: The snippet must name the candidate's prior role at one of the PAST EMPLOYER TARGETS — "ex-Celonis", "previously VP Sales at UiPath", a LinkedIn experience line, a departure announcement, etc. If this isn't in the snippet, reject.\n6. MUST HAVE LEFT: Evidence the person is no longer at the target firm — a newer role at a different company, a "left/departed/joined X from Y" mention, or a LinkedIn headline that names a non-target company. Still-employed candidates fail this filter.\n` : ""}
 
 FAILURE MODES TO AVOID:
 - FABRICATION: Do not invent plausible-sounding executives to fill a quota. Empty result is fine.
@@ -819,7 +862,7 @@ CONFIDENCE SCORING — be strict:
 - Do NOT include anyone you'd rate below medium.
 
 Return {"candidates": [...]} of ONLY qualified candidates (high or medium). Each candidate:
-{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"≤140-char verbatim quote from the snippet containing the name","confidence":"high"|"medium","source":"URL"}
+{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"≤140-char verbatim quote from the snippet containing the name","confidence":"high"|"medium","source":"URL"${extractionHint && /PAST EMPLOYER TARGETS/.test(extractionHint) ? `,"pastCompanies":["names of prior employers from the snippet — must include at least one PAST EMPLOYER TARGET firm"]` : ""}}
 
 Do NOT pad results. If only 2 people qualify, return 2. If zero qualify, return {"candidates": []}.`,
       context,
