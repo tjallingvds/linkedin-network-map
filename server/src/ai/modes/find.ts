@@ -52,6 +52,16 @@ interface ParsedBrief {
   excludeSeniority: string[];
   geography: string[];
   context: string;
+  /** Named role archetypes from the brief, each a short paragraph describing
+   *  a qualifying role pattern. Preserving these separately is the only way
+   *  the extractor can distinguish e.g. "Head of Technology Investment
+   *  Banking" = tech-sector M&A banker (anti-pattern) from "Head of Banking
+   *  Technology" = tech-for-IB-division (archetype match). */
+  archetypes: string[];
+  /** Explicit exclusion patterns copied verbatim from the brief, e.g.
+   *  "Head of Technology IB where Technology means the sector being covered
+   *  (tech-sector coverage banker, not an AI implementer)". */
+  antiPatterns: string[];
 }
 
 export async function runFind(
@@ -134,12 +144,16 @@ export async function runFind(
     // Fall through to the generic pipeline only if name extraction failed.
   }
 
-  // "all / everyone / every" with no explicit number means "a big list, pick a
-  // sensible default" — NOT count=1. Past regression: the clarify LLM was
-  // returning {ready:true, count:1} for briefs like "find me all people at X"
-  // and the user got a single prospect back. Default to 50 when the user said
-  // "all" and also skip the clarify round-trip so they don't get quizzed.
-  const saysAll = /\b(?:all|every(?:one|body)?|each)\s+(?:of\s+the\s+)?(?:people|person|employees|contacts|prospects|staff|folks)?\b/i.test(fullBrief);
+  // "all / everyone / every / the people" with no explicit number means "a
+  // big list, pick a sensible default" — NOT count=1. Past regression:
+  // clarify LLM was returning {ready:true, count:1} for "find me all people
+  // at X" and the user got a single prospect back. "find THE people
+  // implementing AI at tier-2 banks" silently landed on the default 8 and
+  // returned 2 — so we also treat "the people/leaders/…" as an implicit
+  // "many" signal. Default to 50 and skip clarify.
+  const saysAll =
+    /\b(?:all|every(?:one|body)?|each)\s+(?:of\s+the\s+)?(?:people|person|employees|contacts|prospects|staff|folks)?\b/i.test(fullBrief) ||
+    /\bthe\s+(?:people|folks|leaders?|teams?|employees|contacts|prospects|staff)\b/i.test(fullBrief);
   if (saysAll && !requestedCount) {
     requestedCount = 50;
   }
@@ -150,7 +164,7 @@ export async function runFind(
         provider,
         "You screen a prospecting brief before running a web search. " +
         "Require (a) some targeting (role/seniority/industry/company/region) AND (b) a specific COUNT of how many prospects the user wants. " +
-        "If a count is missing, ask 'How many would you like? e.g. 25, 50, 100, 200.' — do NOT invent a count. " +
+        "If a count is missing, return {\"ready\": false, \"question\": \"How many would you like? e.g. 25, 50, 100, 200.\"} — do NOT invent a count and do NOT return ready:true without an integer count. " +
         "NEVER return count=1 unless the user literally typed '1' or 'one' — 'find me people' without a number means they want MANY, not one. " +
         "If targeting is missing, ask ONE concise question about what's missing. " +
         "The brief includes the ENTIRE conversation so a bare number like \"100\" on its own line IS a count answer to an earlier clarify.",
@@ -176,6 +190,15 @@ export async function runFind(
       if (!requestedCount) {
         return { kind: "text", content: "How many prospects would you like? e.g. 25, 50, 100, 200." };
       }
+    }
+    // Hard guard — if clarify returned {ready:true} without a valid count
+    // (LLM decided the user "obviously wants many" and skipped emitting a
+    // number), do NOT silently default to 8. Ask. Bug repro: "find the
+    // people implementing AI at tier-2 and tier-3 banks" → LLM returns
+    // ready:true with no count → code fell through to targetCount=8 → user
+    // got 2 prospects back.
+    if (!requestedCount) {
+      return { kind: "text", content: "How many prospects would you like? e.g. 25, 50, 100, 200." };
     }
   }
   const targetCount = Math.min(Math.max(requestedCount || 8, 1), 200);
@@ -281,26 +304,32 @@ async function parseBrief(
       `You extract structured search parameters from a research brief. Return a JSON object with:
 
 {
-  "firms": ["Company1", "Company2", ...],        // target companies to search
-  "titles": ["COO", "Chief Data Officer", ...],    // SHORT searchable title keywords (highest priority first)
-  "excludeFirms": ["Goldman Sachs", "JPMorgan", ...],  // companies to EXCLUDE — include common name variations (e.g. both "JPMorgan" and "J.P. Morgan")
-  "excludeTitles": ["title pattern", ...],        // title patterns to exclude
-  "excludeSeniority": ["Analyst", "Associate"],   // seniority levels to exclude
-  "geography": ["US", "UK", ...],                 // target regions
-  "context": "1-2 sentence summary of what kind of person we're looking for"
+  "firms": ["Company1", ...],
+  "titles": ["COO", "Chief Data Officer", ...],
+  "excludeFirms": ["Goldman Sachs", "JPMorgan", ...],
+  "excludeTitles": ["title pattern", ...],
+  "excludeSeniority": ["Analyst", "Associate"],
+  "geography": ["US", "UK", ...],
+  "context": "2-4 sentence summary of what KIND of person qualifies — role semantics, not just titles",
+  "archetypes": [
+    "One short paragraph per role archetype named in the brief. Copy the title examples AND the disambiguation rules verbatim. E.g. 'Divisional COO of Investment Banking — runs tool rollouts, owns vendor contracts. Titles: COO IB, COO CIB, Head of IB Operations. Exclude firm-wide COO and COO of non-IB divisions.'"
+  ],
+  "antiPatterns": [
+    "One short line per anti-pattern named in the brief — the 'looks like a match but isn't' cases. Copy verbatim. E.g. 'Head of Technology Investment Banking = tech-sector coverage banker (exclude) — they do tech-sector M&A, they don't deploy technology.'"
+  ]
 }
 
 Rules:
-- Extract the EXACT company names mentioned as targets
-- For titles, extract the SHORT searchable keyword (e.g. "COO", "Chief Data Officer", "CTO", "Head of AI") — NOT the full verbose title like "COO of Investment Banking Division"
-- List titles in priority order (Tier 1 first, then Tier 2, etc.)
-- Extract ALL explicit exclusions (companies, titles, seniority levels)
-- For excludeFirms: include ALL name variations (e.g. "JPMorgan", "J.P. Morgan", "JPMorgan Chase", "Morgan Stanley", "Goldman Sachs", "Bank of America", "Barclays", etc.)
-- Be thorough — capture every firm and every title variant mentioned
+- Extract EXACT company names mentioned as targets.
+- titles = SHORT searchable keywords ("COO", "Head of AI"), not verbose titles.
+- archetypes: if the brief numbers or names role categories (e.g. "1. DIVISIONAL COO", "Archetype 2: Head of Productivity"), capture each as a separate entry WITH its disambiguation rules and exclusions. These are what downstream filters use to drop look-alike roles, so preserve the nuance verbatim.
+- antiPatterns: capture every "exclude X where Y" or "avoid Z" clause the brief lists. This is the single highest-signal field for filtering — be thorough.
+- Include ALL excludeFirm name variations (e.g. "JPMorgan", "J.P. Morgan").
+- If the brief lists no archetypes or anti-patterns, return empty arrays.
 
 Return ONLY the JSON object.`,
       brief,
-      { maxTokens: 1500, userId, userKeys },
+      { maxTokens: 3000, userId, userKeys },
     );
     return {
       firms: parsed.firms ?? [],
@@ -310,6 +339,8 @@ Return ONLY the JSON object.`,
       excludeSeniority: parsed.excludeSeniority ?? [],
       geography: parsed.geography ?? [],
       context: parsed.context ?? "",
+      archetypes: Array.isArray(parsed.archetypes) ? parsed.archetypes.filter((a): a is string => typeof a === "string") : [],
+      antiPatterns: Array.isArray(parsed.antiPatterns) ? parsed.antiPatterns.filter((a): a is string => typeof a === "string") : [],
     };
   } catch (e) {
     console.warn("parseBrief failed:", (e as Error).message);
@@ -317,14 +348,31 @@ Return ONLY the JSON object.`,
   }
 }
 
-/** Matches legacy chat-discovery.js: `extractCtx` built only when firms exist. */
+/** Matches legacy chat-discovery.js: `extractCtx` built only when firms exist.
+ *  Extended to carry the brief's role archetypes and anti-patterns forward
+ *  to the extractor. Without these, the extractor sees only flat title
+ *  keywords and accepts look-alike roles (e.g. "Head of Technology IB" as
+ *  a tech-sector coverage MD when the brief wanted tech-for-IB-division). */
 function buildExtractCtx(parsed: ParsedBrief | null): string {
   if (!parsed || parsed.firms.length === 0) return "";
   let ctx = "";
   if (parsed.context) ctx += `LOOKING FOR: ${parsed.context}\n`;
   ctx += `TARGET FIRMS (only extract people at these): ${parsed.firms.join(", ")}\n`;
-  if (parsed.titles.length) ctx += `TARGET TITLES: ${parsed.titles.join(", ")}\n`;
-  if (parsed.excludeFirms.length) ctx += `EXCLUDE firms: ${parsed.excludeFirms.join(", ")}\n`;
+  if (parsed.titles.length) ctx += `TARGET TITLES (keywords): ${parsed.titles.join(", ")}\n`;
+  if (parsed.archetypes.length) {
+    ctx += `\nROLE ARCHETYPES — a candidate MUST plausibly match one of these. Match on role SEMANTICS, not just title keywords:\n`;
+    for (let i = 0; i < parsed.archetypes.length; i++) {
+      ctx += `  ${i + 1}. ${parsed.archetypes[i]}\n`;
+    }
+  }
+  if (parsed.antiPatterns.length) {
+    ctx += `\nANTI-PATTERNS — reject candidates matching ANY of these, even if their title keywords look like a hit:\n`;
+    for (const ap of parsed.antiPatterns) {
+      ctx += `  - ${ap}\n`;
+    }
+  }
+  if (parsed.excludeFirms.length) ctx += `\nEXCLUDE firms: ${parsed.excludeFirms.join(", ")}\n`;
+  if (parsed.excludeTitles.length) ctx += `EXCLUDE title patterns: ${parsed.excludeTitles.join(", ")}\n`;
   if (parsed.excludeSeniority.length) ctx += `EXCLUDE seniority: ${parsed.excludeSeniority.join(", ")}\n`;
   return ctx;
 }
@@ -366,7 +414,101 @@ async function handleDiscovery(args: {
   const confOrder: Record<string, number> = { high: 0, medium: 1 };
   people.sort((a, b) => (confOrder[a.confidence] ?? 1) - (confOrder[b.confidence] ?? 1));
 
+  // Archetype gate — dedicated semantic classifier. Only runs when the
+  // brief listed archetypes or anti-patterns (so simple "find me COOs at
+  // Jefferies" briefs are unaffected). Without this, the extractor
+  // routinely smuggles through sector-coverage bankers whose titles look
+  // right ("Head of Technology Investment Banking") but whose actual role
+  // is an anti-pattern (tech-sector M&A, not AI deployment).
+  if (parsed && (parsed.archetypes.length > 0 || parsed.antiPatterns.length > 0) && people.length > 0) {
+    const before = people.length;
+    people = await gateByArchetype({ provider, parsed, candidates: people, userId, userKeys });
+    console.log(`[find] archetype gate: ${before} → ${people.length}`);
+  }
+
   return people;
+}
+
+/** Semantic archetype gate. Given the brief's archetype definitions and
+ *  anti-patterns, classify each candidate: archetype (1-N) or null. Drops
+ *  nulls. Attaches the archetype label to evidence so the UI can show WHY
+ *  a person qualified — and so the user can spot mis-classifications.
+ *
+ *  Batched into groups of 20 per LLM call to keep latency low on 100-person
+ *  briefs without blowing the output-token budget. */
+async function gateByArchetype(args: {
+  provider: AiProvider;
+  parsed: ParsedBrief;
+  candidates: Candidate[];
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<Candidate[]> {
+  const { provider, parsed, candidates, userId, userKeys } = args;
+  const BATCH = 20;
+  const batches: Candidate[][] = [];
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    batches.push(candidates.slice(i, i + BATCH));
+  }
+  const archetypeBlock = parsed.archetypes.length
+    ? parsed.archetypes.map((a, i) => `  ${i + 1}. ${a}`).join("\n")
+    : "(none listed)";
+  const antiPatternBlock = parsed.antiPatterns.length
+    ? parsed.antiPatterns.map((a) => `  - ${a}`).join("\n")
+    : "(none listed)";
+
+  const results = await Promise.all(
+    batches.map(async (batch) => {
+      const roster = batch.map((c, idx) => ({
+        id: idx,
+        name: c.name,
+        title: c.title,
+        company: c.company,
+        evidence: c.evidence ?? "",
+      }));
+      try {
+        const out = await aiJson<{ matches: Array<{ id: number; archetype: number | null; reason: string }> }>(
+          provider,
+          `You classify each candidate against a set of ROLE ARCHETYPES and ANTI-PATTERNS from a prospecting brief.
+
+ROLE ARCHETYPES (a candidate MUST plausibly match one of these):
+${archetypeBlock}
+
+ANTI-PATTERNS (reject candidates matching any of these, even if their title looks like an archetype hit):
+${antiPatternBlock}
+
+HOW TO DECIDE
+- Read each candidate's title + evidence, then reason about the ROLE SEMANTICS, not title keywords.
+- Classic trap: "Head of Technology Investment Banking" almost always means tech-SECTOR coverage (an M&A banker covering tech companies), which is an anti-pattern when the brief wants AI/tech implementers. Only classify as an archetype if the evidence makes clear they're building tech FOR the IB division, not advising tech clients.
+- Similar for "Head of Healthcare IB", "Head of Consumer IB", "Head of Industrials IB", "Head of FIG", "TMT Group Head" — these are sector coverage heads. They match archetype 3 (Group/Sector Heads) only if the brief explicitly wants sector coverage leaders with tech budget authority. If the brief's archetype 3 is for AI decision-makers specifically and the person is a plain M&A sector head, RETURN null.
+- "COO" at the firm level ≠ "COO of Investment Banking division". Be strict.
+- "Director", "Managing Director", "Vice President" alone tell you nothing — look at the full title and evidence. If the role is ambiguous, return null.
+- Ambiguity → null. Better to drop than to ship an anti-pattern.
+
+Return {"matches": [{"id": 0, "archetype": 2, "reason": "Head of Banking Transformation fits archetype 2"}, {"id": 1, "archetype": null, "reason": "Sector coverage banker — tech-sector M&A, matches anti-pattern"}, ...]} — one entry per candidate, archetype is the 1-indexed archetype number or null, reason is one short line.`,
+          JSON.stringify(roster, null, 2),
+          { maxTokens: 2000, userId, userKeys },
+        );
+        const matches = Array.isArray(out.matches) ? out.matches : [];
+        const kept: Candidate[] = [];
+        batch.forEach((c, idx) => {
+          const m = matches.find((x) => x.id === idx);
+          if (!m || m.archetype == null) return;
+          const label = parsed.archetypes[m.archetype - 1]?.split(/[—–:.\n]/)[0]?.trim() ?? `archetype ${m.archetype}`;
+          const archetypeEvidence = `Archetype ${m.archetype} (${label}): ${m.reason || "semantic match"}`;
+          const combined = c.evidence ? `${archetypeEvidence} — ${c.evidence}` : archetypeEvidence;
+          kept.push({ ...c, evidence: combined });
+        });
+        return kept;
+      } catch (e) {
+        console.warn("[find] archetype gate batch failed — keeping candidates:", (e as Error).message);
+        // Fail-open: if the gate LLM call errors, keep the batch so we don't
+        // drop real matches because of a transient API hiccup. Grounding
+        // already blocked fabrications.
+        return batch;
+      }
+    }),
+  );
+  return results.flat();
 }
 
 function dedupByName(people: Candidate[]): Candidate[] {
@@ -554,16 +696,77 @@ Return {"queries": [...]} — exactly ${numQueries} queries.`,
   const extractedChunks = await Promise.all(extractionPromises);
   const allPeople = extractedChunks.flat();
 
+  // Server-side grounding — reject any candidate whose full name doesn't
+  // appear verbatim in at least one raw Tavily snippet. This is the only
+  // defence against LLM fabrication that can't be undone by prompt drift:
+  // if the name isn't in the source material, we refuse to surface it no
+  // matter what the extractor returned. Without this, the extractor would
+  // confidently invent plausible-sounding executives (e.g. "John G. Schmidt,
+  // COO Investment Banking, Jefferies") when Tavily returned weak snippets
+  // for a target firm/title combo.
+  const snippetHaystack = buildSnippetHaystack(unique);
+  const grounded: Candidate[] = [];
+  let rejected = 0;
+  for (const p of allPeople) {
+    if (nameAppearsInSnippets(p.name, snippetHaystack)) {
+      grounded.push(p);
+    } else {
+      rejected++;
+    }
+  }
+  if (rejected > 0) {
+    console.log(`[find] grounding: rejected ${rejected} candidate(s) whose names were not in any snippet`);
+  }
+
   // Dedupe by name (parallelDiscovery's own dedup — handleDiscovery will
   // dedupe again after the filter pipeline)
   const nameSet = new Set<string>();
-  return allPeople.filter((p) => {
+  return grounded.filter((p) => {
     if (!p.name) return false;
     const key = p.name.toLowerCase().trim();
     if (nameSet.has(key)) return false;
     nameSet.add(key);
     return true;
   });
+}
+
+/** Lowercase, strip punctuation, collapse whitespace — so "John G. Schmidt"
+ *  grounds against a snippet that says "John Schmidt" or "john g schmidt". */
+function normalizeForGrounding(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function buildSnippetHaystack(results: TavilyResult[]): string {
+  return normalizeForGrounding(
+    results.map((r) => `${r.title ?? ""} ${r.url ?? ""} ${r.content ?? ""}`).join(" \n "),
+  );
+}
+
+/** A name is "grounded" if its first AND last token both appear somewhere
+ *  in the snippets — adjacent OR within a short window of each other. The
+ *  window check catches snippets that say "Jane M. Doe" when the LLM
+ *  returned "Jane Doe", or "Doe, Jane" in a list. Middle initials and
+ *  punctuation are ignored via normalizeForGrounding. */
+function nameAppearsInSnippets(name: string, haystack: string): boolean {
+  const norm = normalizeForGrounding(name);
+  if (!norm) return false;
+  if (haystack.includes(norm)) return true;
+  const tokens = norm.split(" ").filter((t) => t.length >= 2);
+  if (tokens.length < 2) return false;
+  const first = tokens[0]!;
+  const last = tokens[tokens.length - 1]!;
+  if (!haystack.includes(first) || !haystack.includes(last)) return false;
+  // Proximity check: first and last must co-occur within ~80 chars of each
+  // other at least once. Otherwise "John" appearing in one snippet and
+  // "Schmidt" in another would spuriously ground "John Schmidt".
+  const WINDOW = 80;
+  let idx = 0;
+  while ((idx = haystack.indexOf(first, idx)) !== -1) {
+    const slice = haystack.slice(Math.max(0, idx - WINDOW), idx + first.length + WINDOW);
+    if (slice.includes(last)) return true;
+    idx += first.length;
+  }
+  return false;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -588,27 +791,39 @@ async function extractChunk(args: {
       provider,
       `You are a lead qualification filter, not a search engine. Your job is to extract ONLY candidates that pass mandatory filters, with evidence for each.
 
-${extractionHint ? extractionHint + "\n" : ""}MANDATORY FILTERS — every candidate must pass ALL of these:
-1. FULL NAME: Must have a real first AND last name (skip initials, abbreviations, "John S.")
-2. CURRENT EMPLOYER: Must be verifiable from the search result. ${extractionHint ? "Must match a TARGET FIRM listed above." : ""}
-3. CURRENT TITLE: Must be a real title from their LinkedIn profile, not inferred from article context
-4. LINKEDIN PROFILE: Strongly prefer candidates with a linkedin.com/in/ URL in the search result
+${extractionHint ? extractionHint + "\n" : ""}ARCHETYPE MATCH IS MANDATORY (if archetypes are listed above).
+- A candidate is only qualified if their title+role SEMANTICALLY matches one of the ROLE ARCHETYPES above. Surface-level title keyword match is NOT enough.
+- Common sector-coverage trap: "Head of Technology Investment Banking", "Head of Healthcare IB", "Head of TMT", "MD Technology Group", etc. — these are sector COVERAGE bankers (they run M&A for tech/healthcare/etc. companies) and DO NOT deploy AI internally. Reject them unless the brief's archetypes explicitly cover M&A sector heads.
+- If the brief names an archetype like "Engineering Lead in an IB division" or "Head of Banking Technology", be careful to include only people building tech FOR the business (internal platform / CTO for a division), not people advising tech-sector clients.
+- When unsure whether a candidate matches an archetype, REJECT. Empty is better than wrong.
+
+THE ONLY SOURCE OF TRUTH IS THE SNIPPETS BELOW.
+- Every person you return MUST have their full name appear verbatim in at least one snippet. If the name is not written in the snippets, DO NOT return them — even if you "know" someone in that role at that firm from training data. We verify this server-side and will drop any ungrounded candidates.
+- Never infer a person from a firm + title combination. If the snippets don't name them, they don't exist for this query.
+- The "evidence" field MUST be a short verbatim quote (≤140 chars) copied from the snippet that contains their name and role. No paraphrasing.
+
+MANDATORY FILTERS — every candidate must pass ALL of these:
+1. FULL NAME: Written verbatim in a snippet. Real first AND last name (skip initials, "John S.").
+2. CURRENT EMPLOYER: Stated in the snippet as their current employer. ${extractionHint ? "Must match a TARGET FIRM listed above." : ""}
+3. CURRENT TITLE: Stated in the snippet (LinkedIn headline, bio line, press quote attribution). Do NOT infer from article context.
+4. LINKEDIN PROFILE: Strongly prefer candidates with a linkedin.com/in/ URL in the snippet.
 
 FAILURE MODES TO AVOID:
-- CLUSTER HARVESTING: If an article mentions 5 people at an event, do NOT extract all 5. Each person must independently pass the filters.
+- FABRICATION: Do not invent plausible-sounding executives to fill a quota. Empty result is fine.
+- CLUSTER HARVESTING: If an article mentions 5 people at an event, do NOT extract all 5. Each must independently appear with their own name+title+employer.
 - KEYWORD CONFLATION: A profile mentioning "AI" at a "bank" is NOT automatically qualified. Check the actual title and actual employer.
-- ARTICLE AUTHORS/COMMENTERS: Someone who wrote an article about AI in banking is NOT a lead. Only extract people who ARE the target persona, not people who WRITE ABOUT the target persona.
-- STALE DATA: If the source is old, the person may have moved on. Note uncertainty.
+- ARTICLE AUTHORS/COMMENTERS: Writers of articles about the persona are NOT leads.
+- STALE DATA: If the source is old, the person may have moved on. Exclude or mark medium.
 
 CONFIDENCE SCORING — be strict:
-- "high": Current employer is a target firm AND current title matches a target title AND you have a LinkedIn URL. All three verified.
-- "medium": Two of the three are verified, or employer/title are close but not exact matches.
-- Do NOT include anyone you'd rate below medium. If you're not at least moderately confident they match, exclude them entirely.
+- "high": Name, current employer (= target firm), current title (= target title), and LinkedIn URL all appear in the same snippet.
+- "medium": Three of the four are present in the snippet.
+- Do NOT include anyone you'd rate below medium.
 
-Return {"candidates": [...]} of ONLY qualified candidates (high or medium confidence). Each candidate:
-{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"Specific reason they pass the filters","confidence":"high"|"medium","source":"URL"}
+Return {"candidates": [...]} of ONLY qualified candidates (high or medium). Each candidate:
+{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/ URL or empty","evidence":"≤140-char verbatim quote from the snippet containing the name","confidence":"high"|"medium","source":"URL"}
 
-Do NOT pad results. If only 2 people qualify, return 2.`,
+Do NOT pad results. If only 2 people qualify, return 2. If zero qualify, return {"candidates": []}.`,
       context,
       { maxTokens: 4000, userId, userKeys },
     );

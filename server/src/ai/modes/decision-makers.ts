@@ -154,9 +154,22 @@ export async function runDecisionMakers(
     .join("\n\n---\n\n");
   const extracted = await extractCandidates(provider, context, parsed.company, userId, userKeys);
 
+  // Server-side grounding — reject any candidate whose full name doesn't
+  // appear verbatim in the raw Tavily snippets. Without this, the extractor
+  // will confidently invent plausible executives at the target company when
+  // snippets are thin (the "John G. Schmidt at Jefferies" failure mode).
+  const snippetHaystack = buildSnippetHaystack(unique);
+  const groundedExtracted = extracted.filter((c) =>
+    nameAppearsInSnippets(c.name, snippetHaystack),
+  );
+  const ungroundedCount = extracted.length - groundedExtracted.length;
+  if (ungroundedCount > 0) {
+    console.log(`[decision-makers] grounding: rejected ${ungroundedCount} candidate(s) not present in snippets`);
+  }
+
   // Dedup by name, then filter to people at the target company.
   const byName = new Map<string, Candidate>();
-  for (const c of extracted) {
+  for (const c of groundedExtracted) {
     if (!c.name || !c.company) continue;
     const key = c.name.toLowerCase().trim();
     if (!byName.has(key)) byName.set(key, c);
@@ -326,17 +339,23 @@ async function extractCandidates(
   try {
     const out = await aiJson<{ candidates: Candidate[] }>(
       provider,
-      `You extract executives and decision-makers currently at "${company}" from LinkedIn snippets.
+      `You extract executives and decision-makers currently at "${company}" from the snippets below. THE SNIPPETS ARE YOUR ONLY SOURCE OF TRUTH.
+
+ANTI-FABRICATION (most important rule)
+- Every person returned MUST have their full name appear verbatim in at least one snippet. If the name is not written in the snippets, DO NOT return them — even if you believe someone in that role exists at ${company} from your training data. We verify this server-side and will drop ungrounded candidates.
+- Never infer a person from "firm X probably has a COO called …". If no snippet names them, return fewer people.
 
 HARD RULES
-- "company" MUST be the person's CURRENT employer (the most recent Experience entry). Skip anyone who only mentions ${company} in a prior role, recommendation, or client list.
-- Return only real individuals — skip article authors, commenters, and aggregated "team" listings.
-- Full names only. No initials.
+- "company" MUST be the person's CURRENT employer per the snippet (most recent Experience entry, current LinkedIn headline, or press attribution). Skip anyone who only mentions ${company} in a prior role, recommendation, or client list.
+- Return only real individuals — skip article authors, commenters, aggregated "team" listings.
+- Full names only — no initials, no "John S."
 - Prefer linkedin.com/in/ URLs.
 - Skip Analysts and Associates; keep Managers and above.
 
 Return {"candidates": [...]} — up to 20 items:
-{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/…","source":"URL"}`,
+{"name":"Full Name","title":"Current Title","company":"Current Employer","linkedin":"linkedin.com/in/…","source":"URL"}
+
+If zero candidates appear in the snippets, return {"candidates": []}. Do not pad.`,
       context,
       { maxTokens: 3500, userId, userKeys },
     );
@@ -448,6 +467,40 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function normalizeForGrounding(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function buildSnippetHaystack(results: TavilyResult[]): string {
+  return normalizeForGrounding(
+    results.map((r) => `${r.title ?? ""} ${r.url ?? ""} ${r.content ?? ""}`).join(" \n "),
+  );
+}
+
+/** Same grounding check used in find.ts. Requires the full normalized name
+ *  to appear in the snippets, or first AND last token to co-occur within
+ *  ~80 chars of each other — so middle initials and "Doe, Jane" listings
+ *  still count but two unrelated mentions of "John" and "Schmidt" across
+ *  different results don't. */
+function nameAppearsInSnippets(name: string, haystack: string): boolean {
+  const norm = normalizeForGrounding(name);
+  if (!norm) return false;
+  if (haystack.includes(norm)) return true;
+  const tokens = norm.split(" ").filter((t) => t.length >= 2);
+  if (tokens.length < 2) return false;
+  const first = tokens[0]!;
+  const last = tokens[tokens.length - 1]!;
+  if (!haystack.includes(first) || !haystack.includes(last)) return false;
+  const WINDOW = 80;
+  let idx = 0;
+  while ((idx = haystack.indexOf(first, idx)) !== -1) {
+    const slice = haystack.slice(Math.max(0, idx - WINDOW), idx + first.length + WINDOW);
+    if (slice.includes(last)) return true;
+    idx += first.length;
+  }
+  return false;
 }
 
 function normalizeLinkedInUrl(url?: string): string | undefined {
