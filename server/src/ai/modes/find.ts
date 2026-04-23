@@ -1186,9 +1186,24 @@ function normalizeLinkedInUrl(url?: string): string | undefined {
 }
 
 function extractCount(s: string): number {
-  const m = s.match(/\b(?:find|get|give|list|top|show|want|need)\s*(?:me\s+)?(?:up\s+to\s+)?(\d{1,3})\b/i)
-    ?? s.match(/\b(\d{1,3})\s*(?:prospects?|people|leads?|contacts?|results?)\b/i)
-    ?? s.match(/\b(\d{1,3})\b/);
+  // Strip numbers that look like they're part of something other than a
+  // prospect count — "tier 2", "Q3", "20%", four-digit years, $amounts.
+  // Past bug: "tier 2 and tier 3 banks" set targetCount=2 via the bare-
+  // digit fallback, so the clarify gate thought the user had already
+  // answered and silently capped the search at 2 prospects.
+  const cleaned = s
+    .replace(/\btier\s*\d+\b/gi, " ")
+    .replace(/\bq[1-4]\b/gi, " ")
+    .replace(/\b\d+\s*%/g, " ")
+    .replace(/\b(?:19|20)\d{2}\b/g, " ")
+    .replace(/\$\s*\d[\d,]*/g, " ");
+  const m = cleaned.match(/\b(?:find|get|give|list|top|show|want|need)\s*(?:me\s+)?(?:up\s+to\s+)?(\d{1,3})\b/i)
+    ?? cleaned.match(/\b(\d{1,3})\s*(?:prospects?|people|leads?|contacts?|results?|names?)\b/i)
+    // Bare-digit fallback ONLY for lines that are just a number — catches
+    // the user answering "how many?" with a plain "50". Inline digits in
+    // prose are too ambiguous (cf. "tier 2", "top 10 banks", "2 or 3 per
+    // firm") and should force the clarify path.
+    ?? cleaned.match(/(?:^|\n)\s*(\d{1,3})\s*(?:$|\n)/);
   if (!m) return 0;
   const n = parseInt(m[1]!, 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
