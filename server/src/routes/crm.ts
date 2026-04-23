@@ -257,34 +257,57 @@ router.get("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
 
   // Auto-dedup sweep on board load. Two rows are duplicates if they share
   // a normalised LinkedIn URL OR (both have no LinkedIn AND share a
-  // normalised name). Keep the OLDEST row (it carries any stage / temp /
-  // notes progress) and delete the rest. This also cleans up any dupes
-  // that existed before the insert-time dedup was added.
+  // normalised name). Within each duplicate group, the OLDEST row is the
+  // keeper (it carries user-managed stage / temp / notes progress), but
+  // before we delete the newer dupes we MERGE any enrichment fields the
+  // keeper is missing from them — email, phone, linkedin, title, company,
+  // background. Previously a naive "keep oldest, delete newer" lost any
+  // enrichment (Apollo email, LLM background) that happened to land on
+  // the newer row — which is exactly when a bad-quality row gets
+  // enriched into matching an older clean row.
   const allForDedup = await db
     .selectFrom("crm_contacts")
-    .select(["id", "name", "linkedin"])
+    .selectAll()
     .where("board_id", "=", req.params.boardId)
     .orderBy("created_at", "asc")
     .execute();
-  const seenLi = new Set<string>();
-  const seenName = new Set<string>();
-  const toDelete: string[] = [];
+  const groups = new Map<string, typeof allForDedup>();
   for (const r of allForDedup) {
     const li = normalizeLinkedInForDedup(r.linkedin ?? null);
     const name = normalizeNameForDedup(r.name);
-    if (li) {
-      if (seenLi.has(li)) { toDelete.push(r.id); continue; }
-      seenLi.add(li);
-    } else if (name) {
-      // Only dedup by name when LinkedIn is missing on BOTH sides — two
-      // distinct Jane Does with different LinkedIn URLs should both survive.
-      if (seenName.has(name)) { toDelete.push(r.id); continue; }
-      seenName.add(name);
+    const key = li ? `li:${li}` : name ? `nm:${name}` : `id:${r.id}`;
+    const arr = groups.get(key);
+    if (arr) arr.push(r); else groups.set(key, [r]);
+  }
+  const toDelete: string[] = [];
+  const MERGE_FIELDS = ["email", "phone", "linkedin", "title", "company", "background", "notes", "message_notes"] as const;
+  for (const group of groups.values()) {
+    if (group.length <= 1) continue;
+    // Keeper = oldest (first, because ORDER BY created_at ASC).
+    const keeper = group[0]!;
+    const patch: Partial<Record<(typeof MERGE_FIELDS)[number], string>> = {};
+    for (const field of MERGE_FIELDS) {
+      const current = keeper[field] as string | null | undefined;
+      if (current && current.trim().length > 0) continue;
+      // Find the first dupe that has a value for this field.
+      for (let i = 1; i < group.length; i++) {
+        const val = group[i]![field] as string | null | undefined;
+        if (val && val.trim().length > 0) { patch[field] = val; break; }
+      }
     }
+    if (Object.keys(patch).length > 0) {
+      await db
+        .updateTable("crm_contacts")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .set({ ...patch, updated_at: new Date() as any })
+        .where("id", "=", keeper.id)
+        .execute();
+    }
+    for (let i = 1; i < group.length; i++) toDelete.push(group[i]!.id);
   }
   if (toDelete.length > 0) {
     await db.deleteFrom("crm_contacts").where("id", "in", toDelete).execute();
-    console.log(`[crm] auto-deduped ${toDelete.length} contact(s) on board ${req.params.boardId}`);
+    console.log(`[crm] auto-deduped ${toDelete.length} contact(s) on board ${req.params.boardId} (merged enrichment first)`);
   }
 
   const rows = await db
