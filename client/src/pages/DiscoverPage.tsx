@@ -444,13 +444,20 @@ export function DiscoverPage() {
     // Followup vs fresh-search routing. Trigger a fresh search whenever the
     // message reads as a re-ask, not a filter. Matches:
     //   - "find more" / "another" / "on the web" (explicit "more" intent)
+    //   - "search again" / "better search" / "do a search" / "look up"
+    //     (re-run intent — previously fell through to followup, which then
+    //     punted with a clarify because it can only filter or answer)
+    //   - "add linkedins" / "add emails" / "pull their …" (enrich-ish re-ask
+    //     that users phrase as "add X" — a true filter of the current list
+    //     never produces new data, so re-run instead)
     //   - "no …" / "not these" / "that's wrong" / "different" (rejection)
-    //   - "find me 100" / "get me 50 people" (count-driven re-ask —
-    //     users keep bumping the count when the first result under-delivered;
-    //     filtering a 1-person list never gives them more)
+    //   - "find me 100" / "get me 50 people" (count-driven re-ask)
     //   - "start over" / "redo" / "try again"
     const wantsNewSearch =
       /\b(more|another|additional|further|elsewhere|on the (web|internet)|search the web|search the internet)\b/i.test(text) ||
+      /\b(?:search(?:\s+(?:again|better|for|more))?|re[-\s]?search|look\s+up|dig\s+up|go\s+find)\b/i.test(text) ||
+      /\b(?:better|deeper|broader|wider|proper|real)\s+(?:search|list|results?)\b/i.test(text) ||
+      /\badd\s+(?:their|the)?\s*(?:linkedin|email|phone|location|title|bio|contact)s?\b/i.test(text) ||
       /\b(?:find|get|give|show|need|want)\s+(?:me\s+)?(?:up\s+to\s+)?\d{1,3}\b/i.test(text) ||
       /^\s*(?:no|nope|not (?:these|right|good|it)|actually|wait)\b/i.test(text) ||
       /\b(?:start over|redo|try again|different (?:search|prospects)|new search)\b/i.test(text);
