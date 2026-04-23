@@ -31,6 +31,27 @@ const router = Router();
 // so the server only enforces a sane length bound. TEMPs stay enumerated.
 const TEMPS = ["hot", "warm", "cold"] as const;
 
+/** Normalise a name for dedup — lowercase, strip punctuation, collapse
+ *  whitespace. So "Jane  Doe", "Jane Doe", and "jane doe" all collide. */
+function normalizeNameForDedup(name: string | null | undefined): string {
+  if (!name) return "";
+  return name.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Normalise a LinkedIn URL for dedup — strip protocol, www, trailing
+ *  slash, query string, and the vanity-URL prefix so both the canonical
+ *  and the permalink form collide. */
+function normalizeLinkedInForDedup(url: string | null | undefined): string {
+  if (!url) return "";
+  const u = url.toLowerCase().trim();
+  if (!u) return "";
+  return u
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\?.*$/, "")
+    .replace(/\/+$/, "");
+}
+
 function toCamelContact(row: Record<string, unknown>) {
   return {
     id: row.id,
@@ -234,6 +255,38 @@ router.get("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
   const board = await ensureBoard(req.user!.id, req.params.boardId);
   if (!board) return res.status(404).json({ error: "board_not_found" });
 
+  // Auto-dedup sweep on board load. Two rows are duplicates if they share
+  // a normalised LinkedIn URL OR (both have no LinkedIn AND share a
+  // normalised name). Keep the OLDEST row (it carries any stage / temp /
+  // notes progress) and delete the rest. This also cleans up any dupes
+  // that existed before the insert-time dedup was added.
+  const allForDedup = await db
+    .selectFrom("crm_contacts")
+    .select(["id", "name", "linkedin"])
+    .where("board_id", "=", req.params.boardId)
+    .orderBy("created_at", "asc")
+    .execute();
+  const seenLi = new Set<string>();
+  const seenName = new Set<string>();
+  const toDelete: string[] = [];
+  for (const r of allForDedup) {
+    const li = normalizeLinkedInForDedup(r.linkedin ?? null);
+    const name = normalizeNameForDedup(r.name);
+    if (li) {
+      if (seenLi.has(li)) { toDelete.push(r.id); continue; }
+      seenLi.add(li);
+    } else if (name) {
+      // Only dedup by name when LinkedIn is missing on BOTH sides — two
+      // distinct Jane Does with different LinkedIn URLs should both survive.
+      if (seenName.has(name)) { toDelete.push(r.id); continue; }
+      seenName.add(name);
+    }
+  }
+  if (toDelete.length > 0) {
+    await db.deleteFrom("crm_contacts").where("id", "in", toDelete).execute();
+    console.log(`[crm] auto-deduped ${toDelete.length} contact(s) on board ${req.params.boardId}`);
+  }
+
   const rows = await db
     .selectFrom("crm_contacts")
     .selectAll()
@@ -249,6 +302,34 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
   if (!board) return res.status(404).json({ error: "board_not_found" });
 
   const p = contactInput.parse(req.body);
+
+  // Dedup on this board — same normalized name OR same normalized LinkedIn
+  // URL → return the existing row instead of inserting. Idempotent so the
+  // "Add to board" UI flow doesn't silently double-add the same person when
+  // the user clicks twice or re-imports a CSV they already imported.
+  const existingRows = await db
+    .selectFrom("crm_contacts")
+    .select(["id", "name", "linkedin"])
+    .where("board_id", "=", board.id)
+    .execute();
+  const newName = normalizeNameForDedup(p.name);
+  const newLi = normalizeLinkedInForDedup(p.linkedin ?? null);
+  const dup = existingRows.find((r) => {
+    const rName = normalizeNameForDedup(r.name);
+    const rLi = normalizeLinkedInForDedup(r.linkedin ?? null);
+    if (newLi && rLi && newLi === rLi) return true;
+    if (newName && rName && newName === rName) return true;
+    return false;
+  });
+  if (dup) {
+    const full = await db
+      .selectFrom("crm_contacts")
+      .selectAll()
+      .where("id", "=", dup.id)
+      .executeTakeFirstOrThrow();
+    return res.status(200).json({ ...toCamelContact(full), duplicate: true });
+  }
+
   const row = await db
     .insertInto("crm_contacts")
     .values({
@@ -283,13 +364,43 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
   if (!board) return res.status(404).json({ error: "board_not_found" });
 
   const body = z.object({ contacts: z.array(contactInput).max(10000) }).parse(req.body);
-  if (body.contacts.length === 0) return res.json({ inserted: 0 });
+  if (body.contacts.length === 0) return res.json({ inserted: 0, skipped: 0 });
+
+  // Dedup: both (a) within the incoming batch and (b) against rows already
+  // on the board. Match on normalized name OR normalized LinkedIn URL so
+  // CSV re-imports, "Add all N to board" clicks after a second search, and
+  // chat-side "find more" runs don't silently duplicate the same person.
+  const existingRows = await db
+    .selectFrom("crm_contacts")
+    .select(["name", "linkedin"])
+    .where("board_id", "=", board.id)
+    .execute();
+  const seenNames = new Set<string>();
+  const seenLi = new Set<string>();
+  for (const r of existingRows) {
+    const n = normalizeNameForDedup(r.name);
+    const l = normalizeLinkedInForDedup(r.linkedin ?? null);
+    if (n) seenNames.add(n);
+    if (l) seenLi.add(l);
+  }
+  const unique: typeof body.contacts = [];
+  let skipped = 0;
+  for (const p of body.contacts) {
+    const n = normalizeNameForDedup(p.name);
+    const l = normalizeLinkedInForDedup(p.linkedin ?? null);
+    const isDup = (l && seenLi.has(l)) || (n && seenNames.has(n));
+    if (isDup) { skipped++; continue; }
+    if (n) seenNames.add(n);
+    if (l) seenLi.add(l);
+    unique.push(p);
+  }
+  if (unique.length === 0) return res.json({ inserted: 0, skipped });
 
   // Batch inserts of 500.
   const userId = req.user!.id;
   let inserted = 0;
-  for (let i = 0; i < body.contacts.length; i += 500) {
-    const batch = body.contacts.slice(i, i + 500);
+  for (let i = 0; i < unique.length; i += 500) {
+    const batch = unique.slice(i, i + 500);
     const result = await db
       .insertInto("crm_contacts")
       .values(
@@ -319,7 +430,7 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
       .execute();
     inserted += Number(result[0]?.numInsertedOrUpdatedRows ?? batch.length);
   }
-  res.json({ inserted });
+  res.json({ inserted, skipped });
 });
 
 router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
