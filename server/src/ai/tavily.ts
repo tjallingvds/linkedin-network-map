@@ -37,11 +37,28 @@ export async function tavilySearch(
     body.include_domains = opts.includeDomains;
   }
 
-  const r = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  // Hard timeout — without this, a hung Tavily request sits forever while
+  // the chat route's heartbeat keeps TCP alive, and eventually the cloud
+  // proxy's request cap kills the entire server process ("Failed to fetch"
+  // on the client, no useful error in the logs).
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  let r: Response;
+  try {
+    r = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    if ((err as Error).name === "AbortError") {
+      throw new Error(`tavily timed out after 30s: ${query.slice(0, 80)}`);
+    }
+    throw err;
+  }
+  clearTimeout(timeout);
   if (!r.ok) throw new Error(`tavily ${r.status}: ${await r.text()}`);
   const data = (await r.json()) as { results: TavilyResult[] };
 

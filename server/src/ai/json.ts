@@ -37,9 +37,29 @@ export async function aiJson<T = unknown>(
   let inputTokens = 0;
   let outputTokens = 0;
 
+  // Hard timeout on the upstream LLM call. Without this, a hung provider
+  // (rare but happens) leaves the fetch pending forever while the chat
+  // route's heartbeat keeps the TCP socket alive — eventually the cloud
+  // proxy kills the whole server process at its request cap and the user
+  // sees "Failed to fetch" with no useful logs.
+  const callWithTimeout = async (url: string, init: RequestInit, ms = 60_000): Promise<Response> => {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), ms);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        throw new Error(`${provider} timed out after ${ms / 1000}s`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(t);
+    }
+  };
+
   if (provider === "anthropic") {
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-    const r = await fetch("https://api.anthropic.com/v1/messages", {
+    const r = await callWithTimeout("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -65,7 +85,7 @@ export async function aiJson<T = unknown>(
     if (!apiKey) throw new Error(`${provider.toUpperCase()}_API_KEY not set`);
     const baseUrl = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
 
-    const r = await fetch(`${baseUrl}/v1/chat/completions`, {
+    const r = await callWithTimeout(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
