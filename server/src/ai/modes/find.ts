@@ -144,16 +144,14 @@ export async function runFind(
     // Fall through to the generic pipeline only if name extraction failed.
   }
 
-  // "all / everyone / every / the people" with no explicit number means "a
-  // big list, pick a sensible default" — NOT count=1. Past regression:
-  // clarify LLM was returning {ready:true, count:1} for "find me all people
-  // at X" and the user got a single prospect back. "find THE people
-  // implementing AI at tier-2 banks" silently landed on the default 8 and
-  // returned 2 — so we also treat "the people/leaders/…" as an implicit
-  // "many" signal. Default to 50 and skip clarify.
-  const saysAll =
-    /\b(?:all|every(?:one|body)?|each)\s+(?:of\s+the\s+)?(?:people|person|employees|contacts|prospects|staff|folks)?\b/i.test(fullBrief) ||
-    /\bthe\s+(?:people|folks|leaders?|teams?|employees|contacts|prospects|staff)\b/i.test(fullBrief);
+  // "all / everyone / every" with no explicit number means "a big list,
+  // pick a sensible default" — NOT count=1. Past regression: clarify LLM
+  // was returning {ready:true, count:1} for "find me all people at X" and
+  // the user got a single prospect back. Default to 50 and skip clarify.
+  // Note: do NOT treat "the people" as an implicit "many" — it's a neutral
+  // phrasing ("find the people implementing AI") that should still go
+  // through clarify and ask for a count, not silently default to 50.
+  const saysAll = /\b(?:all|every(?:one|body)?|each)\s+(?:of\s+the\s+)?(?:people|person|employees|contacts|prospects|staff|folks)?\b/i.test(fullBrief);
   if (saysAll && !requestedCount) {
     requestedCount = 50;
   }
