@@ -1882,10 +1882,25 @@ export function CRMView({
         .catch(() => { /* non-fatal — the original boards state keeps working */ });
     };
     loadContacts();
+    // 4s poll (down from 8s) so moves made by a collaborator show up on
+    // other users' screens within a few seconds. Short enough to feel
+    // live, long enough not to spam the DB.
     const iv = window.setInterval(() => {
       if (document.visibilityState === "visible") { loadContacts(); loadBoards(); }
-    }, 8_000);
-    return () => { stopped = true; window.clearInterval(iv); };
+    }, 4_000);
+    // Immediate refetch whenever the tab regains focus — users Alt-Tab
+    // away to read Slack / email and come back expecting the latest
+    // state, not a state up to 4s stale.
+    const onFocus = () => { loadContacts(); loadBoards(); };
+    const onVis = () => { if (document.visibilityState === "visible") { loadContacts(); loadBoards(); } };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      stopped = true;
+      window.clearInterval(iv);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [activeId]);
 
   const active = boards.find((b) => b.id === activeId);
