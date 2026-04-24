@@ -1847,22 +1847,38 @@ export function CRMView({
     setStages(loadStages(activeId));
   }, [activeId]);
 
+  // Callback refs — `onFlash` and `onBoardsChange` are re-created on every
+  // parent render (plain arrow functions), so listing them as effect deps
+  // was causing the contacts effect to tear down + re-mount on every
+  // parent render. That thrashed the fetch, created overlapping polling
+  // intervals, and made board switches feel stuck on stale data. Pin the
+  // callbacks in a ref so the effect only re-runs on the thing that
+  // actually matters: activeId.
+  const onFlashRef = useRef(onFlash);
+  const onBoardsChangeRef = useRef(onBoardsChange);
+  useEffect(() => { onFlashRef.current = onFlash; }, [onFlash]);
+  useEffect(() => { onBoardsChangeRef.current = onBoardsChange; }, [onBoardsChange]);
+
   // Load contacts + boards when active board changes, then poll both every
   // 8s so shared boards reflect what other collaborators are doing without
-  // a hard refresh. Boards list is polled too because the board's stages
-  // live on it and we want changes made by the owner to propagate to
-  // shared users (and vice-versa).
+  // a hard refresh.
   useEffect(() => {
     if (!activeId) return;
+    // Clear contacts immediately on board switch so the UI doesn't linger
+    // on the old board's rows while the new GET is in flight. User reported
+    // "content actually doesnt update the people" on board switch — the
+    // data was updating, but perceptibly late. Optimistic clear fixes that.
+    setContacts([]);
+
     let stopped = false;
     const loadContacts = () => {
       api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`)
         .then((r) => { if (!stopped) setContacts(r.contacts); })
-        .catch((e) => { if (!stopped) onFlash(`Load contacts failed: ${e.message}`); });
+        .catch((e) => { if (!stopped) onFlashRef.current(`Load contacts failed: ${e.message}`); });
     };
     const loadBoards = () => {
       api.get<{ boards: CrmBoard[] }>("/api/crm/boards")
-        .then((r) => { if (!stopped) { setBoards(r.boards); onBoardsChange?.(r.boards); } })
+        .then((r) => { if (!stopped) { setBoards(r.boards); onBoardsChangeRef.current?.(r.boards); } })
         .catch(() => { /* non-fatal — the original boards state keeps working */ });
     };
     loadContacts();
@@ -1870,7 +1886,7 @@ export function CRMView({
       if (document.visibilityState === "visible") { loadContacts(); loadBoards(); }
     }, 8_000);
     return () => { stopped = true; window.clearInterval(iv); };
-  }, [activeId, onFlash, onBoardsChange]);
+  }, [activeId]);
 
   const active = boards.find((b) => b.id === activeId);
 
