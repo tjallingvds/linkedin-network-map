@@ -1882,21 +1882,43 @@ export function CRMView({
         .catch(() => { /* non-fatal — the original boards state keeps working */ });
     };
     loadContacts();
-    // 4s poll (down from 8s) so moves made by a collaborator show up on
-    // other users' screens within a few seconds. Short enough to feel
-    // live, long enough not to spam the DB.
+
+    // SSE live-sync: server pushes a one-line event whenever any user
+    // (owner OR shared member) mutates the board. Replaces the 4s poll.
+    // The server notifies types "contact" | "board" | "stages" | "dedup"
+    // | "bulk" — we just refetch on any event. Stages/board events also
+    // trigger a boards refresh since stages live on the board.
+    const stream = new EventSource(`/api/crm/boards/${activeId}/stream`, { withCredentials: true });
+    stream.onmessage = (ev) => {
+      if (stopped) return;
+      let type = "contact";
+      try { type = (JSON.parse(ev.data) as { type?: string }).type ?? "contact"; } catch { /* malformed */ }
+      loadContacts();
+      if (type === "stages" || type === "board") loadBoards();
+    };
+    // Silent reconnect on transient error — EventSource auto-retries, but
+    // we also fire a one-off refetch so the user isn't stuck on stale
+    // state if the reconnect takes a few seconds.
+    stream.onerror = () => { if (!stopped) loadContacts(); };
+
+    // Slow safety-net polling — 30s backstop in case SSE is blocked by a
+    // corporate proxy or the connection silently dies. Cheap enough to
+    // leave on.
     const iv = window.setInterval(() => {
       if (document.visibilityState === "visible") { loadContacts(); loadBoards(); }
-    }, 4_000);
-    // Immediate refetch whenever the tab regains focus — users Alt-Tab
-    // away to read Slack / email and come back expecting the latest
-    // state, not a state up to 4s stale.
+    }, 30_000);
+
+    // Immediate refetch on tab refocus — users Alt-Tab to Slack and come
+    // back expecting fresh data. SSE may already have pushed while
+    // hidden, but refetching on focus is cheap insurance.
     const onFocus = () => { loadContacts(); loadBoards(); };
     const onVis = () => { if (document.visibilityState === "visible") { loadContacts(); loadBoards(); } };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVis);
+
     return () => {
       stopped = true;
+      stream.close();
       window.clearInterval(iv);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVis);

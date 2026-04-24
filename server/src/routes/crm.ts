@@ -12,7 +12,7 @@
  *   PATCH  /api/crm/contacts/:id
  *   DELETE /api/crm/contacts/:id
  */
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
 import { sql } from "kysely";
 import { db } from "../db/index.js";
@@ -25,6 +25,40 @@ import { availableProviders } from "../ai/providers.js";
 import { env } from "../env.js";
 
 const router = Router();
+
+// ---- SSE push bus ----
+// In-memory pub/sub for live board updates. Keyed by board id. Every
+// mutation endpoint calls notifyBoard(boardId, type), which writes a
+// data: line to every connected subscriber. Single-instance deploy
+// only — horizontal scale will need Redis pub/sub here.
+type PushType = "contact" | "board" | "stages" | "dedup" | "bulk";
+const boardSubscribers = new Map<string, Set<Response>>();
+
+function notifyBoard(boardId: string, type: PushType): void {
+  const subs = boardSubscribers.get(boardId);
+  if (!subs || subs.size === 0) return;
+  const payload = `data: ${JSON.stringify({ type, boardId, at: Date.now() })}\n\n`;
+  for (const res of subs) {
+    try {
+      if (!res.writableEnded) res.write(payload);
+    } catch { /* socket died mid-write; close handler will clean it up */ }
+  }
+}
+
+function subscribeBoard(boardId: string, res: Response): () => void {
+  let set = boardSubscribers.get(boardId);
+  if (!set) {
+    set = new Set();
+    boardSubscribers.set(boardId, set);
+  }
+  set.add(res);
+  return () => {
+    const s = boardSubscribers.get(boardId);
+    if (!s) return;
+    s.delete(res);
+    if (s.size === 0) boardSubscribers.delete(boardId);
+  };
+}
 
 // ---- helpers ----
 // Stage labels are fully user-configurable now (stored client-side per board)
@@ -249,6 +283,7 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     .returningAll()
     .executeTakeFirst();
   if (!row) return res.status(404).json({ error: "not_found" });
+  notifyBoard(req.params.id, body.stages !== undefined ? "stages" : "board");
   res.json({
     id: row.id, name: row.name, emoji: row.emoji,
     stages: row.stages ?? null,
@@ -264,6 +299,44 @@ router.delete("/boards/:id", async (req: AuthedRequest, res) => {
     .executeTakeFirst();
   if (!r.numDeletedRows) return res.status(404).json({ error: "not_found" });
   res.status(204).end();
+});
+
+/**
+ * SSE live-sync endpoint — clients open this with EventSource and receive
+ * a push every time someone mutates the board (contact edits, stage
+ * edits, bulk imports, cleanup sweeps). Replaces the 4s polling loop.
+ *
+ * Event payload: {"type": "contact"|"board"|"stages"|"dedup"|"bulk",
+ *                 "boardId": "...", "at": <epoch_ms>}
+ * Client re-fetches contacts and/or boards based on the type.
+ *
+ * Auth: requires session (the router sits behind the auth middleware)
+ * AND membership/ownership of the board. Heartbeat comment line every
+ * 20s keeps cloud proxies from killing idle connections.
+ */
+router.get("/boards/:id/stream", async (req: AuthedRequest, res) => {
+  const board = await ensureBoard(req.user!.id, req.params.id);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // nginx-style buffering off
+  res.flushHeaders?.();
+  res.write(`: connected ${Date.now()}\n\n`);
+
+  const unsubscribe = subscribeBoard(req.params.id, res);
+  const heartbeat = setInterval(() => {
+    if (!res.writableEnded) res.write(`: hb ${Date.now()}\n\n`);
+  }, 20_000);
+
+  const cleanup = () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+    try { res.end(); } catch { /* already closed */ }
+  };
+  req.on("close", cleanup);
+  req.on("error", cleanup);
 });
 
 // ---- Contacts ----
@@ -347,6 +420,7 @@ router.get("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
   if (toDelete.length > 0) {
     await db.deleteFrom("crm_contacts").where("id", "in", toDelete).execute();
     console.log(`[crm] auto-deduped ${toDelete.length} contact(s) on board ${req.params.boardId} (merged enrichment first)`);
+    notifyBoard(req.params.boardId, "dedup");
   }
 
   const rows = await db
@@ -418,6 +492,7 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
     })
     .returningAll()
     .executeTakeFirstOrThrow();
+  notifyBoard(board.id, "contact");
   res.status(201).json(toCamelContact(row));
 });
 
@@ -492,6 +567,7 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
       .execute();
     inserted += Number(result[0]?.numInsertedOrUpdatedRows ?? batch.length);
   }
+  if (inserted > 0) notifyBoard(board.id, "bulk");
   res.json({ inserted, skipped });
 });
 
@@ -540,6 +616,7 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
     .returningAll()
     .executeTakeFirst();
   if (!row) return res.status(404).json({ error: "not_found" });
+  notifyBoard(row.board_id, "contact");
   res.json(toCamelContact(row));
 });
 
@@ -613,6 +690,7 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     }
   }
 
+  if (enriched > 0) notifyBoard(req.params.boardId, "contact");
   res.json({ enriched, skipped, alreadyHad, total: rows.length });
 });
 
@@ -728,16 +806,19 @@ router.post("/boards/:boardId/background", async (req: AuthedRequest, res) => {
     }
   }
 
+  if (filled > 0) notifyBoard(req.params.boardId, "contact");
   res.json({ filled, skipped, alreadyHad, total: rows.length });
 });
 
 router.delete("/contacts/:id", async (req: AuthedRequest, res) => {
-  const r = await db
+  const deleted = await db
     .deleteFrom("crm_contacts")
     .where("id", "=", req.params.id)
     .where("user_id", "=", req.user!.id)
+    .returning("board_id")
     .executeTakeFirst();
-  if (!r.numDeletedRows) return res.status(404).json({ error: "not_found" });
+  if (!deleted) return res.status(404).json({ error: "not_found" });
+  notifyBoard(deleted.board_id, "contact");
   res.status(204).end();
 });
 
@@ -894,6 +975,9 @@ router.post("/cleanup-from-external", async (req: AuthedRequest, res) => {
     const batch = toDelete.slice(i, i + 1000);
     await db.deleteFrom("crm_contacts").where("id", "in", batch).execute();
   }
+  // Notify every board a delete touched — collaborators on any of them
+  // should see the update push-through rather than waiting for polling.
+  for (const bid of boardsHit) notifyBoard(bid, "contact");
 
   res.json({
     removed: toDelete.length,
