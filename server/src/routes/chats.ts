@@ -152,7 +152,40 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       }
     }
   }
-  // Dedupe — same person can appear in multiple assistant turns.
+  // Also pull names from the user's CRM so Find doesn't recommend people
+  // they've already added to a board. Scoped to boards the user owns OR is
+  // a member of — if a collaborator added someone to a shared pipeline,
+  // surfacing them again would waste an outreach slot.
+  try {
+    const myBoards = await db
+      .selectFrom("crm_boards")
+      .select("id")
+      .where("user_id", "=", req.user!.id)
+      .execute();
+    const memberBoards = await db
+      .selectFrom("crm_board_members")
+      .select("board_id")
+      .where("user_id", "=", req.user!.id)
+      .execute();
+    const boardIds = [...new Set([...myBoards.map((b) => b.id), ...memberBoards.map((m) => m.board_id)])];
+    if (boardIds.length > 0) {
+      const crmRows = await db
+        .selectFrom("crm_contacts")
+        .select(["name"])
+        .where("board_id", "in", boardIds)
+        .execute();
+      for (const row of crmRows) {
+        if (row.name && row.name.trim()) alreadyShownNames.push(row.name.trim());
+      }
+    }
+  } catch (err) {
+    // Non-fatal — if the CRM lookup fails we still run Find, just without
+    // the CRM-aware exclusion layer.
+    console.warn("[chats] crm exclusion lookup failed:", (err as Error).message);
+  }
+
+  // Dedupe — same person can appear in multiple assistant turns or on
+  // multiple boards.
   const uniqAlreadyShown = Array.from(new Set(alreadyShownNames.map((n) => n.toLowerCase())))
     .map((lc) => alreadyShownNames.find((n) => n.toLowerCase() === lc)!)
     .filter(Boolean);
@@ -238,7 +271,14 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       );
     } else if (parsed.data.mode === "discover_more") {
       const prev = (parsed.data.previousProspects ?? []) as Prospect[];
-      const excludeNames = prev.map((p) => p.name).filter(Boolean);
+      // Merge the previous-prospects exclusion with the CRM-backed
+      // exclusion so "find more" doesn't re-recommend people already on
+      // one of the user's boards. uniqAlreadyShown already includes both
+      // chat-history names and CRM names.
+      const excludeNames = Array.from(new Set([
+        ...prev.map((p) => p.name).filter(Boolean),
+        ...uniqAlreadyShown,
+      ]));
       const brief = parsed.data.previousBrief?.trim() || parsed.data.content;
       result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys);
     } else {
