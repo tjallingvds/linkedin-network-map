@@ -14,6 +14,7 @@ import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
   IconSend, IconMail, IconSparkle, IconLinkedIn, IconUsers,
 } from "../design/icons";
+import { ExternalCleanupModal } from "./ExternalCleanupModal";
 
 // ========== Column configuration ==========
 
@@ -1755,6 +1756,7 @@ export function CRMView({
   };
   const [contacts, setContacts] = useState<CrmContact[]>([]);
   const [importOpen, setImportOpen] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [openContact, setOpenContact] = useState<CrmContact | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2084,6 +2086,13 @@ export function CRMView({
           <button className="pill-btn" onClick={() => setImportOpen(true)}>
             <IconUpload size={12} />Import CSV
           </button>
+          <button
+            className="pill-btn"
+            onClick={() => setCleanupOpen(true)}
+            title="Upload a CSV from another CRM — any matching contacts will be removed from all your boards so you don't double-touch them"
+          >
+            <IconClose size={12} />Remove from external CRM
+          </button>
           <button className="pill-btn primary" onClick={() => setAddOpen(true)}>
             <IconNewChat size={12} />Add contact
           </button>
@@ -2116,6 +2125,22 @@ export function CRMView({
           boardName={active.name}
           onClose={() => setImportOpen(false)}
           onImport={doImport}
+        />
+      )}
+
+      {cleanupOpen && (
+        <ExternalCleanupModal
+          onClose={() => setCleanupOpen(false)}
+          onFlash={onFlash}
+          onDone={async () => {
+            // Refresh the active board — the dedup sweep and any deletes need
+            // to be reflected in the UI without a hard reload.
+            if (!activeId) return;
+            try {
+              const r = await api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`);
+              setContacts(r.contacts);
+            } catch { /* non-fatal — next interaction will refetch */ }
+          }}
         />
       )}
 

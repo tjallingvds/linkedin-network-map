@@ -762,4 +762,105 @@ router.post("/share/:token/join", async (req: AuthedRequest, res) => {
   res.json({ boardId: board.id, name: board.name, emoji: board.emoji });
 });
 
+/**
+ * Cleanup-from-external: the user uploads a CSV of contacts they already
+ * have in a different CRM (e.g. Salesforce, HubSpot) and we remove any
+ * matching rows from ALL their own CRM boards. Idempotent — running it
+ * twice with the same CSV is safe.
+ *
+ * Matching priority per incoming row:
+ *   1. normalised LinkedIn URL (strongest)
+ *   2. normalised email
+ *   3. normalised name + normalised company (drops false positives like
+ *      two different "John Smith"s at different firms)
+ *   4. normalised name alone, ONLY when neither side has a company — the
+ *      user explicitly said "remove duplicate names"
+ *
+ * Scope: removes across ALL boards the user owns. Shared-member boards
+ * they don't own are left alone — someone else's outreach pipeline isn't
+ * ours to edit.
+ */
+router.post("/cleanup-from-external", async (req: AuthedRequest, res) => {
+  const rowSchema = z.object({
+    name: z.string().nullish(),
+    email: z.string().nullish(),
+    linkedin: z.string().nullish(),
+    company: z.string().nullish(),
+  });
+  const body = z.object({ rows: z.array(rowSchema).max(50000) }).parse(req.body);
+  if (body.rows.length === 0) return res.json({ removed: 0, boardsAffected: 0, scanned: 0 });
+
+  // Build indexed lookup sets for the uploaded CSV so the scan is O(n+m).
+  const externalLi = new Set<string>();
+  const externalEmail = new Set<string>();
+  const externalNameCompany = new Set<string>();
+  const externalNameOnly = new Set<string>();
+  for (const r of body.rows) {
+    const li = normalizeLinkedInForDedup(r.linkedin ?? null);
+    if (li) externalLi.add(li);
+    const email = (r.email ?? "").toLowerCase().trim();
+    if (email) externalEmail.add(email);
+    const name = normalizeNameForDedup(r.name ?? null);
+    const company = (r.company ?? "").toLowerCase().trim();
+    if (name && company) externalNameCompany.add(`${name}|${company}`);
+    else if (name) externalNameOnly.add(name);
+  }
+
+  // Pull every contact on boards the user owns.
+  const userId = req.user!.id;
+  const myBoards = await db
+    .selectFrom("crm_boards")
+    .select("id")
+    .where("user_id", "=", userId)
+    .execute();
+  const myBoardIds = myBoards.map((b) => b.id);
+  if (myBoardIds.length === 0) return res.json({ removed: 0, boardsAffected: 0, scanned: 0 });
+
+  const contacts = await db
+    .selectFrom("crm_contacts")
+    .select(["id", "board_id", "name", "email", "linkedin", "company"])
+    .where("board_id", "in", myBoardIds)
+    .execute();
+
+  const toDelete: string[] = [];
+  const boardsHit = new Set<string>();
+  for (const c of contacts) {
+    const li = normalizeLinkedInForDedup(c.linkedin ?? null);
+    if (li && externalLi.has(li)) {
+      toDelete.push(c.id); boardsHit.add(c.board_id); continue;
+    }
+    const email = (c.email ?? "").toLowerCase().trim();
+    if (email && externalEmail.has(email)) {
+      toDelete.push(c.id); boardsHit.add(c.board_id); continue;
+    }
+    const name = normalizeNameForDedup(c.name);
+    const company = (c.company ?? "").toLowerCase().trim();
+    if (name && company && externalNameCompany.has(`${name}|${company}`)) {
+      toDelete.push(c.id); boardsHit.add(c.board_id); continue;
+    }
+    // Name-only fallback — only when BOTH sides lack a company. Same logic
+    // as the on-load dedup sweep: two distinct people with the same name
+    // at different companies should both survive.
+    if (name && !company && externalNameOnly.has(name)) {
+      toDelete.push(c.id); boardsHit.add(c.board_id);
+    }
+  }
+
+  if (toDelete.length === 0) {
+    return res.json({ removed: 0, boardsAffected: 0, scanned: contacts.length });
+  }
+
+  // Chunk deletes so we don't blow past any Postgres parameter limits.
+  for (let i = 0; i < toDelete.length; i += 1000) {
+    const batch = toDelete.slice(i, i + 1000);
+    await db.deleteFrom("crm_contacts").where("id", "in", batch).execute();
+  }
+
+  res.json({
+    removed: toDelete.length,
+    boardsAffected: boardsHit.size,
+    scanned: contacts.length,
+  });
+});
+
 export default router;
