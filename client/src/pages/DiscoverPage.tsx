@@ -908,9 +908,25 @@ export function DiscoverPage() {
                             </button>
                           </div>
                         ) : (
-                          <div className="ai-summary" style={m.isError ? { color: "var(--danger)" } : undefined}>
-                            {m.text}
-                          </div>
+                          // Text results that already carry HTML (network
+                          // analysis, person-background, decision-maker
+                          // narratives) need dangerouslySetInnerHTML so
+                          // <p>/<strong>/<ul> render as markup instead of
+                          // leaking tags into the chat bubble. Plain-text
+                          // replies (clarify questions, error messages)
+                          // render through React as before — they don't
+                          // start with "<".
+                          m.text.trim().startsWith("<") ? (
+                            <div
+                              className="ai-summary"
+                              style={m.isError ? { color: "var(--danger)" } : undefined}
+                              dangerouslySetInnerHTML={{ __html: m.text }}
+                            />
+                          ) : (
+                            <div className="ai-summary" style={m.isError ? { color: "var(--danger)" } : undefined}>
+                              {m.text}
+                            </div>
+                          )
                         )
                       )}
                     </div>
