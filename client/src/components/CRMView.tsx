@@ -349,6 +349,53 @@ function KanbanCard({
   );
 }
 
+/** Single "Actions ▾" button that collapses every CRM-toolbar control
+ *  (Share, Card fields, Stages, Get email, Find backgrounds, Import CSV,
+ *  Remove from external CRM, Add contact) into one popover. The submenus
+ *  rendered inside (BoardShareMenu, ColumnsMenu, StagesMenu, etc.) keep
+ *  their own popover logic — clicking them opens a nested menu. */
+function ActionsMenu({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative" }}>
+      <button className="pill-btn" onClick={() => setOpen((o) => !o)}>
+        <IconChevD size={12} />Actions
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={() => setOpen(false)} />
+          <div
+            className="board-menu"
+            style={{
+              minWidth: 220,
+              right: 0,
+              left: "auto",
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+              padding: 8,
+            }}
+            onClick={(e) => {
+              // Close the Actions menu when a terminal action fires (any
+              // button whose click bubbles up). Leaf-level <button> clicks
+              // naturally bubble; BoardShareMenu / ColumnsMenu / StagesMenu
+              // stop propagation internally so their own popovers can stay
+              // open. Net effect: direct actions (Get email, Import CSV,
+              // Add contact) close the menu; submenu triggers don't.
+              if ((e.target as HTMLElement).closest("button")?.classList.contains("pill-btn")) {
+                const isSubmenu = !!(e.target as HTMLElement).closest("[data-submenu-trigger]");
+                if (!isSubmenu) setOpen(false);
+              }
+            }}
+          >
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Dropdown menu that toggles which fields show on kanban cards (per board,
  *  persisted to localStorage, same pattern as ColumnsMenu). */
 function KanbanFieldsMenu({
@@ -2035,67 +2082,68 @@ export function CRMView({
           </div>
         </div>
         <div className="crm-tools">
-          {active && (
-            <BoardShareMenu
-              boardId={active.id}
-              boardName={active.name}
-              owned={active.owned !== false}
-              onFlash={onFlash}
-            />
-          )}
-          {viewMode === "table" ? (
-            <ColumnsMenu
+          <ActionsMenu>
+            {active && (
+              <BoardShareMenu
+                boardId={active.id}
+                boardName={active.name}
+                owned={active.owned !== false}
+                onFlash={onFlash}
+              />
+            )}
+            {viewMode === "table" ? (
+              <ColumnsMenu
+                boardId={activeId}
+                value={visibleCols}
+                onChange={setVisibleCols}
+                customCols={customCols}
+                onCustomColsChange={setCustomCols}
+              />
+            ) : (
+              <KanbanFieldsMenu
+                boardId={activeId}
+                value={kanbanFields}
+                onChange={setKanbanFields}
+                customCols={customCols}
+              />
+            )}
+            <StagesMenu
               boardId={activeId}
-              value={visibleCols}
-              onChange={setVisibleCols}
-              customCols={customCols}
-              onCustomColsChange={setCustomCols}
+              value={stages}
+              onChange={setStages}
+              onReassign={async (fromId, toId) => {
+                const affected = contacts.filter((c) => c.stage === fromId);
+                setContacts((cs) => cs.map((c) => c.stage === fromId ? { ...c, stage: toId as CrmStage } : c));
+                await Promise.all(affected.map((c) =>
+                  api.patch(`/api/crm/contacts/${c.id}`, { stage: toId }).catch(() => { /* non-fatal */ }),
+                ));
+              }}
             />
-          ) : (
-            <KanbanFieldsMenu
-              boardId={activeId}
-              value={kanbanFields}
-              onChange={setKanbanFields}
-              customCols={customCols}
-            />
-          )}
-          <StagesMenu
-            boardId={activeId}
-            value={stages}
-            onChange={setStages}
-            onReassign={async (fromId, toId) => {
-              // Move every contact on the removed stage to the fallback.
-              const affected = contacts.filter((c) => c.stage === fromId);
-              setContacts((cs) => cs.map((c) => c.stage === fromId ? { ...c, stage: toId as CrmStage } : c));
-              await Promise.all(affected.map((c) =>
-                api.patch(`/api/crm/contacts/${c.id}`, { stage: toId }).catch(() => { /* non-fatal */ }),
-              ));
-            }}
-          />
-          <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Fill email for contacts that don't have one yet (via Apollo.io)">
-            <IconMail size={12} />{enriching ? "Getting email…" : "Get email"}
-          </button>
-          <button
-            className="pill-btn"
-            disabled={backgrounding}
-            onClick={findBackgrounds}
-            title="Research each contact on the web — posts, talks, notable things they've said — with inline source links"
-          >
-            <IconSparkle size={12} />{backgrounding ? "Researching…" : "Find backgrounds"}
-          </button>
-          <button className="pill-btn" onClick={() => setImportOpen(true)}>
-            <IconUpload size={12} />Import CSV
-          </button>
-          <button
-            className="pill-btn"
-            onClick={() => setCleanupOpen(true)}
-            title="Upload a CSV from another CRM — any matching contacts will be removed from all your boards so you don't double-touch them"
-          >
-            <IconClose size={12} />Remove from external CRM
-          </button>
-          <button className="pill-btn primary" onClick={() => setAddOpen(true)}>
-            <IconNewChat size={12} />Add contact
-          </button>
+            <button className="pill-btn" disabled={enriching} onClick={enrichAll} title="Fill email for contacts that don't have one yet (via Apollo.io)">
+              <IconMail size={12} />{enriching ? "Getting email…" : "Get email"}
+            </button>
+            <button
+              className="pill-btn"
+              disabled={backgrounding}
+              onClick={findBackgrounds}
+              title="Research each contact on the web — posts, talks, notable things they've said — with inline source links"
+            >
+              <IconSparkle size={12} />{backgrounding ? "Researching…" : "Find backgrounds"}
+            </button>
+            <button className="pill-btn" onClick={() => setImportOpen(true)}>
+              <IconUpload size={12} />Import CSV
+            </button>
+            <button
+              className="pill-btn"
+              onClick={() => setCleanupOpen(true)}
+              title="Upload a CSV from another CRM — any matching contacts will be removed from all your boards so you don't double-touch them"
+            >
+              <IconClose size={12} />Remove from external CRM
+            </button>
+            <button className="pill-btn primary" onClick={() => setAddOpen(true)}>
+              <IconNewChat size={12} />Add contact
+            </button>
+          </ActionsMenu>
         </div>
       </div>
 
