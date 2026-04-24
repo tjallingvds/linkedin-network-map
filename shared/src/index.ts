@@ -148,8 +148,20 @@ export interface CrmBoard {
   shared?: boolean;
   /** Whether a share token currently exists (owner only). */
   hasShareToken?: boolean;
+  /** Per-board kanban stages, shared across all collaborators. Null means
+   *  client uses DEFAULT_STAGES. Stored on the board so a stage added by
+   *  the owner is visible to shared-with users without each configuring
+   *  their own copy. */
+  stages?: CrmStageDef[] | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CrmStageDef {
+  id: string;
+  label: string;
+  color: string;
+  tint: string;
 }
 
 export interface CrmImportRow {

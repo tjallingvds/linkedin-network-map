@@ -116,6 +116,15 @@ function generateShareToken(): string {
 
 router.get("/boards", async (req: AuthedRequest, res) => {
   const userId = req.user!.id;
+
+  // Self-heal the stages column so shared collaborators see the same
+  // kanban config even if the migration never ran on this environment.
+  try {
+    await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS stages JSONB`.execute(db);
+  } catch (err) {
+    console.warn("[crm] ensure stages column failed:", (err as Error).message);
+  }
+
   // Board ids the user can see: owned + shared-with-them.
   const memberIds = await db
     .selectFrom("crm_board_members")
@@ -133,6 +142,7 @@ router.get("/boards", async (req: AuthedRequest, res) => {
       "crm_boards.name",
       "crm_boards.emoji",
       "crm_boards.share_token",
+      "crm_boards.stages",
       "crm_boards.created_at",
       "crm_boards.updated_at",
       fn.count<number>("crm_contacts.id").as("contact_count"),
@@ -170,6 +180,7 @@ router.get("/boards", async (req: AuthedRequest, res) => {
       owned: !!b.owned,
       shared: !b.owned, // for anyone not the owner, it reached them via a share token
       hasShareToken: !!b.share_token,
+      stages: b.stages ?? null,
       createdAt: b.created_at, updatedAt: b.updated_at,
     })),
   });
@@ -194,25 +205,53 @@ router.post("/boards", async (req: AuthedRequest, res) => {
 });
 
 router.patch("/boards/:id", async (req: AuthedRequest, res) => {
+  const stageDef = z.object({
+    id: z.string().min(1).max(40),
+    label: z.string().min(1).max(60),
+    color: z.string().min(1).max(80),
+    tint: z.string().min(1).max(80),
+  });
   const body = z.object({
     name: z.string().min(1).max(100).optional(),
     emoji: z.string().min(1).max(8).optional(),
+    stages: z.array(stageDef).min(1).max(20).nullable().optional(),
   }).parse(req.body);
+
+  // Shared members can edit board config (stages) — the whole point of
+  // sharing is collaborative editing. Owner-only for name/emoji to keep
+  // rename surprises contained.
+  const ownedOrMember = await ensureBoard(req.user!.id, req.params.id);
+  if (!ownedOrMember) return res.status(404).json({ error: "not_found" });
+  const ownerCheck = await db
+    .selectFrom("crm_boards")
+    .select("user_id")
+    .where("id", "=", req.params.id)
+    .executeTakeFirst();
+  const isOwner = ownerCheck?.user_id === req.user!.id;
+  if (!isOwner && (body.name !== undefined || body.emoji !== undefined)) {
+    return res.status(403).json({ error: "owner_only", message: "Only the owner can rename this board." });
+  }
+
+  try {
+    await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS stages JSONB`.execute(db);
+  } catch { /* already exists */ }
 
   const update: Record<string, unknown> = { updated_at: new Date() };
   if (body.name !== undefined) update.name = body.name;
   if (body.emoji !== undefined) update.emoji = body.emoji;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (body.stages !== undefined) update.stages = body.stages as any;
 
   const row = await db
     .updateTable("crm_boards")
     .set(update)
     .where("id", "=", req.params.id)
-    .where("user_id", "=", req.user!.id)
     .returningAll()
     .executeTakeFirst();
   if (!row) return res.status(404).json({ error: "not_found" });
   res.json({
     id: row.id, name: row.name, emoji: row.emoji,
+    stages: row.stages ?? null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   });
 });

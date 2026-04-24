@@ -189,7 +189,14 @@ function loadStages(boardId: string): StageDef[] {
 }
 function saveStages(boardId: string, stages: StageDef[]) {
   if (!boardId) return;
+  // Local cache so a fresh mount in the same browser doesn't blink before
+  // the boards GET lands. The server is the source of truth for shared
+  // collaborators though — localStorage is a secondary.
   try { localStorage.setItem(stagesKey(boardId), JSON.stringify(stages)); } catch { /* noop */ }
+  // Fire-and-forget PATCH so shared-with users see the change on their
+  // next 8s poll. Non-fatal on failure — local cache keeps the owner's
+  // view consistent.
+  api.patch(`/api/crm/boards/${boardId}`, { stages }).catch(() => { /* non-fatal */ });
 }
 function makeStageId(label: string): string {
   const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 32) || "stage";
@@ -1827,7 +1834,10 @@ export function CRMView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFlash]);
 
-  // Whenever the active board changes, pull its saved column + kanban config.
+  // Whenever the active board changes, pull its saved column + kanban
+  // config. Stages/custom-cols/visible-cols are loaded here for the initial
+  // render; stages then auto-sync from the boards list whenever it updates
+  // (see the effect below that follows active?.stages).
   useEffect(() => {
     if (!activeId) return;
     const cc = loadCustomCols(activeId);
@@ -1837,24 +1847,48 @@ export function CRMView({
     setStages(loadStages(activeId));
   }, [activeId]);
 
-  // Load contacts when active board changes, then poll every 8s so shared
-  // boards reflect what other collaborators are doing without a hard refresh.
+  // Load contacts + boards when active board changes, then poll both every
+  // 8s so shared boards reflect what other collaborators are doing without
+  // a hard refresh. Boards list is polled too because the board's stages
+  // live on it and we want changes made by the owner to propagate to
+  // shared users (and vice-versa).
   useEffect(() => {
     if (!activeId) return;
     let stopped = false;
-    const load = () => {
+    const loadContacts = () => {
       api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`)
         .then((r) => { if (!stopped) setContacts(r.contacts); })
         .catch((e) => { if (!stopped) onFlash(`Load contacts failed: ${e.message}`); });
     };
-    load();
+    const loadBoards = () => {
+      api.get<{ boards: CrmBoard[] }>("/api/crm/boards")
+        .then((r) => { if (!stopped) { setBoards(r.boards); onBoardsChange?.(r.boards); } })
+        .catch(() => { /* non-fatal — the original boards state keeps working */ });
+    };
+    loadContacts();
     const iv = window.setInterval(() => {
-      if (document.visibilityState === "visible") load();
+      if (document.visibilityState === "visible") { loadContacts(); loadBoards(); }
     }, 8_000);
     return () => { stopped = true; window.clearInterval(iv); };
-  }, [activeId, onFlash]);
+  }, [activeId, onFlash, onBoardsChange]);
 
   const active = boards.find((b) => b.id === activeId);
+
+  // Keep stages in sync with the server whenever the active board's
+  // server-side stages change (e.g. the owner added a stage, our poll
+  // returned the updated boards list). Fall back to localStorage/default
+  // when the server doesn't have stages stored yet (legacy boards).
+  const activeStagesKey = active?.stages ? JSON.stringify(active.stages) : "";
+  useEffect(() => {
+    if (!active) return;
+    if (Array.isArray(active.stages) && active.stages.length > 0) {
+      setStages(active.stages as StageDef[]);
+      // Refresh localStorage cache so a quick remount before the next GET
+      // keeps the same view.
+      try { localStorage.setItem(stagesKey(active.id), JSON.stringify(active.stages)); } catch { /* noop */ }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, activeStagesKey]);
 
   const patchContact = async (id: string, patch: Partial<CrmContact>) => {
     // Optimistic update — merge customFields instead of replacing so patching

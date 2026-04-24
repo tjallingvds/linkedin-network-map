@@ -113,6 +113,10 @@ export interface CrmBoardsTable {
   name: string;
   emoji: string;
   share_token: string | null;
+  /** Shared kanban stage config for this board — null means "use client
+   *  defaults". Persisted here (not in localStorage) so collaborators see
+   *  the same stages the owner set up. JSONB. */
+  stages: unknown | null;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 }
