@@ -420,6 +420,7 @@ async function handleDiscovery(args: {
     query,
     targetCount,
     extractionHint,
+    parsed,
     userId,
     userKeys,
   });
@@ -619,18 +620,37 @@ async function parallelDiscovery(args: {
   query: string;
   targetCount: number;
   extractionHint: string;
+  parsed?: ParsedBrief | null;
   userId: string;
   userKeys?: UserKeys;
 }): Promise<Candidate[]> {
-  const { provider, query, targetCount, extractionHint, userId, userKeys } = args;
+  const { provider, query, targetCount, extractionHint, parsed, userId, userKeys } = args;
 
-  // Each advanced Tavily call returns up to 20 results, so ~targetCount/5
-  // queries already covers a superset of what we need after dedup, grounding,
-  // and the archetype gate. Previously the formula was ceil(targetCount*1.2),
-  // which meant targetCount=50 fired 60 near-duplicate queries (and
-  // discover_more, which delegates to runFind, burned ~180 Tavily credits
-  // per follow-up). Floor at 8 so small briefs still get decent coverage.
-  const numQueries = Math.max(Math.ceil(targetCount / 5), 8);
+  // Query budget is driven by THREE factors, not just targetCount:
+  //   - baseline throughput (one query returns up to 20 URLs, so
+  //     targetCount/5 covers a superset after dedup + grounding + gate);
+  //   - archetype breadth — a brief with 4 role archetypes needs at least
+  //     3 queries per archetype so each gets real coverage; a brief with 1
+  //     archetype doesn't need that expansion;
+  //   - firm breadth — when the brief lists many firms, each needs at
+  //     least one query touching it (via OR grouping).
+  //
+  // Repro: a 4-archetype supply-chain brief with ~30 named firms was
+  // getting numQueries=10, which bunched firms into 5-per-query OR groups
+  // and missed most of the gigafactories / trade associations / trading
+  // houses. Scale the budget up with archetype count so coverage matches
+  // the brief's breadth.
+  const archetypeCount = parsed?.archetypes.length ?? 0;
+  const firmCount = (parsed?.firms.length ?? 0) + (parsed?.pastFirms.length ?? 0);
+  const numQueries = Math.min(
+    40,
+    Math.max(
+      Math.ceil(targetCount / 5),
+      archetypeCount * 3,   // 3 queries per distinct archetype
+      Math.ceil(firmCount / 3), // 1 query per ~3 firms (OR-grouped)
+      8,
+    ),
+  );
 
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
@@ -649,16 +669,17 @@ PAST-EMPLOYER INTENT — if the filters mention "PAST EMPLOYER TARGETS" (people 
   - Prefix queries with "ex-", "former", "formerly at", "previously at", "alumni of".
   - NEVER just query the company + title (that returns CURRENT employees).
 
-STRATEGY for ${numQueries} queries — coverage per call:
-- GROUP 3-5 firms per query with OR whenever the brief lists many firms. One query covering 5 firms beats 5 queries each covering one.
-- OR target titles too where the title variants are synonyms ("COO OR Chief Operating Officer OR Head of Operations").
-- Every target firm should appear in at least one query, but do NOT give each firm its own query when many firms exist.
-- Never generate two queries that point at the same (firm-set, title-set) combination — that's a pure duplicate and wastes a credit.
-- Do NOT generate queries for any EXCLUDED firms listed in the brief or filters above.
+STRATEGY for ${numQueries} queries — archetype-aware coverage:
+- If the brief lists multiple ROLE ARCHETYPES, dedicate at least 2-3 queries to EACH archetype. Do not leave any archetype with zero or one query — that's how a "4 types of people" brief ends up with only type-1 hits.
+- Group firms with OR when 2-4 firms share the same archetype+title combo. Do NOT cram 5+ firms from DIFFERENT archetypes into one query (Tavily returns only ~20 results — most will be one firm's people).
+- OR title variants that are synonyms ("COO OR Chief Operating Officer OR Head of Operations"), not titles from different archetypes.
+- Every target firm should appear in at least one query, but a firm named once is fine if it sits in a dense OR group.
+- Never generate two queries that point at the same (firm-set, title-set) combination.
+- Do NOT generate queries for any EXCLUDED firms listed in the brief.
 
-Return {"queries": [...]} — exactly ${numQueries} queries, each materially different from the others.`,
+Return {"queries": [...]} — exactly ${numQueries} queries, each materially different and tied to a specific archetype when archetypes are listed.`,
     query,
-    { maxTokens: 2000, userId, userKeys },
+    { maxTokens: 2500, userId, userKeys },
   );
 
   let searchQueries = (queriesObj.queries ?? []).filter(
