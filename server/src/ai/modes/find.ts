@@ -1313,7 +1313,22 @@ function extractCount(s: string): number {
 function looksLikeSpecificPersonLookup(s: string): boolean {
   if (!/\b[A-Z][a-z]+\s+[A-Z][a-zA-Z]+\b/.test(s)) return false;
   const hay = s.toLowerCase();
-  return /(find|identify|locate|who\s+is|looking\s+for|search\s+for|look\s+up|someone\s+(?:named|called)|person\s+(?:named|called)|name(?:d)?\s+(?:like|similar\s+to)|similar\s+to)/.test(hay);
+  const intent = /(find|identify|locate|who\s+is|looking\s+for|search\s+for|look\s+up|someone\s+(?:named|called)|person\s+(?:named|called)|name(?:d)?\s+(?:like|similar\s+to)|similar\s+to)/.test(hay);
+  if (!intent) return false;
+
+  // Disqualifiers — these are strong signals the brief is a multi-prospect
+  // search even if the "[Cap][Cap]" name regex matches something like
+  // "Senior Vice" or "Wells Fargo". Past bug: "find me SVPs of
+  // transformation / AI implementation in the banking sector outside of
+  // Wells Fargo" matched the person-lookup path because "Senior Vice"
+  // (from "Senior Vice Presidents") looks like a first+last name.
+  const pluralRole = /\b(svps?|vps?|coos?|ctos?|ceos?|cfos?|cios?|cros?|evps?|directors?|managers?|leaders?|partners?|heads?\s+of|people|employees|contacts|candidates|prospects|executives|officers)\b/;
+  const scope = /\b(in\s+the\s+\w+\s+(sector|industry|space|market|area)|across\s+(?:all\s+)?\w+|at\s+multiple|who\s+(?:have|work|are|cover))\b/;
+  const exclusion = /\b(outside\s+of|excluding|except(?:\s+for)?|not\s+at|not\s+from|other\s+than|besides)\b/;
+  const newnessCue = /\bn[ew]w\s+(?:ones?|people|prospects|candidates)\b/; // "new ones", typo-tolerant ("nerw")
+  if (pluralRole.test(hay) || scope.test(hay) || exclusion.test(hay) || newnessCue.test(hay)) return false;
+
+  return true;
 }
 
 function looksTargeted(s: string): boolean {
