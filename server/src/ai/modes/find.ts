@@ -624,39 +624,39 @@ async function parallelDiscovery(args: {
 }): Promise<Candidate[]> {
   const { provider, query, targetCount, extractionHint, userId, userKeys } = args;
 
-  // Legacy: max(ceil(targetCount * 1.2), 10)
-  const numQueries = Math.max(Math.ceil(targetCount * 1.2), 10);
+  // Each advanced Tavily call returns up to 20 results, so ~targetCount/5
+  // queries already covers a superset of what we need after dedup, grounding,
+  // and the archetype gate. Previously the formula was ceil(targetCount*1.2),
+  // which meant targetCount=50 fired 60 near-duplicate queries (and
+  // discover_more, which delegates to runFind, burned ~180 Tavily credits
+  // per follow-up). Floor at 8 so small briefs still get decent coverage.
+  const numQueries = Math.max(Math.ceil(targetCount / 5), 8);
 
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
-    `You generate LinkedIn search queries to find specific people. Generate exactly ${numQueries} queries from the research brief below.
+    `You generate LinkedIn search queries to find specific people. Generate exactly ${numQueries} queries from the research brief below. QUALITY OVER QUANTITY — each query will be fired against a 20-result Tavily advanced search, so coverage per query matters more than variant count.
 
 ${extractionHint ? `STRUCTURED FILTERS (use these exact firms, titles, and exclusions):\n${extractionHint}\n` : ""}
 QUERY FORMAT — every query MUST name at least one specific company from the brief:
-  GOOD: "COO Houlihan Lokey"
-  GOOD: "Head of AI Evercore OR Moelis OR PJT Partners"
+  GOOD: "Head of AI Evercore OR Moelis OR PJT Partners OR Lazard OR Centerview"
+  GOOD: "COO Houlihan Lokey OR William Blair OR Baird OR Stifel"
   BAD:  "AI leaders investment banking" (no company name — finds articles, not people)
-  BAD:  "digital transformation financial services" (finds thought leadership, not profiles)
+  BAD:  "COO Moelis" + "Chief Operating Officer Moelis" (same combo, wasted call)
 
-PAST-EMPLOYER INTENT — if the structured filters above mention "PAST EMPLOYER TARGETS" (people who USED TO work at a firm and have LEFT), craft different queries:
-  GOOD: "ex-Celonis VP Sales"
-  GOOD: "formerly at UiPath Head of Revenue"
-  GOOD: "previously Signavio OR Workfusion GTM"
-  GOOD: "UiPath alumni Chief Revenue Officer"
-  GOOD: "\\"left Celonis\\" partnerships"
+PAST-EMPLOYER INTENT — if the filters mention "PAST EMPLOYER TARGETS" (people who have LEFT the firm), craft different queries:
+  GOOD: "ex-Celonis OR ex-UiPath OR ex-Signavio VP Sales OR Head of Revenue"
+  GOOD: "formerly at UiPath alumni Chief Revenue Officer"
   - Prefix queries with "ex-", "former", "formerly at", "previously at", "alumni of".
-  - Also include news/announcement searches ("Celonis departures", "UiPath layoffs sales").
-  - NEVER just query the company + title (that returns current employees, which is the wrong intent).
+  - NEVER just query the company + title (that returns CURRENT employees).
 
-STRATEGY for ${numQueries} queries:
-- Read the full brief to understand WHO we're looking for and WHY.
-- Pair each target firm with 1-2 target titles from the brief.
-- Group 2-3 similar firms with OR for broader coverage.
-- Every query must contain at least one specific company name from the brief.
-- Vary the title across queries so you don't search the same role 20 times.
+STRATEGY for ${numQueries} queries — coverage per call:
+- GROUP 3-5 firms per query with OR whenever the brief lists many firms. One query covering 5 firms beats 5 queries each covering one.
+- OR target titles too where the title variants are synonyms ("COO OR Chief Operating Officer OR Head of Operations").
+- Every target firm should appear in at least one query, but do NOT give each firm its own query when many firms exist.
+- Never generate two queries that point at the same (firm-set, title-set) combination — that's a pure duplicate and wastes a credit.
 - Do NOT generate queries for any EXCLUDED firms listed in the brief or filters above.
 
-Return {"queries": [...]} — exactly ${numQueries} queries.`,
+Return {"queries": [...]} — exactly ${numQueries} queries, each materially different from the others.`,
     query,
     { maxTokens: 2000, userId, userKeys },
   );
@@ -670,6 +670,12 @@ Return {"queries": [...]} — exactly ${numQueries} queries.`,
       `${query.slice(0, 80)} professionals`,
     ];
   }
+
+  // Near-duplicate filter — the LLM sometimes emits "COO Moelis" and "Chief
+  // Operating Officer Moelis" as two separate queries. Token-set Jaccard
+  // similarity > 0.75 → treat as a dupe and keep the first one. Cheap,
+  // saves ~10-20% of calls on typical briefs.
+  searchQueries = dedupeSimilarQueries(searchQueries);
 
   // Legacy: maxPerQuery = targetCount > 30 ? 20 : 10
   const maxPerQuery = targetCount > 30 ? 20 : 10;
@@ -1210,6 +1216,57 @@ function levenshtein(a: string, b: string): number {
     }
   }
   return prev[b.length];
+}
+
+/** Drop near-duplicate queries using token-set Jaccard similarity. LLMs
+ *  often emit "COO Moelis" AND "Chief Operating Officer Moelis" as two
+ *  separate queries, which hits Tavily twice for the same (firm, title)
+ *  combo. 0.75 threshold keeps distinct intents (different firm sets or
+ *  different titles) while catching surface-level rephrasings. Runs
+ *  in-order, keeping the first instance of each cluster. */
+function dedupeSimilarQueries(qs: string[]): string[] {
+  const SYNONYMS: Record<string, string> = {
+    coo: "chief_operating_officer",
+    "chief operating officer": "chief_operating_officer",
+    cto: "chief_technology_officer",
+    "chief technology officer": "chief_technology_officer",
+    cio: "chief_information_officer",
+    "chief information officer": "chief_information_officer",
+    cfo: "chief_financial_officer",
+    "chief financial officer": "chief_financial_officer",
+    cro: "chief_revenue_officer",
+    "chief revenue officer": "chief_revenue_officer",
+    cos: "chief_of_staff",
+    "chief of staff": "chief_of_staff",
+    cdo: "chief_data_officer",
+    "chief data officer": "chief_data_officer",
+    "head of ai": "head_of_ai",
+    cao: "chief_ai_officer",
+    "chief ai officer": "head_of_ai",
+    vp: "vice_president",
+    "vice president": "vice_president",
+  };
+  const tokens = (q: string): Set<string> => {
+    let s = q.toLowerCase();
+    // Apply longest-key-first synonym collapse.
+    const keys = Object.keys(SYNONYMS).sort((a, b) => b.length - a.length);
+    for (const k of keys) s = s.split(k).join(SYNONYMS[k]!);
+    const raw = s.replace(/[^a-z0-9_]+/g, " ").split(/\s+/).filter((t) => t.length >= 2 && t !== "or" && t !== "and");
+    return new Set(raw);
+  };
+  const jaccard = (a: Set<string>, b: Set<string>): number => {
+    if (a.size === 0 || b.size === 0) return 0;
+    let inter = 0;
+    for (const t of a) if (b.has(t)) inter++;
+    return inter / (a.size + b.size - inter);
+  };
+  const kept: Array<{ q: string; toks: Set<string> }> = [];
+  for (const q of qs) {
+    const toks = tokens(q);
+    if (kept.some((k) => jaccard(k.toks, toks) > 0.75)) continue;
+    kept.push({ q, toks });
+  }
+  return kept.map((k) => k.q);
 }
 
 // ═════════════════════════════════════════════════════════════════════════
