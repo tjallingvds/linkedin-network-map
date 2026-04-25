@@ -453,7 +453,22 @@ export function DiscoverPage() {
     //   - "no …" / "not these" / "that's wrong" / "different" (rejection)
     //   - "find me 100" / "get me 50 people" (count-driven re-ask)
     //   - "start over" / "redo" / "try again"
+    // A message that LOOKS like a fresh research brief — starts with a
+    // discovery verb ("find", "search", "look", "get me", "show me") and
+    // is substantive (>=8 words OR mentions explicit role/sector
+    // language) — should kick off a new search, not get routed into the
+    // filter-or-answer Followup path. Repro: user re-pasted their full
+    // brief expecting a new search; it was treated as a filter on a
+    // previous 1-prospect list and returned "No prospects match the
+    // criteria." Filter-style messages stay short ("only those with
+    // email", "just VPs") so the word-count gate keeps them in Followup.
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+    const looksLikeFreshBrief =
+      /^\s*(?:find\s+(?:me\s+)?|search(?:\s+for)?\s+|look\s+(?:for|up)\s+|get\s+me\s+|show\s+me\s+|give\s+me\s+|i\s+(?:want|need)\s+)/i.test(text) &&
+      (wordCount >= 8 || /\b(?:ai|cto|coo|cfo|cro|cio|ceo|svp|vp\b|md\b|director|head\s+of|manager|founder|partner|chief|engineer|scientist|analyst|consultant|investor)\b/i.test(text));
+
     const wantsNewSearch =
+      looksLikeFreshBrief ||
       /\b(more|another|additional|further|elsewhere|on the (web|internet)|search the web|search the internet)\b/i.test(text) ||
       /\b(?:search(?:\s+(?:again|better|for|more))?|re[-\s]?search|look\s+up|dig\s+up|go\s+find)\b/i.test(text) ||
       /\b(?:better|deeper|broader|wider|proper|real)\s+(?:search|list|results?)\b/i.test(text) ||
