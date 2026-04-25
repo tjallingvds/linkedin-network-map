@@ -221,6 +221,10 @@ export async function runFind(
   // ── Legacy: multi-round discover loop ────────────────────────────────────
   const allPeople: Candidate[] = [];
   const seenNames = new Set<string>();
+  const funnelTotals: FunnelStats = {
+    extracted: 0, afterClean: 0, afterBriefFilter: 0,
+    afterConfidence: 0, afterArchetypeGate: 0,
+  };
   // Pre-seed with names already shown earlier in this chat so cross-turn
   // dedup works. Without this, turn 3 ("find everyone at JPM/Barclays/…")
   // happily returned people turn 1 ("find everyone at Goldman Sachs")
@@ -248,7 +252,7 @@ export async function runFind(
           allPeople.map((p) => p.name).join(", ")
         }${alreadyShownNames.length ? "; Also already shown earlier: " + alreadyShownNames.slice(0, 40).join(", ") : ""}. Do NOT return these again.)`;
 
-    const roundPeople = await handleDiscovery({
+    const { people: roundPeople, funnel: roundFunnel } = await handleDiscovery({
       provider,
       query: roundQuery,
       targetCount: remaining,
@@ -257,6 +261,16 @@ export async function runFind(
       userId,
       userKeys,
     });
+    // Aggregate across rounds so the empty-result diagnostic can point at
+    // which stage actually nuked the pool (extraction / brief filter /
+    // archetype gate). Without this, "0 results" gives the user no
+    // actionable signal — they get told to "try a more specific brief"
+    // even when their brief was already overspecified.
+    funnelTotals.extracted += roundFunnel.extracted;
+    funnelTotals.afterClean += roundFunnel.afterClean;
+    funnelTotals.afterBriefFilter += roundFunnel.afterBriefFilter;
+    funnelTotals.afterConfidence += roundFunnel.afterConfidence;
+    funnelTotals.afterArchetypeGate += roundFunnel.afterArchetypeGate;
 
     if (roundPeople.length === 0) break;
 
@@ -291,12 +305,44 @@ export async function runFind(
     };
   });
 
-  const summary =
-    prospects.length >= targetCount
-      ? `Found ${prospects.length} matching prospects.`
-      : `Found ${prospects.length} (couldn't surface ${targetCount}) — try a more specific brief or a different angle.`;
+  const summary = composeFindSummary(prospects.length, targetCount, funnelTotals, parsed);
 
   return { kind: "prospects", summary, prospects };
+}
+
+/** Build a result summary that points the user at the actionable cause
+ *  when the funnel produced few/zero matches. Without this, "0 results"
+ *  always told the user to "try a more specific brief", which is
+ *  exactly the wrong advice when the brief was over-specified to begin
+ *  with — the user's "SVPs only, not Chief / Head" brief had narrow
+ *  exclude-titles dropping every Tavily hit, and they had no signal as
+ *  to which constraint was the problem. */
+function composeFindSummary(
+  found: number,
+  target: number,
+  f: FunnelStats,
+  parsed: ParsedBrief | null,
+): string {
+  if (found >= target) return `Found ${found} matching prospects.`;
+  if (found > 0) {
+    return `Found ${found} (couldn't surface ${target}) — broaden the brief or try "find more" for another pass.`;
+  }
+  // found === 0. Diagnose by the largest drop in the funnel.
+  if (f.extracted === 0) {
+    return `Found 0 — the web search returned nothing usable for these firms+titles. The firms may be too obscure, or the title combination too rare. Try broader role keywords or check the firm names.`;
+  }
+  if (f.afterBriefFilter === 0 && f.afterClean > 0) {
+    const ex = parsed?.excludeTitles ?? [];
+    const exMsg = ex.length ? ` (exclude-titles: ${ex.slice(0, 3).join(", ")})` : "";
+    return `Found 0 — extracted ${f.afterClean} candidates but the brief filter dropped them all${exMsg}. The exclude-titles or target-firm constraints are too tight for the snippets the web returned. Try relaxing the title constraint.`;
+  }
+  if (f.afterArchetypeGate === 0 && f.afterConfidence > 0) {
+    return `Found 0 — extracted ${f.afterConfidence} candidates that fit the firm/title filter, but the archetype-gate rejected them all as not matching the role you described. Either the snippets didn't have enough role context, or the archetype is too narrow (e.g. SVP-only at firms where AI leads are usually Chief / Global Head). Try removing the seniority constraint.`;
+  }
+  if (f.afterConfidence === 0 && f.afterBriefFilter > 0) {
+    return `Found 0 — ${f.afterBriefFilter} candidates passed the firm/title filter but none scored above low-confidence. Web snippets weren't specific enough; try adding a sector or location to the brief.`;
+  }
+  return `Found 0 — extracted ${f.extracted}, lost most through filters (clean ${f.afterClean} → brief ${f.afterBriefFilter} → confidence ${f.afterConfidence} → archetype ${f.afterArchetypeGate}). Relax one constraint at a time and retry.`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -404,6 +450,14 @@ function buildExtractCtx(parsed: ParsedBrief | null): string {
 // Legacy: handleDiscovery + _filterDiscoveryResults (chat-discovery.js)
 // ═════════════════════════════════════════════════════════════════════════
 
+interface FunnelStats {
+  extracted: number;
+  afterClean: number;
+  afterBriefFilter: number;
+  afterConfidence: number;
+  afterArchetypeGate: number;
+}
+
 async function handleDiscovery(args: {
   provider: AiProvider;
   query: string;
@@ -412,8 +466,13 @@ async function handleDiscovery(args: {
   parsed: ParsedBrief | null;
   userId: string;
   userKeys?: UserKeys;
-}): Promise<Candidate[]> {
+}): Promise<{ people: Candidate[]; funnel: FunnelStats }> {
   const { provider, query, targetCount, extractionHint, parsed, userId, userKeys } = args;
+
+  const funnel: FunnelStats = {
+    extracted: 0, afterClean: 0, afterBriefFilter: 0,
+    afterConfidence: 0, afterArchetypeGate: 0,
+  };
 
   const raw = await parallelDiscovery({
     provider,
@@ -424,17 +483,21 @@ async function handleDiscovery(args: {
     userId,
     userKeys,
   });
+  funnel.extracted = raw.length;
 
-  if (raw.length === 0) return [];
+  if (raw.length === 0) return { people: [], funnel };
 
   // Legacy _filterDiscoveryResults
   let people = raw;
   people = dedupByName(people);
   people = cleanBadEntries(people);
+  funnel.afterClean = people.length;
   people = applyBriefFilters(people, parsed);
+  funnel.afterBriefFilter = people.length;
 
   // Legacy handleDiscovery tail: drop low confidence, sort high→medium.
   people = people.filter((p) => p.confidence !== "low");
+  funnel.afterConfidence = people.length;
   const confOrder: Record<string, number> = { high: 0, medium: 1 };
   people.sort((a, b) => (confOrder[a.confidence] ?? 1) - (confOrder[b.confidence] ?? 1));
 
@@ -449,8 +512,9 @@ async function handleDiscovery(args: {
     people = await gateByArchetype({ provider, parsed, candidates: people, userId, userKeys });
     console.log(`[find] archetype gate: ${before} → ${people.length}`);
   }
+  funnel.afterArchetypeGate = people.length;
 
-  return people;
+  return { people, funnel };
 }
 
 /** Semantic archetype gate. Given the brief's archetype definitions and
