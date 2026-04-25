@@ -223,7 +223,7 @@ export async function runFind(
   const seenNames = new Set<string>();
   const funnelTotals: FunnelStats = {
     extracted: 0, afterClean: 0, afterBriefFilter: 0,
-    afterConfidence: 0, afterArchetypeGate: 0,
+    afterConfidence: 0, afterArchetypeGate: 0, excludedAsAlreadyShown: 0,
   };
   // Pre-seed with names already shown earlier in this chat so cross-turn
   // dedup works. Without this, turn 3 ("find everyone at JPM/Barclays/…")
@@ -281,6 +281,12 @@ export async function runFind(
         seenNames.add(key);
         allPeople.push(p);
         newCount++;
+      } else if (key) {
+        // Candidate passed all the filters but was deduped against either
+        // the user's CRM or an earlier chat turn. Count it so the summary
+        // can say "30 hits but all already in your CRM" instead of a
+        // misleading "0 results".
+        funnelTotals.excludedAsAlreadyShown++;
       }
     }
 
@@ -325,9 +331,18 @@ function composeFindSummary(
 ): string {
   if (found >= target) return `Found ${found} matching prospects.`;
   if (found > 0) {
-    return `Found ${found} (couldn't surface ${target}) — broaden the brief or try "find more" for another pass.`;
+    const crmNote = f.excludedAsAlreadyShown > 0
+      ? ` (${f.excludedAsAlreadyShown} more were already in your CRM or this chat)`
+      : "";
+    return `Found ${found} (couldn't surface ${target})${crmNote} — broaden the brief or try "find more" for another pass.`;
   }
-  // found === 0. Diagnose by the largest drop in the funnel.
+  // found === 0. Special case: the search WAS productive, but every hit
+  // collided with the user's CRM or prior turns. That's a very different
+  // root cause from "filters were too tight" and deserves its own message.
+  if (f.excludedAsAlreadyShown > 0 && f.excludedAsAlreadyShown >= f.afterArchetypeGate) {
+    return `Found 0 new prospects — the search returned ${f.excludedAsAlreadyShown} matches but they were all already in your CRM or this chat. Either the niche is exhausted for the roles you've targeted, or relax the brief (e.g. add adjacent firms or broader titles).`;
+  }
+  // Diagnose by the largest drop in the funnel.
   if (f.extracted === 0) {
     return `Found 0 — the web search returned nothing usable for these firms+titles. The firms may be too obscure, or the title combination too rare. Try broader role keywords or check the firm names.`;
   }
@@ -456,6 +471,13 @@ interface FunnelStats {
   afterBriefFilter: number;
   afterConfidence: number;
   afterArchetypeGate: number;
+  /** Count of candidates that survived all filters but were dropped at
+   *  intake because their name was already in alreadyShownNames — i.e.
+   *  in the user's CRM or surfaced in a prior chat turn. Tracked here
+   *  so the empty-result diagnostic can call it out: "found 30, but 30
+   *  were already in your CRM" is very different from "search filters
+   *  killed everything." */
+  excludedAsAlreadyShown: number;
 }
 
 async function handleDiscovery(args: {
@@ -471,7 +493,7 @@ async function handleDiscovery(args: {
 
   const funnel: FunnelStats = {
     extracted: 0, afterClean: 0, afterBriefFilter: 0,
-    afterConfidence: 0, afterArchetypeGate: 0,
+    afterConfidence: 0, afterArchetypeGate: 0, excludedAsAlreadyShown: 0,
   };
 
   const raw = await parallelDiscovery({
