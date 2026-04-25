@@ -292,7 +292,18 @@ export async function runFind(
 
     console.log(`[find] round ${round + 1}: ${roundPeople.length} raw, ${newCount} new (total ${allPeople.length}/${targetCount})`);
 
-    if (newCount < 3) break;
+    // Break-out policy:
+    //  - Always break if the round added zero new candidates (the query
+    //    generator is producing pure dupes — more rounds won't help).
+    //  - Otherwise, only break early if we already have a meaningful
+    //    chunk of the target (>= 30% of what was asked). Previously the
+    //    loop quit after any round that returned <3 new — which was
+    //    way too aggressive on niche briefs where round 1 hits 2 people
+    //    but rounds 2 and 3, with different query angles, would have
+    //    found more. User reported "way too quick to say it didn't find
+    //    them" — that was this break.
+    if (newCount === 0) break;
+    if (newCount < 3 && allPeople.length >= Math.ceil(targetCount * 0.3)) break;
   }
 
   // ── Map Candidate → Prospect ─────────────────────────────────────────────
@@ -331,10 +342,22 @@ function composeFindSummary(
 ): string {
   if (found >= target) return `Found ${found} matching prospects.`;
   if (found > 0) {
-    const crmNote = f.excludedAsAlreadyShown > 0
-      ? ` (${f.excludedAsAlreadyShown} more were already in your CRM or this chat)`
-      : "";
-    return `Found ${found} (couldn't surface ${target})${crmNote} — broaden the brief or try "find more" for another pass.`;
+    // Surface the funnel even on partial results so the user knows
+    // WHICH constraint thinned the pool. Previously a "Found 2 of 100"
+    // result told the user nothing actionable.
+    const parts: string[] = [];
+    if (f.excludedAsAlreadyShown > 0) parts.push(`${f.excludedAsAlreadyShown} already in your CRM/chat`);
+    const briefDrop = f.afterClean - f.afterBriefFilter;
+    if (briefDrop > 0 && briefDrop >= f.afterClean / 2) {
+      const ex = (parsed?.excludeTitles ?? []).slice(0, 3).join(", ");
+      parts.push(`${briefDrop} dropped by exclude-titles${ex ? `: ${ex}` : ""}/firm filter`);
+    }
+    const archetypeDrop = f.afterConfidence - f.afterArchetypeGate;
+    if (archetypeDrop > 0 && archetypeDrop >= f.afterConfidence / 2) {
+      parts.push(`${archetypeDrop} rejected by archetype gate`);
+    }
+    const detail = parts.length ? ` — ${parts.join(", ")}` : "";
+    return `Found ${found} (couldn't surface ${target})${detail}. Broaden the brief or try "find more" for another pass.`;
   }
   // found === 0. Special case: the search WAS productive, but every hit
   // collided with the user's CRM or prior turns. That's a very different
@@ -678,8 +701,22 @@ function applyBriefFilters(people: Candidate[], parsed: ParsedBrief | null): Can
   const filtered = people.filter((p) => {
     const title = (p.title || "").toLowerCase();
     if (companyMatchesExcluded(p.company)) return false;
-    if (exSeniority.some((es) => title.includes(es))) return false;
-    if (exTitles.some((et) => title.includes(et))) return false;
+    // Word-boundary match for short single-word seniority/title exclusions.
+    // Past bug: parseBrief sometimes returned exclude="head" or "chief"
+    // for a brief like "not global heads or chiefs" — substring .includes()
+    // then dropped EVERY title containing "Head" ("SVP, Head of AI") or
+    // "Chief" ("Chief of Staff for the AI org"). Multi-word exclusions
+    // ("global head", "chief operating officer") are still substring-
+    // matched because they're already specific.
+    const titleHasExcludedTerm = (terms: string[]) =>
+      terms.some((t) => {
+        if (!t) return false;
+        if (t.includes(" ")) return title.includes(t);
+        const esc = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(`\\b${esc}\\b`, "i").test(title);
+      });
+    if (titleHasExcludedTerm(exSeniority)) return false;
+    if (titleHasExcludedTerm(exTitles)) return false;
     if (targetFirms.length > 0 && !companyMatchesTarget(p.company)) return false;
     if (pastMode) {
       // Current employer must NOT be a past-target firm — the person has left.
