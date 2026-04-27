@@ -595,7 +595,24 @@ export function DiscoverPage() {
     });
   }
 
-  function applyResult(result: CompletionResult, brief?: string) {
+  function applyResult(result: CompletionResult | undefined, brief?: string) {
+    // Defensive: if the server returned an error envelope past the early
+    // header flush, request() should already have thrown an ApiError — but
+    // belt-and-braces, treat a missing/malformed result as a soft error
+    // rather than crashing the page on `result.kind`.
+    if (!result || typeof result !== "object" || !("kind" in result)) {
+      setThread((t) => {
+        const copy = t.slice();
+        const last = copy[copy.length - 1];
+        if (last && "thinking" in last && last.thinking) copy.pop();
+        copy.push({
+          role: "ai",
+          text: "Something went wrong on the server — no result was returned. Try again, and if it keeps happening, check the API keys in Settings.",
+        });
+        return copy;
+      });
+      return;
+    }
     setThread((t) => {
       const copy = t.slice();
       const last = copy[copy.length - 1];

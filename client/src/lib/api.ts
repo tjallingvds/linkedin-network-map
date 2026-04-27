@@ -88,7 +88,26 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new ApiError(r.status, payload, msg);
   }
   if (r.status === 204) return undefined as T;
-  return (await r.json()) as T;
+  const data = (await r.json()) as unknown;
+  // Post-flush error envelope: the chat-completion route flushes 200 OK +
+  // Content-Type early so proxies don't kill long Find runs. If the handler
+  // then throws, writeErrorEnvelope writes {"error":..,"message":..} on the
+  // already-200 response. Without this guard the body parses as "success",
+  // callers do `resp.result.kind` and the page crashes with
+  // "Cannot read properties of undefined (reading 'kind')".
+  if (
+    data && typeof data === "object" &&
+    "error" in data && typeof (data as Record<string, unknown>).error === "string" &&
+    !("result" in data)
+  ) {
+    const obj = data as Record<string, unknown>;
+    const msg = typeof obj.message === "string" && obj.message
+      ? obj.message
+      : typeof obj.error === "string" ? obj.error
+      : "Request failed";
+    throw new ApiError(r.status, data, msg);
+  }
+  return data as T;
 }
 
 export const api = {
