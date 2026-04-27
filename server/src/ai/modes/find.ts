@@ -1429,16 +1429,33 @@ function normalizeLinkedInUrl(url?: string): string | undefined {
 
 function extractCount(s: string): number {
   // Strip numbers that look like they're part of something other than a
-  // prospect count — "tier 2", "Q3", "20%", four-digit years, $amounts.
-  // Past bug: "tier 2 and tier 3 banks" set targetCount=2 via the bare-
-  // digit fallback, so the clarify gate thought the user had already
-  // answered and silently capped the search at 2 prospects.
+  // prospect count — "tier 2", "Q3", "20%", four-digit years, $amounts,
+  // "1,000+ employees" / "$100M revenue" thresholds, time windows like
+  // "last 12 months". Also strip per-account multipliers like "2-3 per
+  // company", "find 2 contacts per firm" — those mean "this many EACH",
+  // not the grand total, so they must force the clarify gate.
+  // Past bugs:
+  //   - "tier 2 and tier 3 banks" → targetCount=2 via bare-digit fallback.
+  //   - "find 2-3 contacts per company" (across 30 named accounts) →
+  //     targetCount=2 because the verb-prefix regex grabbed the "2".
   const cleaned = s
     .replace(/\btier\s*\d+\b/gi, " ")
     .replace(/\bq[1-4]\b/gi, " ")
     .replace(/\b\d+\s*%/g, " ")
     .replace(/\b(?:19|20)\d{2}\b/g, " ")
-    .replace(/\$\s*\d[\d,]*/g, " ");
+    .replace(/\$\s*\d[\d,]*\+?\s*[kmb]?\b/gi, " ")
+    // Employee / size thresholds: "1,000+ employees", "500+ headcount".
+    .replace(/\b\d[\d,]*\+?\s*(?:employees?|headcount|staff|fte|people\s+strong|seats?)\b/gi, " ")
+    // Time windows: "last 12 months", "in 6 months", "past 30 days".
+    .replace(/\b(?:last|past|previous|next|in|within|over)\s+\d{1,3}\s*(?:days?|weeks?|months?|years?|quarters?)\b/gi, " ")
+    // Per-account multipliers in any form: "2-3 per company", "2 contacts
+    // per firm", "find 3 leads per account". Wipe the digit so neither the
+    // verb-prefix nor the noun-suffix regex can latch onto it.
+    .replace(/\b\d{1,3}(?:\s*[-–—]\s*\d{1,3})?(?:\s+\w+){0,4}\s+per\s+(?:company|companies|firm|firms|account|accounts|org(?:ani[sz]ation)?s?|business(?:es)?|client|clients|customer|customers|vendor|vendors|provider|providers|target|targets)\b/gi, " ")
+    // Numeric ranges anywhere ("2-3", "5–10", "10 to 20", "5 or 10") — the
+    // user is sketching a band, not committing to a count. Force clarify.
+    .replace(/\b\d{1,3}\s*[-–—]\s*\d{1,3}\b/g, " ")
+    .replace(/\b\d{1,3}\s+(?:to|or)\s+\d{1,3}\b/gi, " ");
   const m = cleaned.match(/\b(?:find|get|give|list|top|show|want|need)\s*(?:me\s+)?(?:up\s+to\s+)?(\d{1,3})\b/i)
     ?? cleaned.match(/\b(\d{1,3})\s*(?:prospects?|people|leads?|contacts?|results?|names?)\b/i)
     // Bare-digit fallback ONLY for lines that are just a number — catches

@@ -94,8 +94,11 @@ const completionSchema = z.object({
   recipients: z.array(z.any()).optional(),
   /** Prior prospect list for followup / discover_more context. */
   previousProspects: z.array(z.any()).optional(),
-  /** Original brief for discover_more re-runs. */
-  previousBrief: z.string().max(2000).optional(),
+  /** Original brief for discover_more re-runs. Matches the `content` cap —
+   *  the brief IS user-authored content, so capping it lower than `content`
+   *  caused legitimate long briefs (≥2000 chars) to 400 with invalid_body
+   *  the moment the user hit "Discover more" or sent a refinement. */
+  previousBrief: z.string().max(20000).optional(),
 });
 
 router.post("/:id/completion", async (req: AuthedRequest, res) => {
