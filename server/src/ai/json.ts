@@ -13,6 +13,72 @@ const MODELS: Record<AiProvider, string> = {
   deepseek: "deepseek-chat",
 };
 
+/** Thrown when an LLM provider rejects the call because the account is out
+ *  of credits / over the rate or spending limit. */
+export class LlmQuotaError extends Error {
+  readonly kind = "llm_quota" as const;
+  readonly provider: AiProvider;
+  readonly byok: boolean;
+  constructor(provider: AiProvider, message: string, byok: boolean) {
+    super(message);
+    this.name = "LlmQuotaError";
+    this.provider = provider;
+    this.byok = byok;
+  }
+}
+
+/** Thrown when an LLM provider rejects the API key as invalid / revoked. */
+export class LlmAuthError extends Error {
+  readonly kind = "llm_auth" as const;
+  readonly provider: AiProvider;
+  readonly byok: boolean;
+  constructor(provider: AiProvider, message: string, byok: boolean) {
+    super(message);
+    this.name = "LlmAuthError";
+    this.provider = provider;
+    this.byok = byok;
+  }
+}
+
+export function isLlmQuotaError(e: unknown): e is LlmQuotaError {
+  return e instanceof LlmQuotaError;
+}
+export function isLlmAuthError(e: unknown): e is LlmAuthError {
+  return e instanceof LlmAuthError;
+}
+
+/** Map a provider HTTP failure into a typed quota/auth error when the body
+ *  shows the canonical patterns. Falls back to a generic Error otherwise. */
+function classifyProviderError(
+  provider: AiProvider,
+  status: number,
+  body: string,
+  byok: boolean,
+): Error {
+  const lower = body.toLowerCase();
+  const isQuota =
+    status === 402 ||
+    status === 429 ||
+    lower.includes("insufficient_quota") ||
+    lower.includes("you exceeded your current quota") ||
+    lower.includes("rate_limit") ||
+    lower.includes("rate limit") ||
+    lower.includes("billing") ||
+    lower.includes("credit balance is too low") ||
+    lower.includes("monthly limit") ||
+    lower.includes("quota exceeded");
+  const isAuth =
+    status === 401 ||
+    status === 403 ||
+    lower.includes("invalid_api_key") ||
+    lower.includes("invalid api key") ||
+    lower.includes("incorrect api key") ||
+    lower.includes("authentication");
+  if (isQuota) return new LlmQuotaError(provider, `${provider} quota exhausted (HTTP ${status}): ${body.slice(0, 200)}`, byok);
+  if (isAuth) return new LlmAuthError(provider, `${provider} auth failed (HTTP ${status}): ${body.slice(0, 200)}`, byok);
+  return new Error(`${provider} ${status}: ${body}`);
+}
+
 export async function aiJson<T = unknown>(
   provider: AiProvider,
   systemPrompt: string,
@@ -73,7 +139,7 @@ export async function aiJson<T = unknown>(
         messages: [{ role: "user", content: userPrompt }],
       }),
     });
-    if (!r.ok) throw new Error(`anthropic ${r.status}: ${await r.text()}`);
+    if (!r.ok) throw classifyProviderError("anthropic", r.status, await r.text(), byok);
     const data = (await r.json()) as {
       content: Array<{ type: string; text?: string }>;
       usage: { input_tokens: number; output_tokens: number };
@@ -98,7 +164,7 @@ export async function aiJson<T = unknown>(
         ],
       }),
     });
-    if (!r.ok) throw new Error(`${provider} ${r.status}: ${await r.text()}`);
+    if (!r.ok) throw classifyProviderError(provider, r.status, await r.text(), byok);
     const data = (await r.json()) as {
       choices: Array<{ message: { content: string } }>;
       usage: { prompt_tokens: number; completion_tokens: number };

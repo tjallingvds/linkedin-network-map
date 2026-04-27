@@ -18,7 +18,8 @@ import { runDraft } from "../ai/modes/draft.js";
 import { runFollowup } from "../ai/modes/followup.js";
 import { runDiscoverMore } from "../ai/modes/discover-more.js";
 import { extractUserKeys } from "../ai/user-keys.js";
-import { aiJson } from "../ai/json.js";
+import { aiJson, isLlmQuotaError, isLlmAuthError } from "../ai/json.js";
+import { isTavilyQuotaError, isTavilyAuthError } from "../ai/tavily.js";
 
 const router = Router();
 
@@ -289,6 +290,26 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     }
   } catch (err) {
     clearInterval(heartbeat);
+    // Typed quota/auth errors get rendered as a normal "text" CompletionResult
+    // so the chat shows a clean, actionable card — not a generic
+    // "completion_failed" envelope. Without this, a Tavily 432 looked
+    // identical to "no results found" and the user couldn't tell their
+    // credit was the actual blocker.
+    const friendly = renderUpstreamError(err);
+    if (friendly) {
+      const result: CompletionResult = { kind: "text", content: friendly };
+      // Persist the friendly text as the assistant message so the chat
+      // history reflects what the user actually saw.
+      await db.insertInto("messages").values({
+        chat_id: chat.id, role: "assistant", content: friendly,
+        result: result as unknown as object,
+      }).execute().catch(() => { /* non-fatal */ });
+      if (!res.writableEnded) {
+        res.write(JSON.stringify({ result, provider }));
+        res.end();
+      }
+      return;
+    }
     writeErrorEnvelope(res, (err as Error).message);
     return;
   }
@@ -362,6 +383,63 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
  *  handler can't send a 500 — it just closes the socket and the client
  *  sees a whitespace-only body. Write a JSON error envelope ourselves so
  *  response.json() succeeds with an {error, message} object. */
+/** Turn a typed upstream error into a chat-ready message. Returns null when
+ *  the error is something else (caller falls back to writeErrorEnvelope).
+ *
+ *  Format is plain HTML with a leading sentinel (<div class="upstream-error
+ *  upstream-error-{quota|auth}-{provider}">…). The DiscoverPage renderer
+ *  already supports HTML in text results, so the error renders as a styled
+ *  card instead of raw text. */
+function renderUpstreamError(err: unknown): string | null {
+  if (isTavilyQuotaError(err)) {
+    return wrapErrCard(
+      "tavily-quota",
+      "Tavily web-search credit limit reached",
+      err.byok
+        ? "Your personal Tavily key has run out of monthly credits. Top it up at <a href=\"https://app.tavily.com/\" target=\"_blank\" rel=\"noreferrer\">tavily.com</a>, then re-run."
+        : "The shared Tavily quota for this workspace is exhausted. Add your own Tavily key in <strong>Settings → API keys</strong> to keep searching — you'll only spend your own credits.",
+    );
+  }
+  if (isTavilyAuthError(err)) {
+    return wrapErrCard(
+      "tavily-auth",
+      "Tavily rejected the API key",
+      err.byok
+        ? "Your Tavily key was rejected as invalid. Re-paste it in <strong>Settings → API keys</strong> — make sure there are no stray spaces or smart quotes."
+        : "The server's Tavily key is invalid or revoked. Add your own Tavily key in <strong>Settings → API keys</strong> as a workaround, then ping the team to fix the shared one.",
+    );
+  }
+  if (isLlmQuotaError(err)) {
+    const provider = prettyProvider(err.provider);
+    return wrapErrCard(
+      `llm-quota-${err.provider}`,
+      `${provider} credit/quota limit reached`,
+      err.byok
+        ? `Your personal ${provider} key has hit its quota or rate limit. Top up your account, then re-run.`
+        : `The shared ${provider} quota is exhausted. Add your own ${provider} key in <strong>Settings → API keys</strong> to keep working.`,
+    );
+  }
+  if (isLlmAuthError(err)) {
+    const provider = prettyProvider(err.provider);
+    return wrapErrCard(
+      `llm-auth-${err.provider}`,
+      `${provider} rejected the API key`,
+      err.byok
+        ? `Your ${provider} key was rejected. Re-paste it in <strong>Settings → API keys</strong>.`
+        : `The shared ${provider} key is invalid. Add your own in <strong>Settings → API keys</strong> to keep working.`,
+    );
+  }
+  return null;
+}
+
+function prettyProvider(p: AiProvider): string {
+  return p === "openai" ? "OpenAI" : p === "anthropic" ? "Anthropic" : "DeepSeek";
+}
+
+function wrapErrCard(slug: string, title: string, body: string): string {
+  return `<div class="upstream-error upstream-error-${slug}"><p><strong>${title}</strong></p><p>${body}</p></div>`;
+}
+
 function writeErrorEnvelope(res: import("express").Response, message: string): void {
   if (res.writableEnded) return;
   const payload = JSON.stringify({ error: "completion_failed", message });

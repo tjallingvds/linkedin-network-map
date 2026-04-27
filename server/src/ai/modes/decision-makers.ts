@@ -28,7 +28,7 @@
 import type { AiProvider, CompletionResult, Prospect, ProspectSignal } from "@app/shared";
 import { env } from "../../env.js";
 import { aiJson } from "../json.js";
-import { tavilySearch, type TavilyResult } from "../tavily.js";
+import { tavilySearch, type TavilyResult, isTavilyQuotaError, isTavilyAuthError } from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
 
 interface ParsedBuyingBrief {
@@ -196,7 +196,8 @@ export async function runDecisionMakers(
           userId,
           userKeys,
         });
-      } catch {
+      } catch (e) {
+        if (isTavilyQuotaError(e) || isTavilyAuthError(e)) throw e;
         return [] as TavilyResult[];
       }
     }),

@@ -26,7 +26,7 @@
 import type { AiProvider, CompletionResult, Prospect, ProspectSignal } from "@app/shared";
 import { env } from "../../env.js";
 import { aiJson } from "../json.js";
-import { tavilySearch, type TavilyResult } from "../tavily.js";
+import { tavilySearch, type TavilyResult, isTavilyQuotaError, isTavilyAuthError } from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
 import { looksLikeDecisionMakerMap, runDecisionMakers } from "./decision-makers.js";
 import { looksLikePersonBackground, runPersonBackground } from "./person-background.js";
@@ -220,6 +220,12 @@ export async function runFind(
 
   // ── Legacy: multi-round discover loop ────────────────────────────────────
   const allPeople: Candidate[] = [];
+  // Candidates dropped by the archetype gate across all rounds, deduped by
+  // name. If the gate rejects the entire pool we fall back to surfacing
+  // these as low-confidence "best-effort" results so the user can judge for
+  // themselves rather than seeing a useless "Found 0".
+  const allRejectedByArchetype: Candidate[] = [];
+  const rejectedSeen = new Set<string>();
   const seenNames = new Set<string>();
   const funnelTotals: FunnelStats = {
     extracted: 0, afterClean: 0, afterBriefFilter: 0,
@@ -252,7 +258,7 @@ export async function runFind(
           allPeople.map((p) => p.name).join(", ")
         }${alreadyShownNames.length ? "; Also already shown earlier: " + alreadyShownNames.slice(0, 40).join(", ") : ""}. Do NOT return these again.)`;
 
-    const { people: roundPeople, funnel: roundFunnel } = await handleDiscovery({
+    const { people: roundPeople, funnel: roundFunnel, rejectedByArchetype } = await handleDiscovery({
       provider,
       query: roundQuery,
       targetCount: remaining,
@@ -261,6 +267,14 @@ export async function runFind(
       userId,
       userKeys,
     });
+    // Accumulate rejected candidates with name-level dedup so the fallback
+    // pool doesn't grow with duplicate entries across rounds.
+    for (const r of rejectedByArchetype) {
+      const key = (r.name || "").toLowerCase().trim();
+      if (!key || rejectedSeen.has(key)) continue;
+      rejectedSeen.add(key);
+      allRejectedByArchetype.push(r);
+    }
     // Aggregate across rounds so the empty-result diagnostic can point at
     // which stage actually nuked the pool (extraction / brief filter /
     // archetype gate). Without this, "0 results" gives the user no
@@ -321,6 +335,38 @@ export async function runFind(
       matchPct: c.confidence === "high" ? 92 : c.confidence === "medium" ? 78 : 60,
     };
   });
+
+  // Archetype-gate rescue. When the gate rejected EVERY candidate, returning
+  // "Found 0" leaves the user nothing to act on — yet they often want to
+  // see the rejected pool to judge whether the gate was wrong or the brief
+  // was wrong. Surface them as low-confidence prospects with a clear
+  // "may not match the brief" warning baked into the summary AND each
+  // card's signals (the rejection reason was attached upstream).
+  if (prospects.length === 0 && allRejectedByArchetype.length > 0) {
+    const fallback = allRejectedByArchetype.slice(0, targetCount).map((c, i) => {
+      const signals: ProspectSignal[] = [
+        { kind: "match", text: "⚠ Likely mismatch — flagged by archetype gate", when: "" },
+      ];
+      if (c.evidence) signals.push({ kind: "match", text: c.evidence, when: "" });
+      return {
+        id: `p${Date.now()}-rej-${i}`,
+        name: c.name,
+        title: c.title,
+        company: c.company,
+        linkedin: normalizeLinkedInUrl(c.linkedin),
+        signals,
+        past: [],
+        matchPct: 50,
+      };
+    });
+    const summary =
+      `Found 0 strict matches. Showing ${fallback.length} ` +
+      `${fallback.length === 1 ? "candidate" : "candidates"} that fit the firm/title filter ` +
+      `but the archetype gate flagged as potentially off-brief — review them yourself. ` +
+      `If most look right, the archetype is too narrow (e.g. SVP-only when AI leads are usually ` +
+      `Chief / Global Head); if most look wrong, your brief is doing its job.`;
+    return { kind: "prospects", summary, prospects: fallback };
+  }
 
   const summary = composeFindSummary(prospects.length, targetCount, funnelTotals, parsed);
 
@@ -503,6 +549,15 @@ interface FunnelStats {
   excludedAsAlreadyShown: number;
 }
 
+interface HandleDiscoveryResult {
+  people: Candidate[];
+  funnel: FunnelStats;
+  /** Candidates that passed every earlier filter but the archetype gate
+   *  classified as null. Carried out so the caller can fall back to
+   *  surfacing them when the gate rejected the entire pool. */
+  rejectedByArchetype: Candidate[];
+}
+
 async function handleDiscovery(args: {
   provider: AiProvider;
   query: string;
@@ -511,7 +566,7 @@ async function handleDiscovery(args: {
   parsed: ParsedBrief | null;
   userId: string;
   userKeys?: UserKeys;
-}): Promise<{ people: Candidate[]; funnel: FunnelStats }> {
+}): Promise<HandleDiscoveryResult> {
   const { provider, query, targetCount, extractionHint, parsed, userId, userKeys } = args;
 
   const funnel: FunnelStats = {
@@ -530,7 +585,7 @@ async function handleDiscovery(args: {
   });
   funnel.extracted = raw.length;
 
-  if (raw.length === 0) return { people: [], funnel };
+  if (raw.length === 0) return { people: [], funnel, rejectedByArchetype: [] };
 
   // Legacy _filterDiscoveryResults
   let people = raw;
@@ -552,14 +607,17 @@ async function handleDiscovery(args: {
   // routinely smuggles through sector-coverage bankers whose titles look
   // right ("Head of Technology Investment Banking") but whose actual role
   // is an anti-pattern (tech-sector M&A, not AI deployment).
+  let rejectedByArchetype: Candidate[] = [];
   if (parsed && (parsed.archetypes.length > 0 || parsed.antiPatterns.length > 0) && people.length > 0) {
     const before = people.length;
-    people = await gateByArchetype({ provider, parsed, candidates: people, userId, userKeys });
-    console.log(`[find] archetype gate: ${before} → ${people.length}`);
+    const gated = await gateByArchetype({ provider, parsed, candidates: people, userId, userKeys });
+    people = gated.kept;
+    rejectedByArchetype = gated.rejected;
+    console.log(`[find] archetype gate: ${before} → ${people.length} (kept) / ${rejectedByArchetype.length} (rejected)`);
   }
   funnel.afterArchetypeGate = people.length;
 
-  return { people, funnel };
+  return { people, funnel, rejectedByArchetype };
 }
 
 /** Semantic archetype gate. Given the brief's archetype definitions and
@@ -575,7 +633,7 @@ async function gateByArchetype(args: {
   candidates: Candidate[];
   userId: string;
   userKeys?: UserKeys;
-}): Promise<Candidate[]> {
+}): Promise<{ kept: Candidate[]; rejected: Candidate[] }> {
   const { provider, parsed, candidates, userId, userKeys } = args;
   const BATCH = 20;
   const batches: Candidate[][] = [];
@@ -623,25 +681,37 @@ Return {"matches": [{"id": 0, "archetype": 2, "reason": "Head of Banking Transfo
         );
         const matches = Array.isArray(out.matches) ? out.matches : [];
         const kept: Candidate[] = [];
+        const rejected: Candidate[] = [];
         batch.forEach((c, idx) => {
           const m = matches.find((x) => x.id === idx);
-          if (!m || m.archetype == null) return;
+          if (!m || m.archetype == null) {
+            // Track WHY the gate dropped this person so the fallback path
+            // can show the user a reason on each rejected card.
+            const reason = m?.reason?.trim() || "Title looked plausible but the role didn't match the brief's archetypes/anti-patterns";
+            const archetypeEvidence = `Rejected by archetype gate: ${reason}`;
+            const combined = c.evidence ? `${archetypeEvidence} — ${c.evidence}` : archetypeEvidence;
+            rejected.push({ ...c, evidence: combined });
+            return;
+          }
           const label = parsed.archetypes[m.archetype - 1]?.split(/[—–:.\n]/)[0]?.trim() ?? `archetype ${m.archetype}`;
           const archetypeEvidence = `Archetype ${m.archetype} (${label}): ${m.reason || "semantic match"}`;
           const combined = c.evidence ? `${archetypeEvidence} — ${c.evidence}` : archetypeEvidence;
           kept.push({ ...c, evidence: combined });
         });
-        return kept;
+        return { kept, rejected };
       } catch (e) {
         console.warn("[find] archetype gate batch failed — keeping candidates:", (e as Error).message);
         // Fail-open: if the gate LLM call errors, keep the batch so we don't
         // drop real matches because of a transient API hiccup. Grounding
         // already blocked fabrications.
-        return batch;
+        return { kept: batch, rejected: [] as Candidate[] };
       }
     }),
   );
-  return results.flat();
+  return {
+    kept: results.flatMap((r) => r.kept),
+    rejected: results.flatMap((r) => r.rejected),
+  };
 }
 
 function dedupByName(people: Candidate[]): Candidate[] {
@@ -843,8 +913,13 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
         userId,
         userKeys,
       });
-    } catch {
-      // 3. Basic fallback
+    } catch (e) {
+      // Quota/auth errors must NOT be silently swallowed — without this,
+      // a Tavily 432 "out of credits" turns into "Found 0 — try a more
+      // specific brief", which is wildly misleading. Re-throw so the
+      // chat handler can surface a clear "you're out of credits" card.
+      if (isTavilyQuotaError(e) || isTavilyAuthError(e)) throw e;
+      // 3. Basic fallback for everything else (transient 5xx, timeouts).
       try {
         return await tavilySearch(cleanQuery, {
           depth: "basic",
@@ -852,7 +927,8 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
           userId,
           userKeys,
         });
-      } catch {
+      } catch (e2) {
+        if (isTavilyQuotaError(e2) || isTavilyAuthError(e2)) throw e2;
         return [];
       }
     }
@@ -1104,7 +1180,9 @@ async function runNameLookup(args: {
           userId,
           userKeys,
         });
-      } catch {
+      } catch (e) {
+        // Quota/auth errors must propagate; everything else is a soft fail.
+        if (isTavilyQuotaError(e) || isTavilyAuthError(e)) throw e;
         return [] as TavilyResult[];
       }
     }),

@@ -12,6 +12,37 @@ export interface TavilyResult {
   score?: number;
 }
 
+/** Thrown when Tavily rejects the call because the account is out of credits
+ *  / over the monthly cap. Distinguished from a transient failure so callers
+ *  can surface it to the user instead of silently returning an empty list. */
+export class TavilyQuotaError extends Error {
+  readonly kind = "tavily_quota" as const;
+  readonly byok: boolean;
+  constructor(message: string, byok: boolean) {
+    super(message);
+    this.name = "TavilyQuotaError";
+    this.byok = byok;
+  }
+}
+
+/** Thrown when Tavily rejects the API key as invalid / revoked. */
+export class TavilyAuthError extends Error {
+  readonly kind = "tavily_auth" as const;
+  readonly byok: boolean;
+  constructor(message: string, byok: boolean) {
+    super(message);
+    this.name = "TavilyAuthError";
+    this.byok = byok;
+  }
+}
+
+export function isTavilyQuotaError(e: unknown): e is TavilyQuotaError {
+  return e instanceof TavilyQuotaError;
+}
+export function isTavilyAuthError(e: unknown): e is TavilyAuthError {
+  return e instanceof TavilyAuthError;
+}
+
 export async function tavilySearch(
   query: string,
   opts: {
@@ -59,7 +90,45 @@ export async function tavilySearch(
     throw err;
   }
   clearTimeout(timeout);
-  if (!r.ok) throw new Error(`tavily ${r.status}: ${await r.text()}`);
+  if (!r.ok) {
+    const text = await r.text();
+    // Tavily returns 432 for "you've used all your monthly credits" and 429
+    // for rate limit; auth failures come back as 401/403. Their error body
+    // is JSON {"detail":"..."} or {"error":"..."} or plain text — sniff for
+    // the keywords either way so we don't miss a phrasing tweak from them.
+    const lower = text.toLowerCase();
+    const looksLikeQuota =
+      r.status === 432 ||
+      r.status === 429 ||
+      r.status === 402 ||
+      lower.includes("usage limit") ||
+      lower.includes("monthly limit") ||
+      lower.includes("credit") ||
+      lower.includes("quota") ||
+      lower.includes("plan limit") ||
+      lower.includes("exceeded") ||
+      lower.includes("out of credits");
+    const looksLikeAuth =
+      r.status === 401 ||
+      r.status === 403 ||
+      lower.includes("invalid api key") ||
+      lower.includes("invalid_api_key") ||
+      lower.includes("unauthorized") ||
+      lower.includes("authentication");
+    if (looksLikeQuota) {
+      throw new TavilyQuotaError(
+        `tavily quota exhausted (HTTP ${r.status}): ${text.slice(0, 200)}`,
+        byok,
+      );
+    }
+    if (looksLikeAuth) {
+      throw new TavilyAuthError(
+        `tavily auth failed (HTTP ${r.status}): ${text.slice(0, 200)}`,
+        byok,
+      );
+    }
+    throw new Error(`tavily ${r.status}: ${text}`);
+  }
   const data = (await r.json()) as { results: TavilyResult[] };
 
   if (opts.userId) {

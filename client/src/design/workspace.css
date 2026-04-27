@@ -238,6 +238,36 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Upstream-error card. Rendered when an LLM/Tavily call fails with a quota
+ * or auth error so the user gets a clear, actionable message instead of a
+ * raw "completion_failed" string or a misleading "no results found". */
+.upstream-error {
+  padding: 14px 16px; border-radius: 14px;
+  background: linear-gradient(180deg, oklch(0.97 0.03 60 / 0.7), oklch(0.95 0.04 50 / 0.5));
+  border: 1px solid oklch(0.78 0.13 65 / 0.35);
+  animation: kmc-rise 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.upstream-error p { margin: 0; line-height: 1.5; }
+.upstream-error p:first-child {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  letter-spacing: -0.005em; margin-bottom: 6px;
+}
+.upstream-error p:not(:first-child) {
+  font-size: 12.5px; color: var(--text-dim);
+}
+.upstream-error a {
+  color: oklch(0.55 0.15 250); text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.upstream-error strong { color: var(--text); font-weight: 600; }
+/* Auth errors lean a touch more red than quota errors so they read as
+ * "fix this now" rather than "you're out of money". */
+.upstream-error-tavily-auth,
+.upstream-error[class*="upstream-error-llm-auth"] {
+  background: linear-gradient(180deg, oklch(0.97 0.03 25 / 0.7), oklch(0.95 0.04 20 / 0.5));
+  border-color: oklch(0.72 0.16 25 / 0.4);
+}
+
 /* General motion polish — smooth transitions on common chrome. */
 .icon-btn, .nav-item, .new-chat, .upgrade-btn, .brand-mark, .tool, .send,
 .avatar-mini, .board-btn, .bm-item, .kanban-add, .crm-toolbar .pill-btn {
