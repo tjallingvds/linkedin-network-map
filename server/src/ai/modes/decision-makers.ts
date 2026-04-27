@@ -69,7 +69,16 @@ interface CommitteeAssignment {
   relationship?: string;
 }
 
-/** Triggers returning a decision-maker map instead of a raw find. */
+/** Triggers returning a decision-maker map instead of a raw find.
+ *
+ *  This branch is for the SINGLE-COMPANY case ("map the buying committee at
+ *  Morgan Stanley"). Multi-account prospecting briefs that happen to contain
+ *  the phrase "decision-makers" — e.g. "find decision-makers at large BPO
+ *  companies; named accounts: Accenture, Genpact, Concentrix, …" — must NOT
+ *  match here, because parseBuyingBrief would collapse the whole list into a
+ *  single category-string ("BPO companies") and the search would return
+ *  nothing. Those belong in the regular multi-prospect discover pipeline.
+ */
 export function looksLikeDecisionMakerMap(s: string): boolean {
   const hay = s.toLowerCase();
   // "sell ... to ...", "pitch ... to ...", "map decision makers", "buying
@@ -80,7 +89,71 @@ export function looksLikeDecisionMakerMap(s: string): boolean {
     /\bmap(?:\s+out)?\b[\s\S]{0,40}\b(?:decision|leaders?|stakeholders?|committee)\b/.test(hay);
   // Must also reference at least one company-ish proper noun.
   const hasProperNoun = /\b[A-Z][a-zA-Z&.]{2,}(?:\s+[A-Z][a-zA-Z&.]+)*\b/.test(s);
-  return intent && hasProperNoun;
+  if (!intent || !hasProperNoun) return false;
+  // Bail out when this looks like a multi-account / criteria-driven brief.
+  if (looksLikeMultiAccountBrief(s)) return false;
+  return true;
+}
+
+/** True when the brief reads like a structured multi-account prospecting
+ *  spec rather than a "map one company" request. Conservative on purpose —
+ *  any one of these signals flips it. */
+function looksLikeMultiAccountBrief(s: string): boolean {
+  const hay = s.toLowerCase();
+  // Structured-spec markers that almost never appear in a "map THIS company"
+  // ask: filter labels, exclusion lists, named-account lists, signal lists.
+  const structuredLabels =
+    /\b(?:named\s+accounts?|target\s+accounts?|priority\s+accounts?|account\s+list|company\s+criteria|target\s+personas?|exclude(?:s|d)?|exclusion|employee\s+count|revenue|industry|geograph(?:y|ies)|signals?\s*(?:any\s+of)?|criteria)\s*[:\-]/i.test(s);
+  if (structuredLabels) return true;
+  // Category plural — "BPO companies", "tier-2 banks", "shared services
+  // firms". Singular "company"/"firm" is fine.
+  if (/\b(?:companies|firms|providers|vendors|enterprises|organi[sz]ations|accounts)\b/i.test(hay)) {
+    // …but only if there's no specific company called out alongside the
+    // category. Crude proxy: does the brief have a single dominant proper
+    // noun? If we see ≥3 distinct Capitalized company-like tokens, treat as
+    // multi-account regardless.
+    const properNouns = collectCompanyLikeTokens(s);
+    if (properNouns.length === 0 || properNouns.length >= 3) return true;
+  }
+  // Three or more distinct company-like proper nouns separated by commas /
+  // "and" — classic named-accounts list.
+  const properNouns = collectCompanyLikeTokens(s);
+  if (properNouns.length >= 3) return true;
+  // Bullet / line-item structure with ≥3 separate items strongly suggests
+  // a structured spec rather than a one-company ask.
+  const bulletLines = (s.match(/^[\s>]*(?:[-*•·]|\d+[.)])\s+/gm) ?? []).length;
+  if (bulletLines >= 3) return true;
+  return false;
+}
+
+function collectCompanyLikeTokens(s: string): string[] {
+  // Capitalized 1-4 word phrases. Filter out obvious sentence-starters and
+  // role words that look capitalized in titles ("Chief", "Head", "VP").
+  const STOP = new Set([
+    "Find", "The", "These", "This", "That", "Those", "Their", "They", "We",
+    "Our", "Your", "His", "Her", "It", "Its", "And", "Or", "But", "If", "When",
+    "Where", "Who", "What", "Why", "How", "Chief", "Head", "VP", "SVP", "EVP",
+    "Director", "Officer", "President", "Manager", "Lead", "Senior", "Global",
+    "Industry", "Geography", "Revenue", "Employee", "Signals", "Exclude",
+    "Excludes", "Excluded", "Named", "Target", "Targets", "Priority",
+    "Company", "Companies", "United", "States", "UK", "US", "USA", "EU",
+    "EMEA", "APAC", "AI", "RPA", "BPO", "BPM", "GBS", "SSC", "CIO", "COO",
+    "CTO", "CEO", "Apollo", "Clay", "ZoomInfo", "LinkedIn",
+  ]);
+  const out = new Set<string>();
+  const re = /\b([A-Z][a-zA-Z&.]{2,}(?:\s+[A-Z][a-zA-Z&.]+){0,3})\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    const phrase = m[1]!.trim();
+    const first = phrase.split(/\s+/)[0]!;
+    if (STOP.has(first)) continue;
+    // Drop single tokens that are common English words capitalized at the
+    // start of a sentence — heuristic: a single short token that's not in
+    // STOP but is all-letters and < 5 chars is too noisy.
+    if (!phrase.includes(" ") && phrase.length < 5) continue;
+    out.add(phrase);
+  }
+  return Array.from(out);
 }
 
 export async function runDecisionMakers(
@@ -268,8 +341,19 @@ Rules:
       { maxTokens: 400, userId, userKeys },
     );
     if (!out || typeof out.company !== "string" || !out.company.trim()) return null;
+    const company = out.company.trim();
+    // Reject category strings like "BPO companies", "tier-2 banks", "shared
+    // services firms", "large enterprises" — these mean the brief is really a
+    // multi-account spec, not a one-company committee map. Returning null
+    // makes find.ts fall through to the standard discover pipeline.
+    if (isCategoryCompanyString(company)) {
+      console.warn(
+        `[decision-makers] parsed company looks like a category, not a single firm: "${company}" — falling through`,
+      );
+      return null;
+    }
     return {
-      company: out.company.trim(),
+      company,
       product: (out.product ?? "").trim(),
       valueProp: (out.valueProp ?? "").trim() || undefined,
       geography: (out.geography ?? "").trim() || undefined,
@@ -467,6 +551,50 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** True when the LLM-parsed "company" looks like a category/segment rather
+ *  than a single named firm — e.g. "BPO companies", "tier-2 banks", "shared
+ *  services firms", "large enterprises", "Accenture, Genpact, Concentrix".
+ *  Used to bail out of the single-company decision-maker map and fall back
+ *  to the multi-account discover pipeline. */
+function isCategoryCompanyString(company: string): boolean {
+  const c = company.trim();
+  if (!c) return true;
+  // Comma- or "and"-joined list of multiple firms.
+  if (/,/.test(c)) return true;
+  if (/\s+(?:and|or|\/|&)\s+/i.test(c) && /\s/.test(c)) {
+    // Allow "AT&T", "Procter & Gamble" — those don't have spaces around the
+    // separator the same way. The check above already required surrounding
+    // whitespace.
+    return true;
+  }
+  // Plural category nouns.
+  if (/\b(?:companies|firms|providers|vendors|enterprises|organi[sz]ations|accounts|banks|insurers|retailers|manufacturers|hospitals|agencies|outsourcers|integrators|consultancies)\b/i.test(c)) {
+    return true;
+  }
+  // Generic descriptors with no proper-noun anchor.
+  if (/\b(?:large|big|tier[-\s]?\d|fortune\s*\d+|global|major|leading|top|enterprise|mid[-\s]?market|smb|sme)\b/i.test(c) && !/[A-Z][a-z]+/.test(c.replace(/^[A-Z][a-z]*\b/, ""))) {
+    return true;
+  }
+  // Industry-only segment with no specific firm — heuristic: contains an
+  // industry keyword and no recognizable proper noun other than that keyword.
+  if (/\b(?:bpo|bpm|gbs|ssc|shared\s+services|outsourcing|business\s+process|industry|sector|vertical|segment)\b/i.test(c)) {
+    // If the string also contains an extra capitalized token that's NOT one
+    // of the segment words, treat as specific (e.g. "Accenture BPO"). Else
+    // it's a category.
+    const tokens = c.split(/\s+/).filter(Boolean);
+    const segmentWords = new Set([
+      "bpo", "bpm", "gbs", "ssc", "shared", "services", "outsourcing",
+      "business", "process", "industry", "sector", "vertical", "segment",
+      "and", "or", "the", "a", "an", "of",
+    ]);
+    const hasSpecificProperNoun = tokens.some(
+      (t) => /^[A-Z][a-zA-Z&.]{2,}$/.test(t) && !segmentWords.has(t.toLowerCase()),
+    );
+    if (!hasSpecificProperNoun) return true;
+  }
+  return false;
 }
 
 function normalizeForGrounding(s: string): string {
