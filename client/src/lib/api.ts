@@ -28,12 +28,50 @@ function buildHeaders(body?: unknown): HeadersInit {
   const h: Record<string, string> = {};
   if (body) h["Content-Type"] = "application/json";
   const keys = loadApiKeys();
-  if (keys.openai) h["X-User-Openai-Key"] = keys.openai;
-  if (keys.anthropic) h["X-User-Anthropic-Key"] = keys.anthropic;
-  if (keys.deepseek) h["X-User-Deepseek-Key"] = keys.deepseek;
-  if (keys.tavily) h["X-User-Tavily-Key"] = keys.tavily;
-  if (keys.apollo) h["X-User-Apollo-Key"] = keys.apollo;
+  setKeyHeader(h, "X-User-Openai-Key",    keys.openai,    "OpenAI");
+  setKeyHeader(h, "X-User-Anthropic-Key", keys.anthropic, "Anthropic");
+  setKeyHeader(h, "X-User-Deepseek-Key",  keys.deepseek,  "DeepSeek");
+  setKeyHeader(h, "X-User-Tavily-Key",    keys.tavily,    "Tavily");
+  setKeyHeader(h, "X-User-Apollo-Key",    keys.apollo,    "Apollo");
   return h;
+}
+
+/** Sanitize a localStorage-stored API key into something the browser will
+ *  accept as an HTTP header value (Latin-1 / RFC 7230 token-ish).
+ *
+ *  Past failure mode: a key pasted from a source with smart quotes, em-dashes,
+ *  or non-breaking spaces ends up containing a code point > 0xFF. fetch()
+ *  then refuses the entire request with "Failed to read the 'headers'
+ *  property from 'RequestInit': String contains non ISO-8859-1 code point",
+ *  blocking ALL API calls — not just the one that needed that key.
+ *
+ *  Strategy: trim surrounding whitespace + zero-width junk, then verify
+ *  the value is plain ASCII visible chars. If not, omit the header (server
+ *  falls back to its env key) and warn so the user knows which one to fix
+ *  in Settings. */
+function setKeyHeader(
+  h: Record<string, string>,
+  name: string,
+  value: string | undefined,
+  label: string,
+): void {
+  if (!value) return;
+  // Strip BOM, zero-width spaces/joiners, NBSP, and surrounding whitespace.
+  const cleaned = value
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "")
+    .trim();
+  if (!cleaned) return;
+  // RFC 7230: header field values are visible ASCII (0x20-0x7E). Anything
+  // outside that — smart quotes, em-dashes, accented chars, control chars —
+  // either trips the browser (>0xFF) or the server's parser (<0x20).
+  if (!/^[\x20-\x7E]+$/.test(cleaned)) {
+    console.warn(
+      `[api] ${label} API key contains non-ASCII characters and was dropped from this request. ` +
+      `Re-paste it in Settings → API keys (smart quotes / em-dashes / non-breaking spaces from a copy-paste are the usual culprit).`,
+    );
+    return;
+  }
+  h[name] = cleaned;
 }
 
 /** Max wait before we give up on a request. Completions can legitimately

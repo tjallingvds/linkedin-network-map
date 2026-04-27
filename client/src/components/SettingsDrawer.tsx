@@ -20,17 +20,38 @@ export interface ApiKeys {
   apollo?: string;
 }
 
+/** Strip the most common copy-paste pollutants so a key never lands in
+ *  localStorage with chars that fetch() can't put in a header (smart quotes,
+ *  em-dashes, NBSP, zero-width spaces, BOMs, control chars). */
+function sanitizeApiKey(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  const cleaned = raw
+    .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "")
+    .trim();
+  return cleaned || undefined;
+}
+
+function sanitizeAll(k: ApiKeys): ApiKeys {
+  return {
+    openai: sanitizeApiKey(k.openai),
+    anthropic: sanitizeApiKey(k.anthropic),
+    deepseek: sanitizeApiKey(k.deepseek),
+    tavily: sanitizeApiKey(k.tavily),
+    apollo: sanitizeApiKey(k.apollo),
+  };
+}
+
 export function loadApiKeys(): ApiKeys {
   try {
     const raw = localStorage.getItem(KEY_STORE);
-    return raw ? (JSON.parse(raw) as ApiKeys) : {};
+    return raw ? sanitizeAll(JSON.parse(raw) as ApiKeys) : {};
   } catch {
     return {};
   }
 }
 
 function saveApiKeys(k: ApiKeys) {
-  localStorage.setItem(KEY_STORE, JSON.stringify(k));
+  localStorage.setItem(KEY_STORE, JSON.stringify(sanitizeAll(k)));
 }
 
 interface Props {
