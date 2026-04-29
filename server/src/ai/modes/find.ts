@@ -363,8 +363,8 @@ export async function runFind(
       `Found 0 strict matches. Showing ${fallback.length} ` +
       `${fallback.length === 1 ? "candidate" : "candidates"} that fit the firm/title filter ` +
       `but the archetype gate flagged as potentially off-brief — review them yourself. ` +
-      `If most look right, the archetype is too narrow (e.g. SVP-only when AI leads are usually ` +
-      `Chief / Global Head); if most look wrong, your brief is doing its job.`;
+      `If most look right, your archetype is too narrow (e.g. one seniority level or one division ` +
+      `when the role spans several at these firms); if most look wrong, your brief is doing its job.`;
     return { kind: "prospects", summary, prospects: fallback };
   }
 
@@ -421,7 +421,7 @@ function composeFindSummary(
     return `Found 0 — extracted ${f.afterClean} candidates but the brief filter dropped them all${exMsg}. The exclude-titles or target-firm constraints are too tight for the snippets the web returned. Try relaxing the title constraint.`;
   }
   if (f.afterArchetypeGate === 0 && f.afterConfidence > 0) {
-    return `Found 0 — extracted ${f.afterConfidence} candidates that fit the firm/title filter, but the archetype-gate rejected them all as not matching the role you described. Either the snippets didn't have enough role context, or the archetype is too narrow (e.g. SVP-only at firms where AI leads are usually Chief / Global Head). Try removing the seniority constraint.`;
+    return `Found 0 — extracted ${f.afterConfidence} candidates that fit the firm/title filter, but the archetype gate rejected them all as not matching the role you described. Either the snippets didn't have enough role context, or your archetype is too narrow (e.g. a single seniority level when the role exists at several levels at these firms). Try relaxing the seniority or scope constraint and retry.`;
   }
   if (f.afterConfidence === 0 && f.afterBriefFilter > 0) {
     return `Found 0 — ${f.afterBriefFilter} candidates passed the firm/title filter but none scored above low-confidence. Web snippets weren't specific enough; try adding a sector or location to the brief.`;
@@ -445,28 +445,28 @@ async function parseBrief(
       `You extract structured search parameters from a research brief. Return a JSON object with:
 
 {
-  "firms": ["Company1", ...],
-  "titles": ["COO", "Chief Data Officer", ...],
-  "excludeFirms": ["Goldman Sachs", "JPMorgan", ...],
-  "excludeTitles": ["title pattern", ...],
-  "excludeSeniority": ["Analyst", "Associate"],
-  "geography": ["US", "UK", ...],
+  "firms": ["<exact company name from brief>", ...],
+  "titles": ["<short title keyword>", ...],
+  "excludeFirms": ["<exact company name to exclude>", ...],
+  "excludeTitles": ["<title pattern to exclude>", ...],
+  "excludeSeniority": ["<level to exclude>", ...],
+  "geography": ["<region/country>", ...],
   "context": "2-4 sentence summary of what KIND of person qualifies — role semantics, not just titles",
-  "archetypes": ["..."],
-  "antiPatterns": ["..."],
+  "archetypes": ["<role archetype as named in brief>", ...],
+  "antiPatterns": ["<exclusion rule as worded in brief>", ...],
   "employmentIntent": "current" | "past",
-  "pastFirms": ["Celonis", "UiPath", ...]
+  "pastFirms": ["<exact company name>", ...]
 }
 
 Rules:
-- Extract EXACT company names mentioned as targets.
-- titles = SHORT searchable keywords ("COO", "Head of AI"), not verbose titles.
-- archetypes: if the brief numbers or names role categories (e.g. "1. DIVISIONAL COO", "Archetype 2: Head of Productivity"), capture each as a separate entry WITH its disambiguation rules and exclusions.
-- antiPatterns: capture every "exclude X where Y" or "avoid Z" clause the brief lists.
+- Extract EXACT company names mentioned as targets. Do not add companies not named in the brief.
+- titles = SHORT searchable keywords (≤4 words each), not verbose verbatim titles.
+- archetypes: if the brief numbers or names role categories (e.g. "1. <archetype name>", "Archetype 2: <archetype name>"), capture each as a separate entry WITH its disambiguation rules and exclusions.
+- antiPatterns: capture every "exclude X where Y" or "avoid Z" clause the brief lists, in the brief's own wording.
 - employmentIntent: set to "past" when the brief clearly asks for people who USED TO work at the target firms and are no longer there. Trigger phrases: "ex-", "former", "formerly at", "used to work at", "previously at", "have left", "alumni of", "recent leavers from", "departed X". Default to "current" otherwise.
 - pastFirms: when employmentIntent = "past", move the target firms to pastFirms AND leave "firms" EMPTY (so current-employer filters pass through). The extractor will then filter on past experience. When employmentIntent = "current", leave pastFirms empty.
-- Include ALL excludeFirm name variations (e.g. "JPMorgan", "J.P. Morgan").
-- If the brief lists no archetypes or anti-patterns, return empty arrays.
+- Include all variant spellings of an excluded firm if the brief gives them (e.g. an abbreviation alongside the full name).
+- If the brief lists no archetypes or anti-patterns, return empty arrays. Do not invent any.
 
 Return ONLY the JSON object.`,
       brief,
@@ -669,7 +669,7 @@ ${antiPatternBlock}
 
 HOW TO DECIDE — domain-neutral rules
 - Read each candidate's title + evidence, then reason about ROLE SEMANTICS, not title keywords.
-- DO NOT inject domain assumptions that aren't in the brief above. The brief defines the domain. If it's about BPO operations, do not invoke banking, IB divisions, M&A coverage, or any other unrelated concept. If it's about pharma R&D, do not invoke retail. The archetypes + anti-patterns are the ONLY accept/reject criteria.
+- DO NOT inject domain assumptions that aren't in the brief above. The brief defines the domain. The archetypes + anti-patterns above are the ONLY accept/reject criteria. Do not introduce industry vocabulary, role categories, division names, or "common traps" that the brief itself did not name. If a concept (e.g. a particular sub-industry or business unit) isn't mentioned in the archetypes/anti-patterns, you do not get to use it as a reason.
 - Title-vs-scope trap: senior titles ("Chief X Officer", "Head of Y", "VP Z") often describe a SCOPE that may or may not match the archetype. A "Chief Technology Officer" of a whole firm is different from a "Chief Technology Officer" embedded inside one division. Reject only when the evidence makes clear the SCOPE doesn't match the archetype the brief wants — not on a hunch.
 - Be conservative about rejecting on the basis of WHICH division a senior leader sits in. Unless the brief explicitly excludes a division (or the evidence explicitly says "covers X clients" / "head of Y vertical" / "responsible for Z business unit"), an enterprise-wide title (CTO, COO, CIO, Chief Data Officer) at a target firm should be ACCEPTED if it matches an archetype's role, even when the evidence is thin.
 - Generic mid-level titles ("Director", "Managing Director", "Vice President") with no further context tell you nothing — look at the full title and evidence; if still ambiguous, return null.
@@ -677,8 +677,11 @@ HOW TO DECIDE — domain-neutral rules
 
 REJECTION REASONS — write the reason in the LANGUAGE OF THE BRIEF
 - Quote or paraphrase the brief's own archetype/anti-pattern wording. Do NOT invent new domain vocabulary that isn't in the brief.
-- Bad reason (invents domain): "Sector coverage banker — tech-sector M&A, matches anti-pattern"
-- Good reasons: "Title is firm-wide CTO, but no evidence they own the [archetype 2 scope]"; "Matches anti-pattern: '[exact phrase from anti-patterns block]'"; "Role is in [department X], brief asks for [department Y]"
+- Bad reason pattern (invents domain): describing the candidate using an industry, division, or job-family label that does not appear anywhere in the brief above.
+- Good reason patterns:
+    "Title is firm-wide [title], but no evidence they own the [archetype N scope]"
+    "Matches anti-pattern: '[exact phrase from anti-patterns block]'"
+    "Role is in [department X named in candidate's evidence], brief asks for [department Y named in archetypes]"
 
 Return {"matches": [{"id": 0, "archetype": 2, "reason": "<one-line reason in the brief's vocabulary>"}, {"id": 1, "archetype": null, "reason": "<one-line reason in the brief's vocabulary>"}, ...]} — one entry per candidate, archetype is the 1-indexed archetype number or null.`,
           JSON.stringify(roster, null, 2),
@@ -856,14 +859,16 @@ async function parallelDiscovery(args: {
 
 ${extractionHint ? `STRUCTURED FILTERS (use these exact firms, titles, and exclusions):\n${extractionHint}\n` : ""}
 QUERY FORMAT — every query MUST name at least one specific company from the brief:
-  GOOD: "Head of AI Evercore OR Moelis OR PJT Partners OR Lazard OR Centerview"
-  GOOD: "COO Houlihan Lokey OR William Blair OR Baird OR Stifel"
-  BAD:  "AI leaders investment banking" (no company name — finds articles, not people)
-  BAD:  "COO Moelis" + "Chief Operating Officer Moelis" (same combo, wasted call)
+  GOOD pattern: "<Title-or-role-keyword> <Firm1> OR <Firm2> OR <Firm3> OR <Firm4>"
+  GOOD pattern: "<Title-or-role-keyword> <Firm1> OR <Firm2>" + a different title-keyword in the next query
+  BAD:  "<role keyword> <industry-name>" with no company — Tavily returns articles, not people.
+  BAD:  Two queries that name the same firm + same title in different word order (wasted calls).
+
+Use the EXACT firm names from the brief. Do NOT substitute well-known firms from the same industry that the brief did not list.
 
 PAST-EMPLOYER INTENT — if the filters mention "PAST EMPLOYER TARGETS" (people who have LEFT the firm), craft different queries:
-  GOOD: "ex-Celonis OR ex-UiPath OR ex-Signavio VP Sales OR Head of Revenue"
-  GOOD: "formerly at UiPath alumni Chief Revenue Officer"
+  GOOD pattern: "ex-<Firm1> OR ex-<Firm2> OR ex-<Firm3> <role keyword>"
+  GOOD pattern: "formerly at <Firm> alumni <role keyword>"
   - Prefix queries with "ex-", "former", "formerly at", "previously at", "alumni of".
   - NEVER just query the company + title (that returns CURRENT employees).
 
@@ -1064,8 +1069,8 @@ async function extractChunk(args: {
 
 ${extractionHint ? extractionHint + "\n" : ""}ARCHETYPE MATCH IS MANDATORY (if archetypes are listed above).
 - A candidate is only qualified if their title+role SEMANTICALLY matches one of the ROLE ARCHETYPES above. Surface-level title keyword match is NOT enough.
-- Common sector-coverage trap: "Head of Technology Investment Banking", "Head of Healthcare IB", "Head of TMT", "MD Technology Group", etc. — these are sector COVERAGE bankers (they run M&A for tech/healthcare/etc. companies) and DO NOT deploy AI internally. Reject them unless the brief's archetypes explicitly cover M&A sector heads.
-- If the brief names an archetype like "Engineering Lead in an IB division" or "Head of Banking Technology", be careful to include only people building tech FOR the business (internal platform / CTO for a division), not people advising tech-sector clients.
+- Title-vs-scope trap: composite titles like "Head of <X> <Y>" are ambiguous between (a) a person who applies <Y> internally to <X>, and (b) a person who delivers <Y> services TO clients in <X>. The brief tells you which side it wants. Pick (a) only when the brief asks for internal practitioners; pick (b) only when the brief asks for client-facing/coverage roles. If the snippets don't disambiguate, REJECT.
+- Stay inside the brief's domain. Do not import role categories, divisions, or industry vocabulary that the brief did not mention. The archetypes + anti-patterns are the only filter — your job is matching, not domain expansion.
 - When unsure whether a candidate matches an archetype, REJECT. Empty is better than wrong.
 
 THE ONLY SOURCE OF TRUTH IS THE SNIPPETS BELOW.

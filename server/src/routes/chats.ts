@@ -222,7 +222,7 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
           const t = await aiJson<{ title: string }>(
             provider,
             "You write a very short chat title (3-6 words, Title Case, no quotes, no trailing period). Focus on WHAT is being searched (role + company segment), not the count or adjectives.",
-            `User's first message:\n${briefForTitle}\n\nReturn {"title": "<3-6 word title>"}. Examples: "Heads of Growth at Travel Aggregators", "CMOs in Healthcare Discovery", "AI Consultants for Banking".`,
+            `User's first message:\n${briefForTitle}\n\nReturn {"title": "<3-6 word title>"} — Title Case, no quotes, no trailing period. Format the title as "<Role> <preposition> <Segment-or-Company>" using the brief's OWN vocabulary. Do NOT invent industries, role categories, or company names that don't appear in the brief.`,
             { maxTokens: 150, userId: req.user!.id, userKeys },
           );
           const candidate = t.title?.trim().replace(/^["']|["']$/g, "").slice(0, 80);

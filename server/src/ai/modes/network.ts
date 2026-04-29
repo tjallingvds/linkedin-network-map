@@ -44,7 +44,7 @@ export async function runNetwork(
   try {
     const raw = await aiJson<Partial<Filters>>(
       provider,
-      "You convert a prospecting brief into structured filters for searching a local LinkedIn connections table. Be concise: 1-4 keywords per bucket, lowercase. Prefer MULTI-WORD role keywords over single words — 'investment banking' beats 'banking' because it won't match company names or unrelated roles.",
+      "You convert a prospecting brief into structured filters for searching a local LinkedIn connections table. Be concise: 1-4 keywords per bucket, lowercase. Prefer MULTI-WORD role keywords over single words — a two-word phrase from the brief is much less likely to false-match against unrelated company or category names than a single common word would be. Use the brief's own vocabulary; do not introduce industries or categories the brief did not mention.",
       `Brief: ${userInput}\n\nReturn {"roleKeywords": [...], "companyKeywords": [...], "industryKeywords": [...], "excludeCompanies": [...], "excludeRoles": [...], "notes": "<one line>"}.\nOnly include values explicitly implied. Empty arrays are fine.`,
       { maxTokens: 400, userId, userKeys },
     );

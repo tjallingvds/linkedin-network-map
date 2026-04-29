@@ -336,7 +336,7 @@ async function parseBuyingBrief(
 Rules:
 - "company" is the PROSPECT's employer, not the user's company.
 - If the brief doesn't name a company, return {"company": ""}.
-- Keep "product" concrete (e.g. "AI back-office automation platform" not "our solution").
+- Keep "product" concrete and category-level (a noun phrase someone in the buyer's org would recognise as a thing they buy), not vague filler like "our solution" or "the product". Use the user's own description, do NOT invent a category they didn't name.
 - Return ONLY the JSON object.`,
       brief,
       { maxTokens: 400, userId, userKeys },
@@ -383,9 +383,9 @@ ${parsed.valueProp ? `- Value prop: ${parsed.valueProp}\n` : ""}${parsed.geograp
 
 RULES
 - Each query MUST contain the company name verbatim.
-- Each query names ONE specific title or short phrase (e.g. "Chief Operating Officer", "Head of AI", "Head of Automation", "VP Operations", "Chief Data Officer").
-- Mix seniority: include 2-3 C-suite, 3-5 Head-of / VP, 1-2 specialist roles unique to the product area.
-- Include the roles most relevant to ${parsed.product || "this product"} first, followed by the general buying-committee roles.
+- Each query names ONE specific title or short role phrase. Derive the titles from FIRST-PRINCIPLES reasoning about who at the buyer would own/champion/integrate/block this product — do not default to a tech-and-operations roster. For a clinical product the right roles look very different from those for a finance product or an HR product.
+- Mix seniority across the queries: a few C-level / firm-wide roles, several Head-of / VP / Director-level roles, and a couple of specialist or function-specific roles unique to the product area.
+- Order the queries so the roles most directly accountable for buying this specific product come first, with broader buying-committee adjacencies after.
 - Do NOT repeat the same title twice.
 
 Return {"queries": [...]} — 8 to 12 strings.`,
