@@ -1067,11 +1067,16 @@ async function extractChunk(args: {
       provider,
       `You are a lead qualification filter, not a search engine. Your job is to extract ONLY candidates that pass mandatory filters, with evidence for each.
 
-${extractionHint ? extractionHint + "\n" : ""}ARCHETYPE MATCH IS MANDATORY (if archetypes are listed above).
-- A candidate is only qualified if their title+role SEMANTICALLY matches one of the ROLE ARCHETYPES above. Surface-level title keyword match is NOT enough.
-- Title-vs-scope trap: composite titles like "Head of <X> <Y>" are ambiguous between (a) a person who applies <Y> internally to <X>, and (b) a person who delivers <Y> services TO clients in <X>. The brief tells you which side it wants. Pick (a) only when the brief asks for internal practitioners; pick (b) only when the brief asks for client-facing/coverage roles. If the snippets don't disambiguate, REJECT.
-- Stay inside the brief's domain. Do not import role categories, divisions, or industry vocabulary that the brief did not mention. The archetypes + anti-patterns are the only filter — your job is matching, not domain expansion.
-- When unsure whether a candidate matches an archetype, REJECT. Empty is better than wrong.
+${extractionHint ? extractionHint + "\n" : ""}DEFAULT BEHAVIOR — be PERMISSIVE, not paranoid.
+- The brief above tells you which firms and titles the user wants. If a snippet shows the candidate's name AND a title that plausibly matches one in the brief AND a current employer that matches one of the target firms, ACCEPT. That is the common case.
+- Do not invent reasons to reject. If the user listed "Head of AI" as a target title and the snippet shows "Head of AI" at a target firm, that is a match — even if you can imagine an alternate reading of the title.
+- Stay inside the brief's domain. Do not import role categories, divisions, or industry vocabulary that the brief did not mention. The brief's filters are the only filter — your job is matching, not domain expansion.
+
+WHEN TO BE STRICTER — only when the brief explicitly tells you to.
+- ROLE ARCHETYPES (if listed in the structured filters above): a candidate must SEMANTICALLY match one of the archetypes, not just keyword-match. If the brief lists no archetypes, this rule does NOT apply — fall back to title+firm matching only.
+- ANTI-PATTERNS (if listed): reject candidates that match an anti-pattern, even if their title looks right. If the brief lists no anti-patterns, do NOT invent any.
+- Title scope nuance: composite titles like "Head of <X> <Y>" can sometimes mean either (a) <Y> applied internally for <X>, or (b) <Y> services delivered to <X> as a client. Only consider this distinction when the brief's anti-patterns explicitly exclude one variant. Otherwise, accept the title at face value.
+- When archetypes ARE listed and a candidate is genuinely ambiguous against them, prefer to REJECT — empty is better than wrong. This rule does NOT apply to flat firm+title briefs without archetypes.
 
 THE ONLY SOURCE OF TRUTH IS THE SNIPPETS BELOW.
 - Every person you return MUST have their full name appear verbatim in at least one snippet. If the name is not written in the snippets, DO NOT return them — even if you "know" someone in that role at that firm from training data. We verify this server-side and will drop any ungrounded candidates.
