@@ -667,15 +667,20 @@ ${archetypeBlock}
 ANTI-PATTERNS (reject candidates matching any of these, even if their title looks like an archetype hit):
 ${antiPatternBlock}
 
-HOW TO DECIDE
-- Read each candidate's title + evidence, then reason about the ROLE SEMANTICS, not title keywords.
-- Classic trap: "Head of Technology Investment Banking" almost always means tech-SECTOR coverage (an M&A banker covering tech companies), which is an anti-pattern when the brief wants AI/tech implementers. Only classify as an archetype if the evidence makes clear they're building tech FOR the IB division, not advising tech clients.
-- Similar for "Head of Healthcare IB", "Head of Consumer IB", "Head of Industrials IB", "Head of FIG", "TMT Group Head" — these are sector coverage heads. They match archetype 3 (Group/Sector Heads) only if the brief explicitly wants sector coverage leaders with tech budget authority. If the brief's archetype 3 is for AI decision-makers specifically and the person is a plain M&A sector head, RETURN null.
-- "COO" at the firm level ≠ "COO of Investment Banking division". Be strict.
-- "Director", "Managing Director", "Vice President" alone tell you nothing — look at the full title and evidence. If the role is ambiguous, return null.
-- Ambiguity → null. Better to drop than to ship an anti-pattern.
+HOW TO DECIDE — domain-neutral rules
+- Read each candidate's title + evidence, then reason about ROLE SEMANTICS, not title keywords.
+- DO NOT inject domain assumptions that aren't in the brief above. The brief defines the domain. If it's about BPO operations, do not invoke banking, IB divisions, M&A coverage, or any other unrelated concept. If it's about pharma R&D, do not invoke retail. The archetypes + anti-patterns are the ONLY accept/reject criteria.
+- Title-vs-scope trap: senior titles ("Chief X Officer", "Head of Y", "VP Z") often describe a SCOPE that may or may not match the archetype. A "Chief Technology Officer" of a whole firm is different from a "Chief Technology Officer" embedded inside one division. Reject only when the evidence makes clear the SCOPE doesn't match the archetype the brief wants — not on a hunch.
+- Be conservative about rejecting on the basis of WHICH division a senior leader sits in. Unless the brief explicitly excludes a division (or the evidence explicitly says "covers X clients" / "head of Y vertical" / "responsible for Z business unit"), an enterprise-wide title (CTO, COO, CIO, Chief Data Officer) at a target firm should be ACCEPTED if it matches an archetype's role, even when the evidence is thin.
+- Generic mid-level titles ("Director", "Managing Director", "Vice President") with no further context tell you nothing — look at the full title and evidence; if still ambiguous, return null.
+- Ambiguity → null. Better to drop than to ship an anti-pattern. But "I can't see the division they sit in" is NOT ambiguity — that's the default state for a firm-wide title and should be accepted.
 
-Return {"matches": [{"id": 0, "archetype": 2, "reason": "Head of Banking Transformation fits archetype 2"}, {"id": 1, "archetype": null, "reason": "Sector coverage banker — tech-sector M&A, matches anti-pattern"}, ...]} — one entry per candidate, archetype is the 1-indexed archetype number or null, reason is one short line.`,
+REJECTION REASONS — write the reason in the LANGUAGE OF THE BRIEF
+- Quote or paraphrase the brief's own archetype/anti-pattern wording. Do NOT invent new domain vocabulary that isn't in the brief.
+- Bad reason (invents domain): "Sector coverage banker — tech-sector M&A, matches anti-pattern"
+- Good reasons: "Title is firm-wide CTO, but no evidence they own the [archetype 2 scope]"; "Matches anti-pattern: '[exact phrase from anti-patterns block]'"; "Role is in [department X], brief asks for [department Y]"
+
+Return {"matches": [{"id": 0, "archetype": 2, "reason": "<one-line reason in the brief's vocabulary>"}, {"id": 1, "archetype": null, "reason": "<one-line reason in the brief's vocabulary>"}, ...]} — one entry per candidate, archetype is the 1-indexed archetype number or null.`,
           JSON.stringify(roster, null, 2),
           { maxTokens: 2000, userId, userKeys },
         );
