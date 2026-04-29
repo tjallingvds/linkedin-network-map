@@ -126,7 +126,39 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new ApiError(r.status, payload, msg);
   }
   if (r.status === 204) return undefined as T;
-  const data = (await r.json()) as unknown;
+
+  // Read as text first so we can recover from a whitespace-only / empty body.
+  // The chat-completion route flushes 200 OK + Content-Type early and writes
+  // heartbeat whitespace while Find runs. If the cloud proxy kills the socket
+  // (Railway/Render cap requests at ~120-300s), the server is restarted, or
+  // the handler crashes between heartbeats, the client receives some
+  // whitespace and no JSON. r.json() then throws "Unexpected end of JSON
+  // input" raw to the caller — useless to the user. Detect that case and
+  // surface a real "the server cut us off" message instead.
+  const rawBody = await r.text();
+  const trimmed = rawBody.trim();
+  if (!trimmed) {
+    throw new ApiError(
+      r.status,
+      null,
+      "The server stopped responding mid-request. This usually means the request hit a hosting-platform timeout cap (long Find runs over many firms can do this) or the server restarted. Try again — narrowing the brief (fewer firms or fewer titles per query) often helps.",
+    );
+  }
+
+  let data: unknown;
+  try {
+    data = JSON.parse(trimmed);
+  } catch {
+    // Body is non-empty but not valid JSON — usually a partial heartbeat-then-
+    // truncation, or an HTML error page from the cloud proxy itself. Show a
+    // snippet so the user / logs have something to debug from.
+    throw new ApiError(
+      r.status,
+      null,
+      `The server returned a malformed response. Try again. (First 120 chars: ${trimmed.slice(0, 120).replace(/\s+/g, " ")})`,
+    );
+  }
+
   // Post-flush error envelope: the chat-completion route flushes 200 OK +
   // Content-Type early so proxies don't kill long Find runs. If the handler
   // then throws, writeErrorEnvelope writes {"error":..,"message":..} on the
