@@ -242,7 +242,18 @@ export async function runNetwork(
     }
   }
 
-  const top = deduped.slice(0, 12);
+  // How many to return. Default was a hard cap of 12 — way too low for a
+  // "show me everyone in my network who matches" ask. Now:
+  //   - "all" / "every" / "everyone" → return everything (capped at 500
+  //     so the response stays a reasonable size).
+  //   - explicit number ("top 25", "give me 50", a bare "100") → use that.
+  //   - otherwise default to 50, which is a comfortable scroll without
+  //     being pageful and still surfaces the long tail of matches.
+  const requestedCount = extractNetworkCount(userInput);
+  const desired = requestedCount === "all"
+    ? Math.min(deduped.length, 500)
+    : requestedCount ?? 50;
+  const top = deduped.slice(0, desired);
 
   if (top.length === 0) {
     return {
@@ -277,14 +288,19 @@ export async function runNetwork(
     };
   });
 
+  const truncated = deduped.length > top.length;
   const baseSummary = filters.notes
     ? `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your network — ${filters.notes}`
     : `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your ${rows.length.toLocaleString()} connections.`;
-  const summary = excludeAlreadyMessaged
-    ? `${baseSummary} (excluding the ${messagedSet.names.size.toLocaleString()} ${
+  const messagedSuffix = excludeAlreadyMessaged
+    ? ` (excluding the ${messagedSet.names.size.toLocaleString()} ${
         messagedSet.names.size === 1 ? "person" : "people"
       } you've already messaged)`
-    : baseSummary;
+    : "";
+  const moreSuffix = truncated
+    ? ` Showing the top ${top.length} of ${deduped.length.toLocaleString()} — say "show me all" or "top N" to see more.`
+    : "";
+  const summary = baseSummary + messagedSuffix + moreSuffix;
 
   return { kind: "prospects", summary, prospects };
 }
@@ -387,6 +403,29 @@ const STOP = new Set([
   "connections", "know", "knows", "have", "has", "want", "need", "would",
   "like", "love", "working", "work", "about", "into", "at", "in", "to", "of",
 ]);
+
+/** Pick a result-count from the brief. Returns "all" for "all/every/everyone"
+ *  phrasings, an integer for explicit counts ("top 25", "give me 50",
+ *  "show 100"), or undefined for anything ambiguous (caller defaults to 50).
+ *
+ *  Conservative on bare digits: a number that's part of "tier 2" or a
+ *  4-digit year shouldn't be treated as a count. */
+function extractNetworkCount(s: string): number | "all" | undefined {
+  const hay = s.toLowerCase();
+  if (/\b(?:all|every(?:one|body)?|each)\s+(?:of\s+(?:the\s+|my\s+)?)?(?:people|person|matches?|connections?|contacts?|prospects?|results?|names?|the\s+ones)?\b/.test(hay)) return "all";
+  if (/\b(?:show\s+me\s+(?:them\s+)?all|return\s+(?:them\s+)?all|list\s+(?:them\s+)?all|give\s+me\s+(?:them\s+)?all)\b/.test(hay)) return "all";
+  // Strip patterns that look like counts but aren't ("tier 2", "Q3", years).
+  const cleaned = hay
+    .replace(/\btier\s*\d+\b/g, " ")
+    .replace(/\bq[1-4]\b/g, " ")
+    .replace(/\b(?:19|20)\d{2}\b/g, " ");
+  const m = cleaned.match(/\b(?:find|get|give|list|top|show|want|need|return)\s*(?:me\s+)?(?:up\s+to\s+)?(\d{1,3})\b/)
+    ?? cleaned.match(/\b(\d{1,3})\s*(?:matches?|people|results?|connections?|contacts?|names?)\b/);
+  if (!m) return undefined;
+  const n = parseInt(m[1]!, 10);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(n, 500);
+}
 
 function assertLlmKey(provider: AiProvider, userKeys?: UserKeys) {
   const ok =
