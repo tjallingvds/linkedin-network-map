@@ -321,12 +321,23 @@ function matchFieldStrict(field: string | null, kw: string): boolean {
 /** Checks whether a brief is a question / analysis ask rather than a
  *  prospect-list ask. Network mode pivots to an LLM-written summary in
  *  that case so "what do you think of my banking network" returns prose
- *  instead of 12 name cards. */
+ *  instead of 12 name cards.
+ *
+ *  Past bug: a leading "who" / "what" used to flip this to true, so a
+ *  filter query like "who within banking have I connected to but not
+ *  messaged" got rendered as a 3-paragraph essay instead of a list.
+ *  Now we only treat as analysis when the verb is explicitly analytic
+ *  (describe / summarise / overview / analysis / what do you think) —
+ *  "who" and "what" alone are too generic and almost always want a
+ *  ranked list of names. */
 function isAnalysisIntent(s: string): boolean {
   const hay = s.toLowerCase();
-  if (/^\s*(?:what|how|who|why|describe|tell\s+me|summari[sz]e|give\s+me\s+(?:an?\s+)?(?:overview|summary|take|analysis))/.test(hay)) return true;
-  if (/\b(?:overview|summary|analysis|thoughts?|take|assessment|breakdown|landscape)\b/.test(hay) && /\b(?:my|our)\s+\w+\s+(?:network|connections?|contacts?|people|rolodex)\b/.test(hay)) return true;
-  if (/\b(?:what\s+do\s+you\s+think|how\s+(?:strong|weak|good|big)\s+is)\b/.test(hay)) return true;
+  // Explicit "give me prose" verbs at the start of the brief.
+  if (/^\s*(?:describe|summari[sz]e|analy[sz]e|brief\s+me|give\s+me\s+(?:an?\s+)?(?:overview|summary|take|analysis|breakdown|read|sense)|tell\s+me\s+(?:about|how|whether)\b)/.test(hay)) return true;
+  // "Overview / analysis / take of my X network" with a possessive.
+  if (/\b(?:overview|summary|analysis|thoughts?|take|assessment|breakdown|landscape)\s+(?:of|on)\b/.test(hay) && /\b(?:my|our)\s+\w+\s+(?:network|connections?|contacts?|people|rolodex)\b/.test(hay)) return true;
+  // "What do you think of …", "how strong/big is …" — opinion asks.
+  if (/\b(?:what\s+do\s+you\s+think|how\s+(?:strong|weak|good|big|deep|broad)\s+is)\b/.test(hay)) return true;
   return false;
 }
 

@@ -132,6 +132,25 @@ function parseLinkedIn(text: string, kind: "connections" | "invitations"): Netwo
 
 type Kind = "connections" | "invitations" | "messages";
 
+/** Render a Postgres timestamp as "2 hours ago" / "3 days ago" / "Apr 12".
+ *  Used in the existing-data card so the user immediately sees how recent
+ *  their loaded import is. */
+function formatRelativeDate(iso: string | null | undefined): string {
+  if (!iso) return "unknown";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "unknown";
+  const diffMs = Date.now() - t;
+  const sec = Math.round(diffMs / 1000);
+  if (sec < 60) return "just now";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  const day = Math.round(hr / 24);
+  if (day < 30) return `${day} day${day === 1 ? "" : "s"} ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 // ---- Messages parsing ----------------------------------------------------
 //
 // LinkedIn's messages.csv lists EVERY message in EVERY conversation. We need
@@ -272,6 +291,53 @@ export function ConnectionsImportModal({
   /** When the user overrides the auto-detected "you" name in the messages
    *  preview, store it here so the parser re-runs with the override. */
   const [userNameOverride, setUserNameOverride] = useState<string>("");
+  /** Existing-data status for whichever tab is open. Lets the user see
+   *  "you already have 1,247 messages loaded" before they upload again. */
+  const [existing, setExisting] = useState<{
+    connections?: { total: number };
+    messages?: { total: number; sent: number; uniqueCounterparts: number; lastImportedAt: string | null };
+  }>({});
+  const [clearing, setClearing] = useState(false);
+
+  // Load existing-state for the active tab whenever it changes. People-table
+  // count for connections/invitations, message_log stats for messages.
+  useEffect(() => {
+    let stale = false;
+    (async () => {
+      try {
+        if (kind === "messages") {
+          const stats = await api.get<{
+            total: number; sent: number; received: number; uniqueCounterparts: number; lastImportedAt: string | null;
+          }>("/api/messages-log/stats");
+          if (!stale) setExisting((e) => ({ ...e, messages: {
+            total: stats.total, sent: stats.sent, uniqueCounterparts: stats.uniqueCounterparts, lastImportedAt: stats.lastImportedAt,
+          } }));
+        } else {
+          // /api/people supports limit=1 — we only need the count, but the
+          // route returns rows. Cheap enough for the modal mount.
+          const r = await api.get<{ people: unknown[] }>("/api/people?limit=1&offset=0");
+          // The response shape doesn't include a total; fall back to the
+          // length we got back. For the more accurate count we'd add a
+          // dedicated /count endpoint — overkill for now.
+          if (!stale) setExisting((e) => ({ ...e, connections: { total: r.people.length > 0 ? -1 : 0 } }));
+        }
+      } catch { /* non-fatal */ }
+    })();
+    return () => { stale = true; };
+  }, [kind]);
+
+  const clearMessageLog = async () => {
+    setClearing(true);
+    try {
+      await api.del("/api/messages-log");
+      setExisting((e) => ({ ...e, messages: { total: 0, sent: 0, uniqueCounterparts: 0, lastImportedAt: null } }));
+      onFlash("Cleared message log");
+    } catch (err) {
+      onFlash(`Clear failed: ${(err as Error).message}`);
+    } finally {
+      setClearing(false);
+    }
+  };
 
   // Network preview (connections | invitations).
   const networkPreview = useMemo<NetworkImportRow[]>(() => {
@@ -412,6 +478,54 @@ export function ConnectionsImportModal({
                 <div style={{ fontSize: 11, color: "var(--text-mute)", marginBottom: 8, lineHeight: 1.45 }}>
                   We use this to power "haven't messaged yet" filters in Network search — so
                   you only see fresh contacts. Messages stay on the server keyed to your account.
+                </div>
+              )}
+
+              {/* Existing-data card — shows the user what's already loaded
+                  for the active tab so they don't blindly re-upload. */}
+              {kind === "messages" && existing.messages && existing.messages.total > 0 && (
+                <div style={{
+                  background: "linear-gradient(180deg, oklch(0.97 0.03 155 / 0.55), oklch(0.95 0.04 155 / 0.4))",
+                  border: "1px solid oklch(0.7 0.13 155 / 0.3)",
+                  borderRadius: 10, padding: "10px 12px", marginBottom: 10,
+                  display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                }}>
+                  <IconCheck size={14} />
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text)" }}>
+                      You already have a message log loaded
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-mute)", marginTop: 2 }}>
+                      {existing.messages.total.toLocaleString()} messages
+                      {existing.messages.sent > 0 && ` · ${existing.messages.sent.toLocaleString()} sent`}
+                      {existing.messages.uniqueCounterparts > 0 && ` · ${existing.messages.uniqueCounterparts.toLocaleString()} unique people`}
+                      {existing.messages.lastImportedAt && ` · last uploaded ${formatRelativeDate(existing.messages.lastImportedAt)}`}
+                    </div>
+                    <div style={{ fontSize: 10.5, color: "var(--text-mute)", marginTop: 4, lineHeight: 1.4 }}>
+                      Uploading a new file will <strong>replace</strong> this set.
+                    </div>
+                  </div>
+                  <button
+                    className="pill-btn"
+                    onClick={clearMessageLog}
+                    disabled={clearing}
+                    style={{ fontSize: 11 }}
+                    title="Wipe the existing message log"
+                  >
+                    {clearing ? "Clearing…" : "Clear"}
+                  </button>
+                </div>
+              )}
+              {(kind === "connections" || kind === "invitations") && existing.connections && existing.connections.total !== 0 && (
+                <div style={{
+                  background: "linear-gradient(180deg, oklch(0.97 0.03 155 / 0.55), oklch(0.95 0.04 155 / 0.4))",
+                  border: "1px solid oklch(0.7 0.13 155 / 0.3)",
+                  borderRadius: 10, padding: "10px 12px", marginBottom: 10,
+                  fontSize: 12, color: "var(--text)",
+                }}>
+                  <strong>Heads up:</strong> you already have {kind} loaded. Re-importing
+                  will <strong>add to</strong> the existing set, not replace it. Manage from
+                  the CRM page if you need to dedupe.
                 </div>
               )}
 
