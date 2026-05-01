@@ -18,11 +18,16 @@ interface Filters {
   excludeCompanies: string[];   // e.g. ["google"] when user says "not at google"
   excludeRoles: string[];       // seniority/role exclusions
   notes: string;                // short free-text about the intent
+  /** True when the brief asks for people the user has NOT yet messaged.
+   *  Set by the LLM filter parser — handles typos and rephrasings ("havent
+   *  reached out", "no outreach yet", "fresh contacts only") that the
+   *  fast-path keyword regex would miss. */
+  excludeAlreadyMessaged?: boolean;
 }
 
 const EMPTY_FILTERS: Filters = {
   roleKeywords: [], companyKeywords: [], industryKeywords: [],
-  excludeCompanies: [], excludeRoles: [], notes: "",
+  excludeCompanies: [], excludeRoles: [], notes: "", excludeAlreadyMessaged: false,
 };
 
 export async function runNetwork(
@@ -41,12 +46,17 @@ export async function runNetwork(
   const isAnalysis = isAnalysisIntent(userInput);
 
   // "Haven't messaged" intent — the user wants the search to filter out
-  // people they've already reached out to. Triggered by phrasing like
-  // "haven't messaged", "not yet contacted", "no outreach yet". Detection
-  // is keyword-based (not LLM) so the user gets predictable behavior even
-  // when the LLM filter call fails. The actual filtering is done after
-  // scoring against the loaded messaged-set.
-  const excludeAlreadyMessaged = looksLikeHaventMessagedIntent(userInput);
+  // people they've already reached out to. Two complementary detectors:
+  //   1. Keyword regex (looksLikeHaventMessagedIntent) — fast-path for
+  //      common phrasings, runs before the LLM filter call so the value
+  //      is available even if that call fails.
+  //   2. LLM filter flag (filters.excludeAlreadyMessaged) — set further
+  //      down after the LLM parses the brief. Catches typos and unusual
+  //      phrasings the regex misses ("ihbavent i sent", "no DMs to them
+  //      yet", "cold contacts only").
+  // We OR them: either fires → filter applies. Cheap to be permissive
+  // because the filter is a no-op when the message log is empty.
+  let excludeAlreadyMessaged = looksLikeHaventMessagedIntent(userInput);
 
   // Load the messaged-set in parallel with the rest of the work below.
   // We always need it (so we can tag matched people who HAVE been
@@ -61,8 +71,9 @@ export async function runNetwork(
   try {
     const raw = await aiJson<Partial<Filters>>(
       provider,
-      "You convert a prospecting brief into structured filters for searching a local LinkedIn connections table. Be concise: 1-4 keywords per bucket, lowercase. Prefer MULTI-WORD role keywords over single words — a two-word phrase from the brief is much less likely to false-match against unrelated company or category names than a single common word would be. Use the brief's own vocabulary; do not introduce industries or categories the brief did not mention.",
-      `Brief: ${userInput}\n\nReturn {"roleKeywords": [...], "companyKeywords": [...], "industryKeywords": [...], "excludeCompanies": [...], "excludeRoles": [...], "notes": "<one line>"}.\nOnly include values explicitly implied. Empty arrays are fine.`,
+      "You convert a prospecting brief into structured filters for searching a local LinkedIn connections table. Be concise: 1-4 keywords per bucket, lowercase. Prefer MULTI-WORD role keywords over single words — a two-word phrase from the brief is much less likely to false-match against unrelated company or category names than a single common word would be. Use the brief's own vocabulary; do not introduce industries or categories the brief did not mention.\n\n" +
+      "Set excludeAlreadyMessaged=true when the brief asks for people the user has NOT yet sent a message / DM / email to (any phrasing: 'havent messaged', 'haven't reached out', 'not yet contacted', 'no outreach yet', 'fresh contacts', 'cold leads', 'people I haven't pinged', any common typo or word order). Be GENEROUS with this flag — a false positive (filter drops nothing because no message log exists) is cheap; a false negative (user gets back people they already messaged) is the actual failure mode we're guarding against.",
+      `Brief: ${userInput}\n\nReturn {"roleKeywords": [...], "companyKeywords": [...], "industryKeywords": [...], "excludeCompanies": [...], "excludeRoles": [...], "excludeAlreadyMessaged": true|false, "notes": "<one line>"}.\nOnly include values explicitly implied. Empty arrays are fine.`,
       { maxTokens: 400, userId, userKeys },
     );
     filters = {
@@ -72,12 +83,17 @@ export async function runNetwork(
       excludeCompanies: normalize(raw.excludeCompanies),
       excludeRoles: normalize(raw.excludeRoles),
       notes: typeof raw.notes === "string" ? raw.notes.slice(0, 240) : "",
+      excludeAlreadyMessaged: raw.excludeAlreadyMessaged === true,
     };
   } catch {
     // If the LLM decomposition fails, fall back to a raw-text search over the
     // whole input. The scoring below tokenizes the input as a single bucket.
     filters = { ...EMPTY_FILTERS, roleKeywords: tokenize(userInput) };
   }
+
+  // Fold the LLM's understanding into the regex fast-path. Either source
+  // setting it true means the user wants messaged people excluded.
+  excludeAlreadyMessaged = excludeAlreadyMessaged || filters.excludeAlreadyMessaged === true;
 
   // Step 2: load the user's connections. We cap at 5k to keep scoring fast
   // in memory — scanning a larger list should move to SQL full-text later.
