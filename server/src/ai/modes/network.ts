@@ -151,19 +151,21 @@ export async function runNetwork(
     });
   }
 
-  // Hard cap on LLM-classification cost — at most 2,500 connections per
-  // query. Beyond that we fall back to keyword scoring (still works,
-  // just less accurate). 2,500 × 1 LLM call per ~50 = 50 calls, ~3-5s
-  // wallclock with parallelism, and a few cents in tokens.
-  const LLM_CLASSIFY_LIMIT = 2500;
+  // Cap matches the connections-load cap (5k). At 50 per batch that's
+  // ~100 LLM calls per query, all fired in parallel — wallclock 5-10s,
+  // cost a few cents on gpt-4o-mini. Falling back to keyword scoring
+  // for a 4k pool returned 1 match for "banking" (most positions don't
+  // contain the literal word) — way worse than spending the tokens.
+  const LLM_CLASSIFY_LIMIT = 5000;
   const useLlmClassifier = preFiltered.length > 0 && preFiltered.length <= LLM_CLASSIFY_LIMIT;
 
   if (useLlmClassifier) {
     try {
+      const t0 = Date.now();
       const classified = await classifyWithLlm({
         provider, brief: userInput, connections: preFiltered, userId, userKeys,
       });
-      console.log(`[network] llm classifier: ${preFiltered.length} candidates → ${classified.filter((c) => c.match).length} matched`);
+      console.log(`[network] llm classifier: ${preFiltered.length} candidates → ${classified.filter((c) => c.match).length} matched in ${Date.now() - t0}ms`);
       const idToRow = new Map(preFiltered.map((r) => [r.id, r]));
       // Hard floor on relevance. The prompt instructs the LLM not to emit
       // anything < 5, but it occasionally still does — and a relevance-2
@@ -482,13 +484,30 @@ async function classifyWithLlm(args: {
   // for "Name | Title | Company") — well clear of any provider's limit and
   // small enough that one slow call doesn't dominate wallclock latency.
   const BATCH = 50;
+  // Concurrency cap. A 5,000-candidate query produces ~100 batches; firing
+  // all of them at once would burst the provider's per-minute rate limit
+  // on most BYOK accounts (and our own shared keys aren't infinite either).
+  // 12 in-flight is a safe default — gpt-4o-mini handles it comfortably,
+  // Anthropic tier-1 keys handle it fine. Each "wave" is ~3-5s, so a 100-
+  // batch query completes in ~30-40s wallclock — slow but reliable.
+  const CONCURRENCY = 12;
   const batches: NetworkRow[][] = [];
   for (let i = 0; i < connections.length; i += BATCH) {
     batches.push(connections.slice(i, i + BATCH));
   }
 
-  const results = await Promise.all(
-    batches.map(async (batch) => {
+  // Wave through the batches in groups so we don't slam the provider.
+  const allBatchResults: ClassifierRow[][] = [];
+  for (let i = 0; i < batches.length; i += CONCURRENCY) {
+    const wave = batches.slice(i, i + CONCURRENCY);
+    const waveResults = await Promise.all(wave.map(classifyBatch));
+    allBatchResults.push(...waveResults);
+  }
+  return allBatchResults.flat();
+
+  // Each batch is its own LLM call. Defined inline so it captures
+  // provider/brief/userId/userKeys without a giant args bag.
+  async function classifyBatch(batch: NetworkRow[]): Promise<ClassifierRow[]> {
       // Compact roster — LLM gets minimum tokens to make the decision.
       // Fields beyond name/title/company would mostly be empty for
       // LinkedIn-imported connections (no industry/category), so skip
@@ -545,10 +564,7 @@ ${brief}`,
           reason: "(classifier error — review manually)",
         }));
       }
-    }),
-  );
-
-  return results.flat();
+    }
 }
 
 /** Legacy keyword scorer. Kept as the fallback when the LLM classifier
