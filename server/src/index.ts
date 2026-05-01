@@ -16,6 +16,7 @@ import chatsRoutes from "./routes/chats.js";
 import apolloRoutes from "./routes/apollo.js";
 import crmRoutes from "./routes/crm.js";
 import usageRoutes from "./routes/usage.js";
+import messagesLogRoutes from "./routes/messages_log.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -39,7 +40,10 @@ app.use(cors({
 }));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
-app.use(express.json({ limit: "10mb" }));
+// Bumped to 25mb so the LinkedIn messages.csv import (parsed client-side
+// into a JSON array of up to 50k rows × ~300 bytes each) doesn't hit the
+// default 100kb limit. Smaller endpoints still have their own zod caps.
+app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
 app.use(sessionMiddleware);
 
@@ -55,6 +59,7 @@ app.use("/api/chats", requireAuth, chatsRoutes);
 app.use("/api/apollo", requireAuth, apolloRoutes);
 app.use("/api/crm", requireAuth, crmRoutes);
 app.use("/api/usage", requireAuth, usageRoutes);
+app.use("/api/messages-log", requireAuth, messagesLogRoutes);
 
 // JSON 404 for the API surface.
 app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));

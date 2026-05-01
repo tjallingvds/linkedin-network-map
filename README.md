@@ -13,7 +13,7 @@ The chat dispatches on the brief's intent. All modes run server-side; the client
 | Chat mode | Triggered when… | What it does |
 |---|---|---|
 | **Find** | Default for any prospecting brief | Generates LinkedIn-flavoured Tavily queries, fans them out across up to 3 rounds, extracts grounded candidates from the snippets with a strict prompt, and returns a ranked prospect list. Has a clarify gate that asks for a count if missing. |
-| **Network** | "search my connections", or implied by phrasing about your own network | Runs a one-shot LLM filter over the user's imported LinkedIn `Connections.csv`. Cheap, no web calls. |
+| **Network** | "search my connections", or implied by phrasing about your own network | Runs a one-shot LLM filter over the user's imported LinkedIn `Connections.csv`. Cheap, no web calls. If `messages.csv` is also imported, the chat detects "haven't messaged yet" / "not yet contacted" / "fresh contacts" intent and filters out people the user has already sent a message to. Otherwise, matches who *have* been messaged are tagged with a 📨 badge. |
 | **Decision-makers** | "I want to sell X to Acme, map the buying committee" (single named company) | Fans out role-specific LinkedIn searches, classifies hits into committee roles (economic buyer / champion / technical evaluator / user / influencer / gatekeeper), writes a short narrative. |
 | **Person background** | "tell me everything about <name> at <company>" | Fires several Tavily queries (posts, talks, papers, interviews), synthesises a citation-heavy HTML brief. |
 | **Site scraper** | A URL or bare domain in the brief ("scrape acme.com") | Bounded same-origin crawl (≤30 pages, ≤2 hops, 8s/page, 200KB/page), then synthesises a structured brief. |
@@ -133,6 +133,7 @@ All routes are under `/api`. Auth is a session cookie set by `/api/auth/*`. Most
 | CRM enrichment | `POST /api/crm/boards/:id/enrich` (Apollo per contact), `POST /api/crm/boards/:id/background` (Tavily background brief per contact) |
 | Board sharing | `POST /api/crm/boards/:id/share`, `DELETE /api/crm/boards/:id/share`, `POST /api/crm/share/:token/join` |
 | Apollo (direct) | `GET /api/apollo/status`, `POST /api/apollo/search`, `POST /api/apollo/match` |
+| Message log (LinkedIn `messages.csv`) | `GET /api/messages-log/stats`, `POST /api/messages-log/bulk` (upserts; `replace:true` wipes first), `DELETE /api/messages-log` |
 | Usage | `GET /api/usage` (per-provider buckets) |
 | Health | `GET /health` |
 

@@ -9,6 +9,7 @@ import { env } from "../../env.js";
 import { db } from "../../db/index.js";
 import { aiJson } from "../json.js";
 import type { UserKeys } from "../user-keys.js";
+import { loadMessagedSet, hasMessaged } from "../messaged-set.js";
 
 interface Filters {
   roleKeywords: string[];       // e.g. ["vp engineering", "cto", "head of ai"]
@@ -38,6 +39,22 @@ export async function runNetwork(
   // Fall through to the normal filter+score path below, but at the end
   // pivot to an LLM-written analysis when this flag is set.
   const isAnalysis = isAnalysisIntent(userInput);
+
+  // "Haven't messaged" intent — the user wants the search to filter out
+  // people they've already reached out to. Triggered by phrasing like
+  // "haven't messaged", "not yet contacted", "no outreach yet". Detection
+  // is keyword-based (not LLM) so the user gets predictable behavior even
+  // when the LLM filter call fails. The actual filtering is done after
+  // scoring against the loaded messaged-set.
+  const excludeAlreadyMessaged = looksLikeHaventMessagedIntent(userInput);
+
+  // Load the messaged-set in parallel with the rest of the work below.
+  // We always need it (so we can tag matched people who HAVE been
+  // messaged), even when excludeAlreadyMessaged is false.
+  const messagedSetPromise = loadMessagedSet(userId).catch((e) => {
+    console.warn("[network] loadMessagedSet failed:", (e as Error).message);
+    return { names: new Set<string>(), linkedinUrls: new Set<string>(), totalCounterparts: 0 };
+  });
 
   // Step 1: decompose the brief into typed filters.
   let filters: Filters = EMPTY_FILTERS;
@@ -149,6 +166,23 @@ export async function runNetwork(
 
   scored.sort((a, b) => b.score - a.score);
 
+  // Apply the messaged-set filter before dedup so we don't waste a top
+  // slot on someone we'll then drop. Tagging happens later (during the
+  // Prospect mapping) regardless of whether we filtered.
+  const messagedSet = await messagedSetPromise;
+  if (excludeAlreadyMessaged && (messagedSet.names.size > 0 || messagedSet.linkedinUrls.size > 0)) {
+    const before = scored.length;
+    const kept: typeof scored = [];
+    for (const s of scored) {
+      const fullName = `${s.row.first_name ?? ""} ${s.row.last_name ?? ""}`.trim();
+      if (hasMessaged(messagedSet, { name: fullName, linkedinUrl: s.row.linkedin_url })) continue;
+      kept.push(s);
+    }
+    console.log(`[network] excludeAlreadyMessaged: ${before} → ${kept.length}`);
+    scored.length = 0;
+    scored.push(...kept);
+  }
+
   // Dedup by normalized LinkedIn URL (primary) or name+company (fallback).
   // People reimport their connections.csv over time; without this the top
   // of the results is the same person listed twice with slightly different
@@ -206,6 +240,13 @@ export async function runNetwork(
   const maxScore = top[0]?.score ?? 1;
   const prospects: Prospect[] = top.map(({ row, score, reasons }) => {
     const name = [row.first_name, row.last_name].filter(Boolean).join(" ").trim() || "Unknown";
+    const signals = reasons.slice(0, 2).map((text) => ({ kind: "match" as const, text, when: "your network" }));
+    // Tag people the user has already messaged. Only adds the badge when
+    // we're NOT filtering them out (in which case the list is implicitly
+    // "haven't messaged yet" and the badge would be noise).
+    if (!excludeAlreadyMessaged && hasMessaged(messagedSet, { name, linkedinUrl: row.linkedin_url })) {
+      signals.unshift({ kind: "match" as const, text: "📨 You've messaged them before", when: "your messages" });
+    }
     return {
       id: String(row.id),
       name,
@@ -214,18 +255,39 @@ export async function runNetwork(
       email: row.email ?? undefined,
       phone: row.phone ?? undefined,
       linkedin: row.linkedin_url ?? undefined,
-      signals: reasons.slice(0, 2).map((text) => ({ kind: "match", text, when: "your network" })),
+      signals,
       past: [],
       matchPct: Math.max(50, Math.round((score / maxScore) * 100)),
     };
   });
 
-  const summary =
-    filters.notes
-      ? `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your network — ${filters.notes}`
-      : `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your ${rows.length.toLocaleString()} connections.`;
+  const baseSummary = filters.notes
+    ? `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your network — ${filters.notes}`
+    : `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your ${rows.length.toLocaleString()} connections.`;
+  const summary = excludeAlreadyMessaged
+    ? `${baseSummary} (excluding the ${messagedSet.names.size.toLocaleString()} ${
+        messagedSet.names.size === 1 ? "person" : "people"
+      } you've already messaged)`
+    : baseSummary;
 
   return { kind: "prospects", summary, prospects };
+}
+
+/** Detects briefs like "find people in my network I haven't messaged yet"
+ *  / "not yet contacted" / "no outreach" / "haven't reached out to". The
+ *  match is intentionally permissive — false positives are cheap (a
+ *  filter that drops nothing because the user has no messages logged) and
+ *  false negatives are expensive (the user phrases it slightly off and
+ *  the filter doesn't fire). */
+function looksLikeHaventMessagedIntent(s: string): boolean {
+  const hay = s.toLowerCase();
+  return (
+    /\b(?:hav(?:e\s+not|en'?t)|not(?:\s+yet)?|never)\s+(?:messaged|message|contacted|contact|reached?\s+out|spoken|talked|written|wrote|emailed|dm(?:ed|d)?|pinged|pitched)\b/.test(hay) ||
+    /\bno\s+(?:outreach|message|contact|conversation|prior\s+contact|response|reply)\b/.test(hay) ||
+    /\bnot\s+(?:in\s+touch|yet\s+spoken|yet\s+contacted|spoken\s+(?:to|with))\b/.test(hay) ||
+    /\b(?:fresh|new|cold|untouched|unreached)\s+(?:contacts?|leads?|people|prospects?|targets?)\b/.test(hay) ||
+    /\b(?:without|excluding|except)\s+(?:those\s+|the\s+|people\s+)?(?:i'?ve\s+)?(?:already\s+)?messaged\b/.test(hay)
+  );
 }
 
 // ---- helpers ----

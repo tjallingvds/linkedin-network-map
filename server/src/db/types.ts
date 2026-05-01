@@ -14,6 +14,7 @@ export interface Database {
   crm_contacts: CrmContactsTable;
   usage_events: UsageEventsTable;
   credit_purchases: CreditPurchasesTable;
+  message_log: MessageLogTable;
 }
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -165,5 +166,24 @@ export interface UsageEventsTable {
   credits: Generated<number>;
   cost_micros: Generated<number | bigint>;
   metadata: unknown | null;
+  created_at: Generated<Timestamp>;
+}
+
+export interface MessageLogTable {
+  id: Generated<string>;
+  user_id: string;
+  conversation_id: string | null;
+  /** Other party's display name as it appeared in the CSV. */
+  counterpart_name: string;
+  /** Lowercase + non-alphanumeric stripped for matching. */
+  counterpart_name_normalized: string;
+  counterpart_linkedin_url: string | null;
+  /** linkedin.com/in/ stripped, lowercased, trailing slash removed. */
+  counterpart_linkedin_normalized: string | null;
+  /** "sent" when the user authored the message; "received" otherwise. */
+  direction: string;
+  message_date: string | null;
+  subject: string | null;
+  content_snippet: string | null;
   created_at: Generated<Timestamp>;
 }

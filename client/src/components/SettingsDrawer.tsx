@@ -177,8 +177,10 @@ export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn
             <section>
               <div className="section-title">Your LinkedIn network</div>
               <div style={{ fontSize: 11.5, color: "var(--text-mute)", marginBottom: 10 }}>
-                Import <code>Connections.csv</code> or <code>Invitations.csv</code> from your LinkedIn
-                data export. Once imported, "My network" chat mode can search across them.
+                Import <code>Connections.csv</code>, <code>Invitations.csv</code>, or{" "}
+                <code>messages.csv</code> from your LinkedIn data export. Once imported, the Network
+                search can filter by them — for example, ask for{" "}
+                <em>"people in my network like X who I haven't messaged yet"</em>.
               </div>
               <button className="pill-btn" onClick={onImportLinkedIn}>
                 <IconUpload size={12} />Import from LinkedIn
