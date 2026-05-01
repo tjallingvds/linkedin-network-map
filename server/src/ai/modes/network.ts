@@ -186,15 +186,28 @@ export async function runNetwork(
   // slot on someone we'll then drop. Tagging happens later (during the
   // Prospect mapping) regardless of whether we filtered.
   const messagedSet = await messagedSetPromise;
+  // Track the funnel so the result summary can show "47 matched → 44
+  // already messaged → 3 remain". Without this, a user who expected
+  // dozens of unmessaged banking contacts but got 3 has no idea
+  // whether the matching was over-aggressive (a bug) or whether they
+  // really have messaged that many people (genuine).
+  let bankingMatchedBeforeFilter = 0;
+  let droppedAsMessaged = 0;
+  const messagedDroppedSamples: string[] = [];
   if (excludeAlreadyMessaged && (messagedSet.names.size > 0 || messagedSet.linkedinUrls.size > 0)) {
     const before = scored.length;
+    bankingMatchedBeforeFilter = before;
     const kept: typeof scored = [];
     for (const s of scored) {
       const fullName = `${s.row.first_name ?? ""} ${s.row.last_name ?? ""}`.trim();
-      if (hasMessaged(messagedSet, { name: fullName, linkedinUrl: s.row.linkedin_url })) continue;
+      if (hasMessaged(messagedSet, { name: fullName, linkedinUrl: s.row.linkedin_url })) {
+        droppedAsMessaged++;
+        if (messagedDroppedSamples.length < 5) messagedDroppedSamples.push(fullName);
+        continue;
+      }
       kept.push(s);
     }
-    console.log(`[network] excludeAlreadyMessaged: ${before} → ${kept.length}`);
+    console.log(`[network] excludeAlreadyMessaged: ${before} → ${kept.length} (dropped ${droppedAsMessaged} matched-as-messaged)`);
     scored.length = 0;
     scored.push(...kept);
   }
@@ -292,10 +305,21 @@ export async function runNetwork(
   const baseSummary = filters.notes
     ? `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your network — ${filters.notes}`
     : `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your ${rows.length.toLocaleString()} connections.`;
+  // Show the funnel when the messaged-set filter ran AND it actually dropped
+  // people. Without this, a result like "3 matches" looks suspicious — the
+  // user can't tell whether the matching is over-aggressive or accurate.
+  // Sampling 3-5 dropped names lets them eyeball whether the matches are
+  // real (people they actually messaged) or false positives.
   const messagedSuffix = excludeAlreadyMessaged
-    ? ` (excluding the ${messagedSet.names.size.toLocaleString()} ${
-        messagedSet.names.size === 1 ? "person" : "people"
-      } you've already messaged)`
+    ? droppedAsMessaged > 0
+      ? ` Funnel: ${bankingMatchedBeforeFilter} matched the brief, ${droppedAsMessaged} ${
+          droppedAsMessaged === 1 ? "is" : "are"
+        } already in your sent-messages log${
+          messagedDroppedSamples.length
+            ? ` (e.g. ${messagedDroppedSamples.slice(0, 3).join(", ")})`
+            : ""
+        }, ${prospects.length} remain. If a name in the example list isn't actually someone you messaged, your messages.csv may have a name-mismatch — re-import and check the auto-detected "you" name.`
+      : ` (no overlap with your ${messagedSet.names.size.toLocaleString()} sent-messages counterparts)`
     : "";
   const moreSuffix = truncated
     ? ` Showing the top ${top.length} of ${deduped.length.toLocaleString()} — say "show me all" or "top N" to see more.`
