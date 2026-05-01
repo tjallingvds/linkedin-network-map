@@ -165,14 +165,23 @@ export async function runNetwork(
       });
       console.log(`[network] llm classifier: ${preFiltered.length} candidates → ${classified.filter((c) => c.match).length} matched`);
       const idToRow = new Map(preFiltered.map((r) => [r.id, r]));
+      // Hard floor on relevance. The prompt instructs the LLM not to emit
+      // anything < 5, but it occasionally still does — and a relevance-2
+      // entry shown at the bottom of the list would clutter the result
+      // with people who clearly don't fit the brief. Drop them entirely
+      // rather than ranking them last.
+      const RELEVANCE_FLOOR = 5;
+      let droppedLowRelevance = 0;
       for (const c of classified) {
         if (!c.match) continue;
+        if (c.relevance < RELEVANCE_FLOOR) { droppedLowRelevance++; continue; }
         const row = idToRow.get(c.id);
         if (!row) continue;
         const reasons = c.reason ? [c.reason] : [];
-        // Map relevance (0-10) to the legacy score range so sorting + the
-        // matchPct mapping below behave consistently.
-        scored.push({ row, score: Math.max(1, c.relevance), reasons });
+        scored.push({ row, score: c.relevance, reasons });
+      }
+      if (droppedLowRelevance > 0) {
+        console.log(`[network] dropped ${droppedLowRelevance} low-relevance (< ${RELEVANCE_FLOOR}) classifier matches`);
       }
     } catch (e) {
       console.warn("[network] llm classifier failed, falling back to keyword scorer:", (e as Error).message);
@@ -494,21 +503,23 @@ async function classifyWithLlm(args: {
       try {
         const out = await aiJson<{ matches: Array<{ id: string; m: boolean; r?: number; w?: string }> }>(
           provider,
-          `You classify whether each LinkedIn connection in a roster matches a user's intent. Be GENEROUS but precise — the user wants comprehensive coverage of their network, not a 5-person shortlist.
+          `You classify whether each LinkedIn connection in a roster matches a user's brief. The user wants comprehensive coverage of their network for the criteria they named — not a hand-picked shortlist, but also not a dump that includes people who aren't in the category.
 
-DECISION RULE
-- Use BOTH the company name and the title together. A title alone ("Director") tells you nothing; combined with a company ("Director at Goldman Sachs") it does.
-- Apply real-world knowledge about firms. For example, when the brief says "banking" you should recognize JPMorgan, Goldman Sachs, Morgan Stanley, Citi, Wells Fargo, Barclays, Deutsche, Credit Suisse, HSBC, Lazard, Evercore, Houlihan Lokey, Stifel, Piper Sandler, Jefferies, Truist, KeyBank, etc. as banking firms even though their names don't contain the literal word "bank". Same logic for any other industry the user names.
-- Apply common-sense title→role-family inference. "Investment Banking Coverage", "M&A Associate", "Capital Markets Director", "FIG MD" all qualify as banking even without the literal word.
-- Reject only when the connection clearly doesn't fit. A junior data scientist at Stripe is not "banking" even if Stripe processes financial transactions.
-- When unsure, MATCH (set m=true with a lower relevance score). The user has a "haven't messaged" filter and wants the broad slice.
+DECISION RULES
+- Use BOTH the company name and the title together. A title alone ("Director") tells you nothing in isolation; combined with a company it usually does.
+- Apply real-world knowledge about which firms belong to the industry, sector, or category the brief names. The category word does NOT have to appear in the company name — recognise major firms in that category even when their name is just a brand. Same for adjacent or specialist firms in the category.
+- Apply common-sense title→role-family inference. A title that names a recognised function or specialism inside the brief's category counts, even when the brief's literal word doesn't appear in the title.
+- Be strict about boundaries. A connection at a company adjacent to the category but not actually in it (e.g. a vendor selling INTO that category, a consulting firm advising that category) does NOT qualify unless the brief explicitly asks for that adjacency.
+- WHEN UNSURE, REJECT. Set m=false. The user is going to send the matched people outreach — including off-category matches wastes their time.
 
-OUTPUT
-For each connection, return:
-- id: the same id we gave you
-- m: true if this person plausibly matches the brief, false otherwise
-- r: relevance 1-10 (10 = exemplary fit, 5 = plausible but not central, 1 = barely)
-- w: 4-10 word reason citing the specific signal (the company, the title phrase, etc.)
+RELEVANCE SCORE (only set when m=true)
+- 10: textbook fit. Title is exactly the role family, company is canonically in the category.
+- 7-9: clear fit with one weak signal (e.g. company is in-category but title is generic; or title is exactly right but company is a less-canonical example).
+- 5-6: plausible fit but not central — borderline. Use sparingly.
+- 1-4: do NOT use these. If a candidate would only score 1-4, set m=false instead. The post-classifier filter drops everything below 5 anyway, so emitting low scores just wastes tokens.
+
+OUTPUT (one entry per input connection, same id)
+{ "id": "...", "m": true|false, "r": 5..10, "w": "4-10 word reason citing the company or title signal" }
 
 USER'S BRIEF (verbatim):
 ${brief}`,
