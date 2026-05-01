@@ -115,60 +115,81 @@ export async function runNetwork(
     };
   }
 
-  // Step 3: score each row against the filters.
+  // Step 3: score each row.
+  //
+  // Two paths. The PRIMARY path asks the LLM to classify each connection
+  // semantically against the brief — this catches Goldman Sachs as
+  // "banking" even though the company name doesn't contain the word
+  // "bank", and "VP, Investment Banking Coverage" as banking even though
+  // the position doesn't contain the literal industry term. The
+  // FALLBACK is the legacy keyword scorer, used when the LLM call fails
+  // or when the candidate pool is too large to sweep economically.
+  //
+  // Why LLM-first? Past bug: a brief like "people in banking" matched
+  // only ~50 of the user's actual ~200 banking connections because the
+  // keyword "banking" missed JPMorgan/Goldman/Morgan Stanley positions
+  // that don't contain the literal word.
   type Scored = { row: typeof rows[number]; score: number; reasons: string[] };
-  const scored: Scored[] = [];
-  for (const r of rows) {
-    const hay = [r.position, r.company, r.category, r.industry]
-      .filter((s): s is string => typeof s === "string" && s.length > 0)
-      .join(" | ")
-      .toLowerCase();
-    if (!hay) continue;
+  let scored: Scored[] = [];
 
-    // Exclusions short-circuit.
-    if (filters.excludeCompanies.some((kw) => matchField(r.company, kw))) continue;
-    if (filters.excludeRoles.some((kw) => matchField(r.position, kw))) continue;
+  // Resolve the messaged-set early — we need it for the pre-filter
+  // below so the LLM classifier doesn't burn tokens on people we'd drop.
+  const messagedSet = await messagedSetPromise;
 
-    let score = 0;
-    const reasons: string[] = [];
-    for (const kw of filters.roleKeywords) {
-      // Position match gets the biggest boost. For single-word keywords
-      // ("banking"), use word-boundary matching so we don't tag every
-      // company that happens to contain the word ("GoDutch banking") as
-      // a role hit. Multi-word keywords ("investment banking") are
-      // already specific enough to use plain substring.
-      if (matchFieldStrict(r.position, kw)) { score += 3; reasons.push(`role: ${kw}`); }
-      else if (matchFieldStrict(hay, kw)) { score += 1; }
-    }
-    for (const kw of filters.companyKeywords) {
-      if (matchFieldStrict(r.company, kw)) { score += 3; reasons.push(`company: ${kw}`); }
-      else if (matchFieldStrict(hay, kw)) { score += 1; }
-    }
-    for (const kw of filters.industryKeywords) {
-      if (matchFieldStrict(r.industry, kw) || matchFieldStrict(r.category, kw)) {
-        score += 2; reasons.push(`industry: ${kw}`);
-      } else if (matchFieldStrict(hay, kw)) { score += 1; }
-    }
-    // Seniority weighting — a Head of / MD / Chief / Director / VP match is
-    // what the user almost always wants in a network-analysis question,
-    // not Analysts and Associates. Previously the top of the results was
-    // being padded with juniors whose title happened to contain the same
-    // keyword (e.g. "Analyst, Investment Banking").
-    if (score > 0 && r.position) {
-      const pos = r.position.toLowerCase();
-      if (/\b(chief|cxo|ceo|cto|cfo|coo|cro|cio|cdo|chair|founder|president|partner)\b/.test(pos)) score += 3;
-      else if (/\b(managing director|md\b|head of|global head|group head|evp)\b/.test(pos)) score += 2;
-      else if (/\b(director|vp|svp|vice president|principal|lead)\b/.test(pos)) score += 1;
-      if (/\b(analyst|associate|intern|trainee|student|assistant|apprentice)\b/.test(pos)) score -= 2;
-    }
-    if (score > 0) scored.push({ row: r, score, reasons });
+  // Pre-trim with the user's explicit company/role exclusions and the
+  // messaged-set filter so the LLM classifier doesn't waste tokens on
+  // people we'll drop anyway.
+  let preFiltered = rows.filter((r) => {
+    if (filters.excludeCompanies.some((kw) => matchField(r.company, kw))) return false;
+    if (filters.excludeRoles.some((kw) => matchField(r.position, kw))) return false;
+    return true;
+  });
+  if (excludeAlreadyMessaged && (messagedSet.names.size > 0 || messagedSet.linkedinUrls.size > 0)) {
+    preFiltered = preFiltered.filter((r) => {
+      const fullName = `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim();
+      return !hasMessaged(messagedSet, { name: fullName, linkedinUrl: r.linkedin_url });
+    });
   }
 
-  // If strict filters knocked out everything, degrade to a raw-token match so
-  // the user sees *something* rather than an empty result.
+  // Hard cap on LLM-classification cost — at most 2,500 connections per
+  // query. Beyond that we fall back to keyword scoring (still works,
+  // just less accurate). 2,500 × 1 LLM call per ~50 = 50 calls, ~3-5s
+  // wallclock with parallelism, and a few cents in tokens.
+  const LLM_CLASSIFY_LIMIT = 2500;
+  const useLlmClassifier = preFiltered.length > 0 && preFiltered.length <= LLM_CLASSIFY_LIMIT;
+
+  if (useLlmClassifier) {
+    try {
+      const classified = await classifyWithLlm({
+        provider, brief: userInput, connections: preFiltered, userId, userKeys,
+      });
+      console.log(`[network] llm classifier: ${preFiltered.length} candidates → ${classified.filter((c) => c.match).length} matched`);
+      const idToRow = new Map(preFiltered.map((r) => [r.id, r]));
+      for (const c of classified) {
+        if (!c.match) continue;
+        const row = idToRow.get(c.id);
+        if (!row) continue;
+        const reasons = c.reason ? [c.reason] : [];
+        // Map relevance (0-10) to the legacy score range so sorting + the
+        // matchPct mapping below behave consistently.
+        scored.push({ row, score: Math.max(1, c.relevance), reasons });
+      }
+    } catch (e) {
+      console.warn("[network] llm classifier failed, falling back to keyword scorer:", (e as Error).message);
+      scored = keywordScore(preFiltered, filters);
+    }
+  } else {
+    if (preFiltered.length > LLM_CLASSIFY_LIMIT) {
+      console.log(`[network] ${preFiltered.length} candidates exceeds LLM-classify limit (${LLM_CLASSIFY_LIMIT}); using keyword scorer`);
+    }
+    scored = keywordScore(preFiltered, filters);
+  }
+
+  // If everything was knocked out, degrade to a raw-token keyword match
+  // so the user sees something instead of an empty result.
   if (scored.length === 0) {
     const tokens = tokenize(userInput);
-    for (const r of rows) {
+    for (const r of preFiltered) {
       const hay = [r.position, r.company, r.category, r.industry]
         .filter((s): s is string => typeof s === "string" && s.length > 0)
         .join(" ")
@@ -182,35 +203,23 @@ export async function runNetwork(
 
   scored.sort((a, b) => b.score - a.score);
 
-  // Apply the messaged-set filter before dedup so we don't waste a top
-  // slot on someone we'll then drop. Tagging happens later (during the
-  // Prospect mapping) regardless of whether we filtered.
-  const messagedSet = await messagedSetPromise;
-  // Track the funnel so the result summary can show "47 matched → 44
-  // already messaged → 3 remain". Without this, a user who expected
-  // dozens of unmessaged banking contacts but got 3 has no idea
-  // whether the matching was over-aggressive (a bug) or whether they
-  // really have messaged that many people (genuine).
-  let bankingMatchedBeforeFilter = 0;
-  let droppedAsMessaged = 0;
-  const messagedDroppedSamples: string[] = [];
-  if (excludeAlreadyMessaged && (messagedSet.names.size > 0 || messagedSet.linkedinUrls.size > 0)) {
-    const before = scored.length;
-    bankingMatchedBeforeFilter = before;
-    const kept: typeof scored = [];
-    for (const s of scored) {
-      const fullName = `${s.row.first_name ?? ""} ${s.row.last_name ?? ""}`.trim();
-      if (hasMessaged(messagedSet, { name: fullName, linkedinUrl: s.row.linkedin_url })) {
-        droppedAsMessaged++;
-        if (messagedDroppedSamples.length < 5) messagedDroppedSamples.push(fullName);
-        continue;
-      }
-      kept.push(s);
-    }
-    console.log(`[network] excludeAlreadyMessaged: ${before} → ${kept.length} (dropped ${droppedAsMessaged} matched-as-messaged)`);
-    scored.length = 0;
-    scored.push(...kept);
-  }
+  // Funnel diagnostics. The messaged-set filter actually ran BEFORE
+  // classification (during preFiltered above) so we don't waste LLM
+  // tokens on people we'd drop anyway — but we still want the summary
+  // to surface the math so the user can sanity-check unexpected counts.
+  // To compute "how many would have matched the brief if we hadn't
+  // filtered messaged out", we'd need to classify those too — too
+  // expensive. Instead we report the pre-filter pool size as a proxy.
+  const totalBeforeMessagedFilter = excludeAlreadyMessaged
+    ? rows.filter((r) => {
+        if (filters.excludeCompanies.some((kw) => matchField(r.company, kw))) return false;
+        if (filters.excludeRoles.some((kw) => matchField(r.position, kw))) return false;
+        return true;
+      }).length
+    : 0;
+  const droppedAsMessaged = excludeAlreadyMessaged
+    ? Math.max(0, totalBeforeMessagedFilter - preFiltered.length)
+    : 0;
 
   // Dedup by normalized LinkedIn URL (primary) or name+company (fallback).
   // People reimport their connections.csv over time; without this the top
@@ -305,20 +314,13 @@ export async function runNetwork(
   const baseSummary = filters.notes
     ? `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your network — ${filters.notes}`
     : `${prospects.length} match${prospects.length === 1 ? "" : "es"} in your ${rows.length.toLocaleString()} connections.`;
-  // Show the funnel when the messaged-set filter ran AND it actually dropped
-  // people. Without this, a result like "3 matches" looks suspicious — the
-  // user can't tell whether the matching is over-aggressive or accurate.
-  // Sampling 3-5 dropped names lets them eyeball whether the matches are
-  // real (people they actually messaged) or false positives.
+  // Show the funnel when the messaged-set filter dropped people. Lets the
+  // user sanity-check unexpected counts ("only 3? but I have hundreds of
+  // banking contacts!" — the funnel will show whether they were filtered
+  // as messaged or simply didn't match the brief).
   const messagedSuffix = excludeAlreadyMessaged
     ? droppedAsMessaged > 0
-      ? ` Funnel: ${bankingMatchedBeforeFilter} matched the brief, ${droppedAsMessaged} ${
-          droppedAsMessaged === 1 ? "is" : "are"
-        } already in your sent-messages log${
-          messagedDroppedSamples.length
-            ? ` (e.g. ${messagedDroppedSamples.slice(0, 3).join(", ")})`
-            : ""
-        }, ${prospects.length} remain. If a name in the example list isn't actually someone you messaged, your messages.csv may have a name-mismatch — re-import and check the auto-detected "you" name.`
+      ? ` (${droppedAsMessaged.toLocaleString()} of your connections were excluded as already-messaged before classification ran)`
       : ` (no overlap with your ${messagedSet.names.size.toLocaleString()} sent-messages counterparts)`
     : "";
   const moreSuffix = truncated
@@ -427,6 +429,154 @@ const STOP = new Set([
   "connections", "know", "knows", "have", "has", "want", "need", "would",
   "like", "love", "working", "work", "about", "into", "at", "in", "to", "of",
 ]);
+
+// ---- LLM classifier --------------------------------------------------------
+//
+// Sends the candidate connections to the LLM in parallel batches and asks it
+// to return {match, relevance, reason} for each. Way more accurate than
+// keyword matching for category-style briefs ("people in banking", "AI
+// leaders", "engineering managers"), because the LLM can reason about
+// company-name → industry ("Goldman Sachs" → banking) and title → role
+// family ("VP, Capital Markets Tech" → banking-tech) without us having to
+// curate a knowledge base.
+
+interface ClassifierRow {
+  id: string;
+  match: boolean;
+  /** 1-10. 10 = perfect fit. Used to sort results and to compute matchPct. */
+  relevance: number;
+  reason: string;
+}
+
+interface NetworkRow {
+  id: string;
+  first_name: string;
+  last_name: string;
+  position: string | null;
+  company: string | null;
+  category: string | null;
+  industry: string | null;
+  email: string | null;
+  phone: string | null;
+  linkedin_url: string | null;
+}
+
+async function classifyWithLlm(args: {
+  provider: AiProvider;
+  brief: string;
+  connections: NetworkRow[];
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<ClassifierRow[]> {
+  const { provider, brief, connections, userId, userKeys } = args;
+  // 50 per batch keeps each prompt under 3k input tokens (50 × ~30 tokens
+  // for "Name | Title | Company") — well clear of any provider's limit and
+  // small enough that one slow call doesn't dominate wallclock latency.
+  const BATCH = 50;
+  const batches: NetworkRow[][] = [];
+  for (let i = 0; i < connections.length; i += BATCH) {
+    batches.push(connections.slice(i, i + BATCH));
+  }
+
+  const results = await Promise.all(
+    batches.map(async (batch) => {
+      // Compact roster — LLM gets minimum tokens to make the decision.
+      // Fields beyond name/title/company would mostly be empty for
+      // LinkedIn-imported connections (no industry/category), so skip
+      // them. Position is the most informative single field.
+      const roster = batch.map((r) => ({
+        id: r.id,
+        n: `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim(),
+        t: (r.position ?? "").slice(0, 200),
+        c: (r.company ?? "").slice(0, 120),
+      }));
+
+      try {
+        const out = await aiJson<{ matches: Array<{ id: string; m: boolean; r?: number; w?: string }> }>(
+          provider,
+          `You classify whether each LinkedIn connection in a roster matches a user's intent. Be GENEROUS but precise — the user wants comprehensive coverage of their network, not a 5-person shortlist.
+
+DECISION RULE
+- Use BOTH the company name and the title together. A title alone ("Director") tells you nothing; combined with a company ("Director at Goldman Sachs") it does.
+- Apply real-world knowledge about firms. For example, when the brief says "banking" you should recognize JPMorgan, Goldman Sachs, Morgan Stanley, Citi, Wells Fargo, Barclays, Deutsche, Credit Suisse, HSBC, Lazard, Evercore, Houlihan Lokey, Stifel, Piper Sandler, Jefferies, Truist, KeyBank, etc. as banking firms even though their names don't contain the literal word "bank". Same logic for any other industry the user names.
+- Apply common-sense title→role-family inference. "Investment Banking Coverage", "M&A Associate", "Capital Markets Director", "FIG MD" all qualify as banking even without the literal word.
+- Reject only when the connection clearly doesn't fit. A junior data scientist at Stripe is not "banking" even if Stripe processes financial transactions.
+- When unsure, MATCH (set m=true with a lower relevance score). The user has a "haven't messaged" filter and wants the broad slice.
+
+OUTPUT
+For each connection, return:
+- id: the same id we gave you
+- m: true if this person plausibly matches the brief, false otherwise
+- r: relevance 1-10 (10 = exemplary fit, 5 = plausible but not central, 1 = barely)
+- w: 4-10 word reason citing the specific signal (the company, the title phrase, etc.)
+
+USER'S BRIEF (verbatim):
+${brief}`,
+          JSON.stringify(roster),
+          { maxTokens: 4000, userId, userKeys },
+        );
+        const matches = Array.isArray(out.matches) ? out.matches : [];
+        return matches.map((m) => ({
+          id: String(m.id),
+          match: m.m === true,
+          relevance: typeof m.r === "number" ? Math.max(1, Math.min(10, Math.round(m.r))) : 5,
+          reason: typeof m.w === "string" ? m.w.slice(0, 200) : "",
+        }));
+      } catch (e) {
+        console.warn("[network] classifier batch failed:", (e as Error).message);
+        // Fail-open per batch — return everyone in the batch as a low-
+        // confidence match rather than dropping the whole batch silently.
+        // The user can still triage; better than ghosting them.
+        return batch.map((r) => ({
+          id: r.id,
+          match: true,
+          relevance: 3,
+          reason: "(classifier error — review manually)",
+        }));
+      }
+    }),
+  );
+
+  return results.flat();
+}
+
+/** Legacy keyword scorer. Kept as the fallback when the LLM classifier
+ *  errors out or the candidate pool is too large. Same scoring logic the
+ *  module had before LLM classification was introduced. */
+function keywordScore(rows: NetworkRow[], filters: Filters): Array<{ row: NetworkRow; score: number; reasons: string[] }> {
+  const out: Array<{ row: NetworkRow; score: number; reasons: string[] }> = [];
+  for (const r of rows) {
+    const hay = [r.position, r.company, r.category, r.industry]
+      .filter((s): s is string => typeof s === "string" && s.length > 0)
+      .join(" | ")
+      .toLowerCase();
+    if (!hay) continue;
+    let score = 0;
+    const reasons: string[] = [];
+    for (const kw of filters.roleKeywords) {
+      if (matchFieldStrict(r.position, kw)) { score += 3; reasons.push(`role: ${kw}`); }
+      else if (matchFieldStrict(hay, kw)) { score += 1; }
+    }
+    for (const kw of filters.companyKeywords) {
+      if (matchFieldStrict(r.company, kw)) { score += 3; reasons.push(`company: ${kw}`); }
+      else if (matchFieldStrict(hay, kw)) { score += 1; }
+    }
+    for (const kw of filters.industryKeywords) {
+      if (matchFieldStrict(r.industry, kw) || matchFieldStrict(r.category, kw)) {
+        score += 2; reasons.push(`industry: ${kw}`);
+      } else if (matchFieldStrict(hay, kw)) { score += 1; }
+    }
+    if (score > 0 && r.position) {
+      const pos = r.position.toLowerCase();
+      if (/\b(chief|cxo|ceo|cto|cfo|coo|cro|cio|cdo|chair|founder|president|partner)\b/.test(pos)) score += 3;
+      else if (/\b(managing director|md\b|head of|global head|group head|evp)\b/.test(pos)) score += 2;
+      else if (/\b(director|vp|svp|vice president|principal|lead)\b/.test(pos)) score += 1;
+      if (/\b(analyst|associate|intern|trainee|student|assistant|apprentice)\b/.test(pos)) score -= 2;
+    }
+    if (score > 0) out.push({ row: r, score, reasons });
+  }
+  return out;
+}
 
 /** Pick a result-count from the brief. Returns "all" for "all/every/everyone"
  *  phrasings, an integer for explicit counts ("top 25", "give me 50",
