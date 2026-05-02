@@ -157,6 +157,19 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .dp-value .ed-cell,
 .dp-value .ed-input { display: block; width: 100%; min-height: 22px; }
 
+/* "+ Add a field" row at the bottom of the properties grid. */
+.dp-add-row { position: relative; padding: 4px 0; }
+.dp-add-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 10px; margin-left: -10px;
+  border-radius: 6px;
+  background: transparent; color: var(--text-mute);
+  font-size: 12px; font-weight: 500;
+  border: 0; cursor: pointer;
+  transition: background 120ms, color 120ms;
+}
+.dp-add-btn:hover { background: var(--hairline); color: var(--accent); }
+
 /* Page-body sections (Background, Notes). */
 .drawer-page-block { display: flex; flex-direction: column; gap: 8px; }
 .dp-section-label {

@@ -316,10 +316,12 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
   const update: Record<string, unknown> = { updated_at: new Date() };
   if (body.name !== undefined) update.name = body.name;
   if (body.emoji !== undefined) update.emoji = body.emoji;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  if (body.stages !== undefined) update.stages = body.stages as any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  if (body.columns !== undefined) update.columns = body.columns as any;
+  // JSONB columns: Kysely's pg driver auto-serialises plain objects but
+  // chokes on arrays-of-objects ("invalid input syntax for type json")
+  // because pg treats them as Postgres array literals instead of JSON.
+  // Use an explicit sql`...`::jsonb cast so the value is unambiguous.
+  if (body.stages !== undefined) update.stages = sql`${JSON.stringify(body.stages)}::jsonb`;
+  if (body.columns !== undefined) update.columns = sql`${JSON.stringify(body.columns)}::jsonb`;
   if (body.rowHeight !== undefined) update.row_height = body.rowHeight;
 
   const row = await db

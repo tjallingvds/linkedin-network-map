@@ -2210,8 +2210,89 @@ function BoardSwitcher({
 
 // ========== CRMDrawer — per-contact side panel ==========
 
+/** Inline "+ Add field" row at the bottom of the drawer's properties grid.
+ *  Click → pick a type → name it → it lands as a new column on the board's
+ *  schema, instantly showing up here AND on the table for everyone. */
+function DrawerAddField({ onAdd }: { onAdd: (col: CrmColumnDef) => void }) {
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<"choose" | "name">("choose");
+  const [pickedType, setPickedType] = useState<CrmColumnType>("text");
+  const [name, setName] = useState("");
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (step === "name") setTimeout(() => ref.current?.focus(), 0); }, [step]);
+
+  const reset = () => { setOpen(false); setStep("choose"); setPickedType("text"); setName(""); };
+
+  const create = () => {
+    const label = name.trim();
+    if (!label) return;
+    const id = makeCustomColId(label);
+    onAdd({
+      id, builtin: false, label, type: pickedType,
+      width: pickedType === "checkbox" ? "80px" : pickedType === "number" ? "90px" : "1fr",
+      options: pickedType === "dropdown" ? [] : undefined,
+    });
+    reset();
+  };
+
+  return (
+    <div className="dp-add-row">
+      <button className="dp-add-btn" onClick={() => setOpen(true)}>
+        <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+        <span>Add a field</span>
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={reset} />
+          <div className="hdr-menu" style={{ minWidth: 260, position: "absolute", left: 0, top: "calc(100% + 6px)" }} onClick={(e) => e.stopPropagation()}>
+            {step === "choose" ? (
+              <>
+                <div className="bm-label">Add a field</div>
+                <div className="hdr-type-grid">
+                  {USER_PICKABLE_TYPES.map((t) => (
+                    <button
+                      key={t}
+                      className="type-chip"
+                      onClick={() => { setPickedType(t); setStep("name"); }}
+                    >
+                      {TYPE_LABELS[t]}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bm-label">Name your {(TYPE_LABELS[pickedType] ?? "").toLowerCase()} field</div>
+                <div style={{ padding: "4px 8px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
+                  <input
+                    ref={ref}
+                    className="ed-input"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); create(); }
+                      if (e.key === "Escape") reset();
+                    }}
+                    placeholder="e.g. Lead score"
+                  />
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <button className="pill-btn" onClick={() => setStep("choose")}>Back</button>
+                    <button className="pill-btn primary" onClick={create}>
+                      <IconCheck size={11} />Add
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function CRMDrawer({
-  contact, idx, onClose, onPatch, onDelete, columns = [], stages = DEFAULT_STAGES,
+  contact, idx, onClose, onPatch, onDelete, columns = [], stages = DEFAULT_STAGES, onColumnsChange,
 }: {
   contact: CrmContact;
   idx: number;
@@ -2221,6 +2302,8 @@ export function CRMDrawer({
   /** Full board column schema so the drawer mirrors what's on the table. */
   columns?: CrmColumnDef[];
   stages?: StageDef[];
+  /** Persist a schema change (used by the inline "+ Add field" button). */
+  onColumnsChange?: (next: CrmColumnDef[]) => void;
 }) {
   const modal = useModal();
   const stageList = stages.length > 0 ? stages : DEFAULT_STAGES;
@@ -2324,16 +2407,19 @@ export function CRMDrawer({
           {/* Properties — one row per visible column on the board. Empty
               fields show a faint placeholder so the user knows where to
               type, just like a Notion page. */}
-          {propCols.length > 0 && (
-            <div className="drawer-props">
-              {propCols.map((c) => (
-                <div key={c.id} className="dp-row">
-                  <span className="dp-label">{c.label}</span>
-                  <div className="dp-value">{renderProp(c)}</div>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="drawer-props">
+            {propCols.map((c) => (
+              <div key={c.id} className="dp-row">
+                <span className="dp-label">{c.label}</span>
+                <div className="dp-value">{renderProp(c)}</div>
+              </div>
+            ))}
+            {onColumnsChange && (
+              <DrawerAddField
+                onAdd={(col) => onColumnsChange([...columns, col])}
+              />
+            )}
+          </div>
 
           {contact.background && (
             <div className="drawer-page-block">
@@ -2977,6 +3063,7 @@ export function CRMView({
           idx={contacts.findIndex((c) => c.id === openContact.id)}
           onClose={() => setOpenContact(null)}
           columns={columns}
+          onColumnsChange={saveColumns}
           stages={stages}
           onPatch={(id, patch) => {
             patchContact(id, patch);
