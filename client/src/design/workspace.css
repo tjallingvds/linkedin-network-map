@@ -130,40 +130,55 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   border-color: transparent;
 }
 
-/* Personalizable CRM drawer — every field editable inline, including
-   custom columns defined on the board. */
-.drawer-fields {
+/* CRM drawer — Notion-style page. Hero + properties grid + freeform notes
+   body. Properties are driven by the user's column schema, not hardcoded. */
+.drawer-body-page { padding: 36px 44px 60px; gap: 24px; }
+.profile-avatar-lg { width: 64px; height: 64px; font-size: 22px; }
+.drawer-body-page .profile-name { font-size: 28px; line-height: 1.15; }
+.drawer-body-page .profile-name .ed-cell,
+.drawer-body-page .profile-name .ed-input { font: inherit; font-weight: 600; }
+
+/* Properties grid — Notion-style key/value rows. Each row is the column
+   label on the left, the editable value on the right. */
+.drawer-props {
   display: flex; flex-direction: column; gap: 2px;
+}
+.dp-row {
+  display: grid; grid-template-columns: 140px 1fr;
+  align-items: center; gap: 12px;
+  padding: 4px 0;
+  min-height: 28px;
+}
+.dp-label {
+  font-size: 12px; color: var(--text-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dp-value { min-width: 0; }
+.dp-value .ed-cell,
+.dp-value .ed-input { display: block; width: 100%; min-height: 22px; }
+
+/* Page-body sections (Background, Notes). */
+.drawer-page-block { display: flex; flex-direction: column; gap: 8px; }
+.dp-section-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-mute); font-weight: 500;
+}
+.drawer-page-notes {
+  width: 100%; min-height: 200px; padding: 10px 0;
+  border: 0; background: transparent; color: var(--text);
+  font-size: 14px; line-height: 1.6; font-family: inherit;
+  resize: vertical;
+}
+.drawer-page-notes:focus,
+.drawer-page-notes:focus-visible {
+  outline: none;
+}
+.drawer-page-notes::placeholder { color: var(--text-mute); }
+.drawer-bg-block {
+  padding: 10px 12px; border-radius: 8px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 12px; overflow: hidden;
-}
-.drawer-field {
-  display: grid; grid-template-columns: 110px 1fr;
-  align-items: center; gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--hairline);
-  font-size: 12.5px;
-}
-.drawer-field:last-child { border-bottom: 0; }
-.drawer-field.block { display: block; padding: 10px 14px 12px; }
-.drawer-field.block .drawer-field-label { margin-bottom: 6px; }
-.drawer-field-label {
-  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-mute); white-space: nowrap;
-}
-.drawer-field-value { min-width: 0; }
-.drawer-field-value .ed-cell,
-.drawer-field-value .ed-input { display: block; width: 100%; min-height: 22px; }
-.drawer-notes {
-  width: 100%; min-height: 80px; padding: 8px 10px;
-  border-radius: 8px; background: var(--shell);
-  border: 1px solid var(--hairline); color: var(--text);
-  font-size: 12.5px; line-height: 1.45; font-family: inherit;
-}
-.drawer-notes:focus,
-.drawer-notes:focus-visible {
-  outline: none; border-color: var(--accent);
-  box-shadow: 0 0 0 3px oklch(0.72 0.14 155 / 0.15);
+  font-size: 12.5px; line-height: 1.55; color: var(--text);
+  white-space: pre-wrap;
 }
 
 /* Prospect card quick-access icons (LinkedIn / email). */
@@ -1712,20 +1727,28 @@ button:focus-visible { outline-offset: 3px; }
 .hdr-cell.drop-left::before  { left: -2px; }
 .hdr-cell.drop-right::after  { right: -2px; }
 
-/* Drag-to-resize grip on the right edge of every header cell. Sits on top
-   of the column divider so the divider line itself is what the user grabs. */
+/* Drag-to-resize grip on the right edge of every header cell. The hit-area
+   spans the full cell height + a comfortable 8px wide; the visible bar
+   inside is thinner and lights up when the cursor is near. */
 .hdr-resize {
   position: absolute;
-  top: 0; bottom: 0; right: -3px;
-  width: 6px;
+  top: 0; bottom: 0; right: -4px;
+  width: 8px;
   cursor: col-resize;
   z-index: 5;
   background: transparent;
-  transition: background 120ms;
+  display: flex; align-items: stretch; justify-content: center;
 }
-.tbl-cell.hdr:hover .hdr-resize { background: var(--hairline); }
-.hdr-resize:hover,
-.hdr-resize:active { background: var(--accent) !important; }
+.hdr-resize::after {
+  content: '';
+  width: 2px;
+  background: transparent;
+  border-radius: 1px;
+  transition: background 100ms;
+}
+.tbl-cell.hdr:hover .hdr-resize::after { background: var(--hairline-strong); }
+.hdr-resize:hover::after,
+.hdr-resize:active::after { background: var(--accent); width: 3px; }
 .hdr-cell.locked { color: var(--text-mute); }
 .hdr-label {
   flex: 1; min-width: 0;

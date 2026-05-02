@@ -2,6 +2,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, promises as fs } from "node:fs";
 import express from "express";
+// Side-effect import: monkey-patches Express 4 so async route handlers that
+// throw or reject forward the error to the error-handling middleware below
+// instead of becoming an unhandled rejection (which Node 20 turns into a
+// process crash). Without this, a single zod validation throw would knock
+// the whole server over and Railway would show its crash screen.
+import "express-async-errors";
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import helmet from "helmet";
@@ -92,8 +98,16 @@ if (existsSync(path.join(clientDist, "index.html"))) {
   console.log("ℹ No client bundle found — running in API-only mode.");
 }
 
-// Error handler
+// Error handler — turn zod validation throws into clean 400s instead of
+// generic 500s, and keep everything else as a 500 with the message.
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  // Treat anything that quacks like a ZodError (issues array) as a 400 — we
+  // don't import zod here just for the type so the duck-check is enough.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const issues = (err as any)?.issues;
+  if (Array.isArray(issues)) {
+    return res.status(400).json({ error: "bad_request", issues });
+  }
   console.error(err);
   res.status(500).json({ error: "server_error", message: err.message });
 });

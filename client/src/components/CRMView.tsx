@@ -1184,7 +1184,7 @@ function EmailCellEditor({
  *  on hover opens a menu with type / dropdown options / hide / delete /
  *  width controls. */
 function HeaderCell({
-  col, onChange, onDelete, onDragStart, onDragOver, onDrop, dropEdge,
+  col, onChange, onDelete, onDragStart, onDragOver, onDrop, dropEdge, onResizeStart,
 }: {
   col: CrmColumnDef;
   onChange: (next: CrmColumnDef) => void;
@@ -1195,6 +1195,9 @@ function HeaderCell({
   onDrop: () => void;
   /** Whether to show the drop indicator on this column's left or right edge. */
   dropEdge: "left" | "right" | null;
+  /** Begin a column resize. The parent TableView owns the live width state
+   *  so the grid-template-columns string can show real-time feedback. */
+  onResizeStart: (colId: string, startX: number, startWidthPx: number) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(col.label);
@@ -1221,41 +1224,20 @@ function HeaderCell({
 
   if (isLabelLocked) return <div className="hdr-cell locked" />;
 
-  // While the user is dragging the resize handle, the parent's `draggable`
-  // attribute is set to false so the browser doesn't initiate an HTML5
-  // drag-reorder on the column instead of resizing it.
-  const [resizing, setResizing] = useState(false);
-
   const onResizePointerDown = (e: React.PointerEvent<HTMLSpanElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    setResizing(true);
     const cell = (e.currentTarget as HTMLElement).closest(".tbl-cell") as HTMLElement | null;
-    if (!cell) { setResizing(false); return; }
-    const startW = cell.getBoundingClientRect().width;
-    const startX = e.clientX;
-    const onMove = (ev: PointerEvent) => {
-      const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
-      cell.style.width = `${next}px`;
-    };
-    const onUp = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
-      cell.style.width = ""; // clear inline override; the schema width takes effect
-      onChange({ ...col, width: `${next}px` });
-      setResizing(false);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    if (!cell) return;
+    onResizeStart(col.id, e.clientX, cell.getBoundingClientRect().width);
   };
 
   return (
     <div
       className={`hdr-cell${dropEdge ? ` drop-${dropEdge}` : ""}`}
-      draggable={!isLabelLocked && !resizing}
+      draggable={!isLabelLocked}
       onDragStart={(e) => {
-        if (isLabelLocked || resizing) { e.preventDefault(); return; }
+        if (isLabelLocked) { e.preventDefault(); return; }
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/x-col-id", col.id);
         onDragStart(col.id);
@@ -1533,7 +1515,35 @@ function TableView({
   rowHeight: CrmRowHeight;
 }) {
   const visibleCols = useMemo(() => columns.filter((c) => !c.hidden), [columns]);
-  const gridTemplate = visibleCols.map((c) => c.width ?? "1fr").join(" ") + " 36px";
+
+  // Live width override during a column resize — set on every pointermove so
+  // the grid-template-columns string immediately reflects the new width.
+  // Without this, setting `cell.style.width` on a single grid child has no
+  // effect (the parent grid template owns the width) and the user gets no
+  // feedback until release.
+  const [liveWidth, setLiveWidth] = useState<{ id: string; px: number } | null>(null);
+
+  const startResize = (colId: string, startX: number, startW: number) => {
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
+      setLiveWidth({ id: colId, px: next });
+    };
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
+      setLiveWidth(null);
+      // Persist the new width in the schema (which then syncs to collaborators).
+      onColumnsChange(columns.map((c) => (c.id === colId ? { ...c, width: `${next}px` } : c)));
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  const gridTemplate = visibleCols.map((c) => {
+    if (liveWidth && liveWidth.id === c.id) return `${liveWidth.px}px`;
+    return c.width ?? "1fr";
+  }).join(" ") + " 36px";
 
   const updateCol = (id: string, patch: Partial<CrmColumnDef>) => {
     onColumnsChange(columns.map((c) => (c.id === id ? { ...c, ...patch } : c)));
@@ -1644,6 +1654,7 @@ function TableView({
                   onDragOver={onHeaderDragOver}
                   onDrop={onHeaderDrop}
                   dropEdge={dropTarget?.id === c.id ? dropTarget.edge : null}
+                  onResizeStart={startResize}
                 />
               )}
             </div>
@@ -2020,16 +2031,6 @@ function ImportModal({
   );
 }
 
-/** Label + editable value row used in CRMDrawer. */
-function DrawerField({ label, children, block }: { label: string; children: React.ReactNode; block?: boolean }) {
-  return (
-    <div className={`drawer-field${block ? " block" : ""}`}>
-      <div className="drawer-field-label">{label}</div>
-      <div className="drawer-field-value">{children}</div>
-    </div>
-  );
-}
-
 function AddContactModal({
   boardName, onClose, onAdd,
 }: {
@@ -2210,25 +2211,69 @@ function BoardSwitcher({
 // ========== CRMDrawer — per-contact side panel ==========
 
 export function CRMDrawer({
-  contact, idx, onClose, onPatch, onDelete, customCols = [], stages = DEFAULT_STAGES,
+  contact, idx, onClose, onPatch, onDelete, columns = [], stages = DEFAULT_STAGES,
 }: {
   contact: CrmContact;
   idx: number;
   onClose: () => void;
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   onDelete?: (id: string) => void;
-  /** User-defined board columns so the drawer shows the same fields as the table. */
-  customCols?: CustomColumn[];
+  /** Full board column schema so the drawer mirrors what's on the table. */
+  columns?: CrmColumnDef[];
   stages?: StageDef[];
 }) {
   const modal = useModal();
   const stageList = stages.length > 0 ? stages : DEFAULT_STAGES;
-  const stage = stageList.find((s) => s.id === contact.stage) ?? stageList[0]!;
 
   const advanceStage = () => {
     const i = stageList.findIndex((s) => s.id === contact.stage);
     const next = stageList[Math.min(stageList.length - 1, i + 1)]!;
     onPatch(contact.id, { stage: next.id as CrmStage });
+  };
+
+  // Properties block — driven by the user's column schema, in the user's
+  // chosen order. The hero already shows Person / Stage / Temp so we don't
+  // repeat them; the row-select column is irrelevant here.
+  const propCols = columns.filter(
+    (c) => c.id !== "_select" && c.id !== "person" && c.id !== "stage" && c.id !== "temp" && !c.hidden,
+  );
+
+  /** Render the right cell editor for the column's type. Built-in columns
+   *  back real contact fields; custom ones live in customFields[id]. */
+  const renderProp = (col: CrmColumnDef): React.ReactNode => {
+    if (!col.builtin) {
+      const val = (contact.customFields ?? {})[col.id] ?? "";
+      const setVal = (v: string) => onPatch(contact.id, { customFields: { [col.id]: v } });
+      switch (col.type) {
+        case "number":   return <NumberCellEditor value={val ? Number(val) : null} onSave={(n) => setVal(String(n))} />;
+        case "dropdown": return <DropdownCellEditor value={val} options={col.options ?? []} onSave={setVal} />;
+        case "email":    return <EmailCellEditor value={val} onSave={setVal} />;
+        case "link":     return <LinkCellEditor value={val} onSave={setVal} />;
+        case "date":     return <DateCellEditor value={val} onSave={setVal} />;
+        case "checkbox": return <CheckboxCellEditor value={val} onSave={setVal} />;
+        default:         return <EditableCell value={val} onSave={setVal} />;
+      }
+    }
+    switch (col.id) {
+      case "title":    return <EditableCell value={contact.title}   onSave={(v) => onPatch(contact.id, { title: v })} />;
+      case "company":  return <EditableCell value={contact.company} onSave={(v) => onPatch(contact.id, { company: v })} />;
+      case "email":    return <EmailCellEditor value={contact.email} onSave={(v) => onPatch(contact.id, { email: v })} />;
+      case "phone":    return <EditableCell value={contact.phone} onSave={(v) => onPatch(contact.id, { phone: v })} />;
+      case "linkedin": return (
+        <LinkedInCell
+          value={contact.linkedin}
+          onSave={(v) => onPatch(contact.id, { linkedin: normalizeLinkedInInput(v) ?? v })}
+        />
+      );
+      case "sent":         return <NumberCellEditor value={contact.sent}    onSave={(n) => onPatch(contact.id, { sent: n })} />;
+      case "opens":        return <NumberCellEditor value={contact.opens}   onSave={(n) => onPatch(contact.id, { opens: n })} />;
+      case "replies":      return <NumberCellEditor value={contact.replies} onSave={(n) => onPatch(contact.id, { replies: n })} />;
+      case "nextStep":     return <EditableCell value={contact.nextStep} onSave={(v) => onPatch(contact.id, { nextStep: v })} />;
+      case "source":       return <EditableCell value={contact.source} onSave={(v) => onPatch(contact.id, { source: v })} />;
+      case "messageNotes": return <EditableCell value={contact.messageNotes} onSave={(v) => onPatch(contact.id, { messageNotes: v })} />;
+      case "notes":        return <EditableCell value={contact.notes} onSave={(v) => onPatch(contact.id, { notes: v })} />;
+      default:             return null;
+    }
   };
 
   return (
@@ -2259,9 +2304,9 @@ export function CRMDrawer({
             )}
           </div>
         </div>
-        <div className="drawer-body">
+        <div className="drawer-body drawer-body-page">
           <div className="profile-hero">
-            <div className="profile-avatar" style={{ background: avatarGrad(idx) }}>{initials(contact.name)}</div>
+            <div className="profile-avatar profile-avatar-lg" style={{ background: avatarGrad(idx) }}>{initials(contact.name)}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div className="profile-name">
                 <EditableCell
@@ -2269,111 +2314,52 @@ export function CRMDrawer({
                   onSave={(v) => { if (v.trim()) onPatch(contact.id, { name: v.trim() }); }}
                 />
               </div>
-              <div className="profile-title" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <EditableCell
-                  value={contact.title}
-                  onSave={(v) => onPatch(contact.id, { title: v })}
-                />
-                <span style={{ color: "var(--text-mute)" }}>·</span>
-                <EditableCell
-                  value={contact.company}
-                  onSave={(v) => onPatch(contact.id, { company: v })}
-                />
-              </div>
-              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
                 <StageCell stage={contact.stage} stages={stageList} onChange={(v) => onPatch(contact.id, { stage: v })} />
                 <TempCell temp={contact.temp} onChange={(v) => onPatch(contact.id, { temp: v })} />
               </div>
             </div>
           </div>
 
-          {/* Every field editable inline, including the user's custom columns. */}
-          <div className="drawer-fields">
-            <DrawerField label="Name">
-              <EditableCell value={contact.name} onSave={(v) => { if (v.trim()) onPatch(contact.id, { name: v.trim() }); }} />
-            </DrawerField>
-            <DrawerField label="Title">
-              <EditableCell value={contact.title} onSave={(v) => onPatch(contact.id, { title: v })} />
-            </DrawerField>
-            <DrawerField label="Company">
-              <EditableCell value={contact.company} onSave={(v) => onPatch(contact.id, { company: v })} />
-            </DrawerField>
-            <DrawerField label="Email">
-              <EditableCell value={contact.email} onSave={(v) => onPatch(contact.id, { email: v })} />
-            </DrawerField>
-            <DrawerField label="Phone">
-              <EditableCell value={contact.phone} onSave={(v) => onPatch(contact.id, { phone: v })} />
-            </DrawerField>
-            <DrawerField label="LinkedIn">
-              <EditableCell value={contact.linkedin} onSave={(v) => onPatch(contact.id, { linkedin: v })} />
-            </DrawerField>
-            <DrawerField label="Source">
-              <EditableCell value={contact.source} onSave={(v) => onPatch(contact.id, { source: v })} />
-            </DrawerField>
-            <DrawerField label="Next step">
-              <EditableCell value={contact.nextStep} onSave={(v) => onPatch(contact.id, { nextStep: v })} />
-            </DrawerField>
-            <DrawerField label="Last touch">
-              <EditableCell value={contact.lastTouch} onSave={(v) => onPatch(contact.id, { lastTouch: v })} />
-            </DrawerField>
+          {/* Properties — one row per visible column on the board. Empty
+              fields show a faint placeholder so the user knows where to
+              type, just like a Notion page. */}
+          {propCols.length > 0 && (
+            <div className="drawer-props">
+              {propCols.map((c) => (
+                <div key={c.id} className="dp-row">
+                  <span className="dp-label">{c.label}</span>
+                  <div className="dp-value">{renderProp(c)}</div>
+                </div>
+              ))}
+            </div>
+          )}
 
-            {/* User-defined columns live alongside the built-ins so editing
-                one place keeps the board + drawer in sync. */}
-            {customCols.map((c) => {
-              const v = (contact.customFields ?? {})[c.id] ?? "";
-              return (
-                <DrawerField key={c.id} label={c.label}>
-                  <EditableCell
-                    value={v}
-                    onSave={(next) => onPatch(contact.id, { customFields: { [c.id]: next } })}
-                  />
-                </DrawerField>
-              );
-            })}
+          {contact.background && (
+            <div className="drawer-page-block">
+              <div className="dp-section-label">Background</div>
+              <div
+                className="drawer-bg-block"
+                // Background is LLM-generated markdown with inline links.
+                // Render it minimally — linkify [label](url) and preserve
+                // bullets. Source: trusted backend, no user input.
+                dangerouslySetInnerHTML={{ __html: renderBackgroundMarkdown(contact.background) }}
+              />
+            </div>
+          )}
 
-            <DrawerField label="What to personalize" block>
-              <textarea
-                className="drawer-notes"
-                defaultValue={contact.messageNotes ?? ""}
-                placeholder="One-liner hook, recent post, mutual connection, what to lead with…"
-                onBlur={(e) => {
-                  const v = e.target.value;
-                  if ((contact.messageNotes ?? "") !== v) onPatch(contact.id, { messageNotes: v });
-                }}
-              />
-            </DrawerField>
-            {contact.background && (
-              <DrawerField label="Background (auto-researched)" block>
-                <div
-                  className="drawer-bg-block"
-                  style={{
-                    padding: "10px 12px",
-                    borderRadius: 8,
-                    background: "var(--panel)",
-                    border: "1px solid var(--hairline)",
-                    fontSize: 12.5,
-                    lineHeight: 1.5,
-                    color: "var(--text)",
-                    whiteSpace: "pre-wrap",
-                  }}
-                  // Background is LLM-generated markdown with inline links.
-                  // Render it minimally — linkify [label](url) and preserve
-                  // bullets. Source: trusted backend, no user input.
-                  dangerouslySetInnerHTML={{ __html: renderBackgroundMarkdown(contact.background) }}
-                />
-              </DrawerField>
-            )}
-            <DrawerField label="Notes" block>
-              <textarea
-                className="drawer-notes"
-                defaultValue={contact.notes ?? ""}
-                placeholder="Log a call, note, or what you learned…"
-                onBlur={(e) => {
-                  const v = e.target.value;
-                  if ((contact.notes ?? "") !== v) onPatch(contact.id, { notes: v });
-                }}
-              />
-            </DrawerField>
+          {/* Notion-style page body — one big freeform notes area. */}
+          <div className="drawer-page-block">
+            <div className="dp-section-label">Notes</div>
+            <textarea
+              className="drawer-page-notes"
+              defaultValue={contact.notes ?? ""}
+              placeholder="Type anything — meeting notes, follow-ups, ideas, what they said…"
+              onBlur={(e) => {
+                const v = e.target.value;
+                if ((contact.notes ?? "") !== v) onPatch(contact.id, { notes: v });
+              }}
+            />
           </div>
         </div>
         <div className="drawer-foot">
@@ -2990,7 +2976,7 @@ export function CRMView({
           contact={openContact}
           idx={contacts.findIndex((c) => c.id === openContact.id)}
           onClose={() => setOpenContact(null)}
-          customCols={customCols}
+          columns={columns}
           stages={stages}
           onPatch={(id, patch) => {
             patchContact(id, patch);

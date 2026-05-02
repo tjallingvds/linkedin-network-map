@@ -258,7 +258,9 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
   const columnDef = z.object({
     id: z.string().min(1).max(48),
     builtin: z.boolean(),
-    label: z.string().min(1).max(60),
+    // Labels can be empty: the row-select checkbox column has no label by
+    // design. Client-side rename UX still rejects empty user input.
+    label: z.string().max(60),
     type: z.enum([
       "text", "longtext", "number", "dropdown", "email", "phone",
       "link", "date", "checkbox", "stage", "temp", "person", "select",
