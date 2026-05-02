@@ -1184,11 +1184,17 @@ function EmailCellEditor({
  *  on hover opens a menu with type / dropdown options / hide / delete /
  *  width controls. */
 function HeaderCell({
-  col, onChange, onDelete,
+  col, onChange, onDelete, onDragStart, onDragOver, onDrop, dropEdge,
 }: {
   col: CrmColumnDef;
   onChange: (next: CrmColumnDef) => void;
   onDelete: () => void;
+  /** Drag-and-drop reordering — wired up by the parent TableView. */
+  onDragStart: (id: string) => void;
+  onDragOver: (id: string, edge: "left" | "right") => void;
+  onDrop: () => void;
+  /** Whether to show the drop indicator on this column's left or right edge. */
+  dropEdge: "left" | "right" | null;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draft, setDraft] = useState(col.label);
@@ -1204,12 +1210,58 @@ function HeaderCell({
     else setDraft(col.label);
   };
 
-  const isLocked = REQUIRED_COLS.includes(col.id);
-  const isBuiltinReserved =
-    col.builtin && (col.type === "stage" || col.type === "temp" || col.type === "person" || col.type === "select");
+  // The row-select checkbox column has no label and no menu.
+  const isLabelLocked = col.id === "_select";
+  // Person + Stage are required by the table layout / kanban — the user can
+  // rename their label but can't hide or delete them.
+  const isStructureLocked = REQUIRED_COLS.includes(col.id);
+  // Built-in columns whose underlying field has fixed semantics (the
+  // person card, the kanban stage chip) can't have their type swapped.
+  const isTypeLocked = col.builtin;
+
+  if (isLabelLocked) return <div className="hdr-cell locked" />;
+
+  const onResizePointerDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const cell = (e.currentTarget as HTMLElement).parentElement?.parentElement;
+    if (!cell) return;
+    const startW = cell.getBoundingClientRect().width;
+    const startX = e.clientX;
+    const onMove = (ev: PointerEvent) => {
+      const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
+      cell.style.width = `${next}px`; // visual-only feedback during drag
+    };
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
+      cell.style.width = ""; // clear inline override; the schema width will take effect
+      onChange({ ...col, width: `${next}px` });
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 
   return (
-    <div className={`hdr-cell${isLocked ? " locked" : ""}`}>
+    <div
+      className={`hdr-cell${dropEdge ? ` drop-${dropEdge}` : ""}`}
+      draggable={!isLabelLocked}
+      onDragStart={(e) => {
+        if (isLabelLocked) return;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/x-col-id", col.id);
+        onDragStart(col.id);
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        const edge = e.clientX < rect.left + rect.width / 2 ? "left" : "right";
+        onDragOver(col.id, edge);
+      }}
+      onDrop={(e) => { e.preventDefault(); onDrop(); }}
+    >
       {renaming ? (
         <input
           ref={ref}
@@ -1225,21 +1277,19 @@ function HeaderCell({
       ) : (
         <span
           className="hdr-label"
-          onDoubleClick={() => !isLocked && setRenaming(true)}
-          title={isLocked ? "" : "Double-click to rename"}
+          onDoubleClick={() => setRenaming(true)}
+          title="Double-click to rename"
         >
           {col.label || <span style={{ color: "var(--text-mute)" }}>—</span>}
         </span>
       )}
-      {!isLocked && (
-        <button
-          className="hdr-chev"
-          onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
-          title="Column options"
-        >
-          <IconChevD size={10} />
-        </button>
-      )}
+      <button
+        className="hdr-chev"
+        onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
+        title="Column options"
+      >
+        <IconChevD size={10} />
+      </button>
       {menuOpen && (
         <>
           <div className="board-menu-bg" onClick={() => setMenuOpen(false)} />
@@ -1248,7 +1298,7 @@ function HeaderCell({
               <span style={{ width: 14, textAlign: "center" }}>Aa</span>
               <span style={{ flex: 1 }}>Rename</span>
             </button>
-            {!isBuiltinReserved && !col.builtin && (
+            {!isTypeLocked && (
               <>
                 <div className="bm-sep" />
                 <div className="bm-label">Type</div>
@@ -1291,22 +1341,27 @@ function HeaderCell({
                 </button>
               ))}
             </div>
-            <div className="bm-sep" />
-            <button className="bm-item" onClick={() => { onChange({ ...col, hidden: true }); setMenuOpen(false); }}>
-              <IconClose size={11} /><span>Hide column</span>
-            </button>
-            {!col.builtin && (
-              <button
-                className="bm-item"
-                style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
-                onClick={() => { onDelete(); setMenuOpen(false); }}
-              >
-                <IconClose size={11} /><span>Delete column</span>
-              </button>
+            {!isStructureLocked && (
+              <>
+                <div className="bm-sep" />
+                <button className="bm-item" onClick={() => { onChange({ ...col, hidden: true }); setMenuOpen(false); }}>
+                  <IconClose size={11} /><span>Hide column</span>
+                </button>
+                {!col.builtin && (
+                  <button
+                    className="bm-item"
+                    style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
+                    onClick={() => { onDelete(); setMenuOpen(false); }}
+                  >
+                    <IconClose size={11} /><span>Delete column</span>
+                  </button>
+                )}
+              </>
             )}
           </div>
         </>
       )}
+      <span className="hdr-resize" onPointerDown={onResizePointerDown} title="Drag to resize" />
     </div>
   );
 }
@@ -1473,6 +1528,37 @@ function TableView({
   const deleteCol = (id: string) => onColumnsChange(columns.filter((c) => c.id !== id));
   const addCol = (col: CrmColumnDef) => onColumnsChange([...columns, col]);
 
+  // ---- Column reorder via drag-and-drop on header cells ----
+  const [draggingColId, setDraggingColId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; edge: "left" | "right" } | null>(null);
+
+  const reorderColumn = (sourceId: string, targetId: string, edge: "left" | "right") => {
+    if (sourceId === targetId) return;
+    const sourceIdx = columns.findIndex((c) => c.id === sourceId);
+    const targetIdx = columns.findIndex((c) => c.id === targetId);
+    if (sourceIdx < 0 || targetIdx < 0) return;
+    const next = columns.slice();
+    const [moved] = next.splice(sourceIdx, 1);
+    if (!moved) return;
+    // Compute insertion index in the new array (after splice).
+    let insertAt = next.findIndex((c) => c.id === targetId);
+    if (edge === "right") insertAt += 1;
+    if (insertAt < 0) insertAt = next.length;
+    next.splice(insertAt, 0, moved);
+    onColumnsChange(next);
+  };
+
+  const onHeaderDragStart = (id: string) => setDraggingColId(id);
+  const onHeaderDragOver = (id: string, edge: "left" | "right") => {
+    if (!draggingColId) return;
+    setDropTarget((cur) => (cur?.id === id && cur.edge === edge ? cur : { id, edge }));
+  };
+  const onHeaderDrop = () => {
+    if (draggingColId && dropTarget) reorderColumn(draggingColId, dropTarget.id, dropTarget.edge);
+    setDraggingColId(null);
+    setDropTarget(null);
+  };
+
   const isNumeric = (col: CrmColumnDef) => NUMERIC_TYPES.includes(col.type);
 
   const renderCell = (col: CrmColumnDef, p: CrmContact, i: number) => {
@@ -1540,6 +1626,10 @@ function TableView({
                   col={c}
                   onChange={replaceCol}
                   onDelete={() => deleteCol(c.id)}
+                  onDragStart={onHeaderDragStart}
+                  onDragOver={onHeaderDragOver}
+                  onDrop={onHeaderDrop}
+                  dropEdge={dropTarget?.id === c.id ? dropTarget.edge : null}
                 />
               )}
             </div>
@@ -2159,8 +2249,23 @@ export function CRMDrawer({
           <div className="profile-hero">
             <div className="profile-avatar" style={{ background: avatarGrad(idx) }}>{initials(contact.name)}</div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="profile-name">{contact.name}</div>
-              <div className="profile-title">{[contact.title, contact.company].filter(Boolean).join(" · ") || "—"}</div>
+              <div className="profile-name">
+                <EditableCell
+                  value={contact.name}
+                  onSave={(v) => { if (v.trim()) onPatch(contact.id, { name: v.trim() }); }}
+                />
+              </div>
+              <div className="profile-title" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <EditableCell
+                  value={contact.title}
+                  onSave={(v) => onPatch(contact.id, { title: v })}
+                />
+                <span style={{ color: "var(--text-mute)" }}>·</span>
+                <EditableCell
+                  value={contact.company}
+                  onSave={(v) => onPatch(contact.id, { company: v })}
+                />
+              </div>
               <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                 <StageCell stage={contact.stage} stages={stageList} onChange={(v) => onPatch(contact.id, { stage: v })} />
                 <TempCell temp={contact.temp} onChange={(v) => onPatch(contact.id, { temp: v })} />
