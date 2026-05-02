@@ -153,6 +153,12 @@ export interface CrmBoard {
    *  the owner is visible to shared-with users without each configuring
    *  their own copy. */
   stages?: CrmStageDef[] | null;
+  /** Per-board table-column schema (order, widths, types, dropdown options,
+   *  visibility, labels). Shared across collaborators. Null means the
+   *  client falls back to its built-in defaults. */
+  columns?: CrmColumnDef[] | null;
+  /** Row height for the table view. Shared across collaborators. */
+  rowHeight?: CrmRowHeight | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -162,6 +168,47 @@ export interface CrmStageDef {
   label: string;
   color: string;
   tint: string;
+}
+
+export type CrmColumnType =
+  | "text"
+  | "longtext"
+  | "number"
+  | "dropdown"
+  | "email"
+  | "phone"
+  | "link"
+  | "date"
+  | "checkbox"
+  | "stage"
+  | "temp"
+  | "person"
+  | "select"; // internal: row-select checkbox
+
+export type CrmRowHeight = "short" | "medium" | "tall";
+
+export interface CrmDropdownOption {
+  value: string;
+  color?: string;
+}
+
+/** One column on a CRM board's table view. Both built-in (`builtin: true`,
+ *  data lives in core contact fields) and user-defined (`builtin: false`,
+ *  data lives in `customFields[id]`) columns share this shape so the
+ *  renderer doesn't need a special case per kind. */
+export interface CrmColumnDef {
+  id: string;
+  /** True for built-in columns whose data lives on a real contact field
+   *  (name/title/email/...). False for user-added columns whose data lives
+   *  inside `customFields[id]`. */
+  builtin: boolean;
+  label: string;
+  type: CrmColumnType;
+  /** CSS grid-template-columns size token. */
+  width?: string;
+  hidden?: boolean;
+  /** Required when `type === "dropdown"`. */
+  options?: CrmDropdownOption[];
 }
 
 export interface CrmImportRow {

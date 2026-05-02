@@ -151,12 +151,14 @@ function generateShareToken(): string {
 router.get("/boards", async (req: AuthedRequest, res) => {
   const userId = req.user!.id;
 
-  // Self-heal the stages column so shared collaborators see the same
-  // kanban config even if the migration never ran on this environment.
+  // Self-heal columns so shared collaborators see the same kanban + table
+  // config even if the migration never ran on this environment.
   try {
     await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS stages JSONB`.execute(db);
+    await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS columns JSONB`.execute(db);
+    await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS row_height TEXT`.execute(db);
   } catch (err) {
-    console.warn("[crm] ensure stages column failed:", (err as Error).message);
+    console.warn("[crm] ensure board columns failed:", (err as Error).message);
   }
 
   // Board ids the user can see: owned + shared-with-them.
@@ -177,6 +179,8 @@ router.get("/boards", async (req: AuthedRequest, res) => {
       "crm_boards.emoji",
       "crm_boards.share_token",
       "crm_boards.stages",
+      "crm_boards.columns",
+      "crm_boards.row_height",
       "crm_boards.created_at",
       "crm_boards.updated_at",
       fn.count<number>("crm_contacts.id").as("contact_count"),
@@ -215,6 +219,8 @@ router.get("/boards", async (req: AuthedRequest, res) => {
       shared: !b.owned, // for anyone not the owner, it reached them via a share token
       hasShareToken: !!b.share_token,
       stages: b.stages ?? null,
+      columns: b.columns ?? null,
+      rowHeight: b.row_height ?? null,
       createdAt: b.created_at, updatedAt: b.updated_at,
     })),
   });
@@ -245,20 +251,38 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     color: z.string().min(1).max(80),
     tint: z.string().min(1).max(80),
   });
+  const dropdownOption = z.object({
+    value: z.string().min(1).max(80),
+    color: z.string().max(80).optional(),
+  });
+  const columnDef = z.object({
+    id: z.string().min(1).max(48),
+    builtin: z.boolean(),
+    label: z.string().min(1).max(60),
+    type: z.enum([
+      "text", "longtext", "number", "dropdown", "email", "phone",
+      "link", "date", "checkbox", "stage", "temp", "person", "select",
+    ]),
+    width: z.string().max(30).optional(),
+    hidden: z.boolean().optional(),
+    options: z.array(dropdownOption).max(40).optional(),
+  });
   const body = z.object({
     name: z.string().min(1).max(100).optional(),
     emoji: z.string().min(1).max(8).optional(),
     stages: z.array(stageDef).min(1).max(20).nullable().optional(),
+    columns: z.array(columnDef).max(64).nullable().optional(),
+    rowHeight: z.enum(["short", "medium", "tall"]).nullable().optional(),
   }).parse(req.body);
 
-  // Shared members can edit board config (stages) — the whole point of
-  // sharing is collaborative editing. Owner-only for name/emoji to keep
-  // rename surprises contained.
+  // Shared members can edit board config (stages, columns, row height) —
+  // the whole point of sharing is collaborative editing. Owner-only for
+  // name/emoji to keep rename surprises contained.
   const ownedOrMember = await ensureBoard(req.user!.id, req.params.id);
   if (!ownedOrMember) return res.status(404).json({ error: "not_found" });
   const ownerCheck = await db
     .selectFrom("crm_boards")
-    .select("user_id")
+    .select(["user_id", "columns"])
     .where("id", "=", req.params.id)
     .executeTakeFirst();
   const isOwner = ownerCheck?.user_id === req.user!.id;
@@ -268,13 +292,33 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
 
   try {
     await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS stages JSONB`.execute(db);
+    await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS columns JSONB`.execute(db);
+    await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS row_height TEXT`.execute(db);
   } catch { /* already exists */ }
+
+  // If the column schema is changing AND the new schema drops some custom
+  // columns, scrub their keys from every contact's custom_fields so we
+  // don't leak orphaned data forever. Built-in column drops aren't real
+  // deletions (the underlying field stays); they only hide on the table.
+  let droppedCustomIds: string[] = [];
+  if (body.columns !== undefined && body.columns !== null) {
+    type PrevCol = { id?: string; builtin?: boolean };
+    const prevColumns = Array.isArray(ownerCheck?.columns) ? ownerCheck!.columns as PrevCol[] : [];
+    const prevCustomIds = new Set(
+      prevColumns.filter((c) => c && !c.builtin && typeof c.id === "string").map((c) => c.id as string),
+    );
+    const nextIds = new Set(body.columns.map((c) => c.id));
+    droppedCustomIds = [...prevCustomIds].filter((id) => !nextIds.has(id));
+  }
 
   const update: Record<string, unknown> = { updated_at: new Date() };
   if (body.name !== undefined) update.name = body.name;
   if (body.emoji !== undefined) update.emoji = body.emoji;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if (body.stages !== undefined) update.stages = body.stages as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (body.columns !== undefined) update.columns = body.columns as any;
+  if (body.rowHeight !== undefined) update.row_height = body.rowHeight;
 
   const row = await db
     .updateTable("crm_boards")
@@ -283,10 +327,27 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     .returningAll()
     .executeTakeFirst();
   if (!row) return res.status(404).json({ error: "not_found" });
+
+  // After saving the new schema, drop the orphaned keys from every
+  // contact on the board. One UPDATE per dropped key keeps it simple and
+  // safe; the typical drop is one column at a time.
+  if (droppedCustomIds.length > 0) {
+    for (const cid of droppedCustomIds) {
+      await sql`
+        UPDATE crm_contacts
+           SET custom_fields = custom_fields - ${cid},
+               updated_at = NOW()
+         WHERE board_id = ${row.id}
+      `.execute(db);
+    }
+  }
+
   notifyBoard(req.params.id, body.stages !== undefined ? "stages" : "board");
   res.json({
     id: row.id, name: row.name, emoji: row.emoji,
     stages: row.stages ?? null,
+    columns: row.columns ?? null,
+    rowHeight: row.row_height ?? null,
     createdAt: row.created_at, updatedAt: row.updated_at,
   });
 });
@@ -573,6 +634,20 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
 
 router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
   const body = contactInput.partial().parse(req.body);
+
+  // Two-way collaboration: anyone with access to the contact's board (owner
+  // OR shared member) can edit it. Previously this was scoped to the row's
+  // user_id, which silently dropped writes from collaborators and made
+  // sharing feel one-way.
+  const existing = await db
+    .selectFrom("crm_contacts")
+    .select(["id", "board_id", "custom_fields"])
+    .where("id", "=", req.params.id)
+    .executeTakeFirst();
+  if (!existing) return res.status(404).json({ error: "not_found" });
+  const access = await ensureBoard(req.user!.id, existing.board_id);
+  if (!access) return res.status(404).json({ error: "not_found" });
+
   const update: Record<string, unknown> = { updated_at: new Date() };
   const map = {
     name: "name", title: "title", company: "company", email: "email",
@@ -589,13 +664,6 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
   if (body.customFields !== undefined) {
     // Merge with the existing bag so callers can patch a single key without
     // clobbering the rest. If a value is empty string, drop that key.
-    const existing = await db
-      .selectFrom("crm_contacts")
-      .select("custom_fields")
-      .where("id", "=", req.params.id)
-      .where("user_id", "=", req.user!.id)
-      .executeTakeFirst();
-    if (!existing) return res.status(404).json({ error: "not_found" });
     const current = (existing.custom_fields ?? {}) as Record<string, string>;
     const patch = body.customFields;
     const merged: Record<string, string> = { ...current };
@@ -612,7 +680,6 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
     .updateTable("crm_contacts")
     .set(update)
     .where("id", "=", req.params.id)
-    .where("user_id", "=", req.user!.id)
     .returningAll()
     .executeTakeFirst();
   if (!row) return res.status(404).json({ error: "not_found" });
@@ -811,14 +878,18 @@ router.post("/boards/:boardId/background", async (req: AuthedRequest, res) => {
 });
 
 router.delete("/contacts/:id", async (req: AuthedRequest, res) => {
-  const deleted = await db
-    .deleteFrom("crm_contacts")
+  // Two-way collab: any board member can delete, not just the row's creator.
+  const existing = await db
+    .selectFrom("crm_contacts")
+    .select(["id", "board_id"])
     .where("id", "=", req.params.id)
-    .where("user_id", "=", req.user!.id)
-    .returning("board_id")
     .executeTakeFirst();
-  if (!deleted) return res.status(404).json({ error: "not_found" });
-  notifyBoard(deleted.board_id, "contact");
+  if (!existing) return res.status(404).json({ error: "not_found" });
+  const access = await ensureBoard(req.user!.id, existing.board_id);
+  if (!access) return res.status(404).json({ error: "not_found" });
+
+  await db.deleteFrom("crm_contacts").where("id", "=", req.params.id).execute();
+  notifyBoard(existing.board_id, "contact");
   res.status(204).end();
 });
 

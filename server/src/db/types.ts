@@ -118,6 +118,11 @@ export interface CrmBoardsTable {
    *  defaults". Persisted here (not in localStorage) so collaborators see
    *  the same stages the owner set up. JSONB. */
   stages: unknown | null;
+  /** Shared table-column schema (order, widths, types, dropdown options,
+   *  visibility, labels). JSONB. */
+  columns: unknown | null;
+  /** Shared row-height for the table view ("short"|"medium"|"tall"). */
+  row_height: string | null;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 }

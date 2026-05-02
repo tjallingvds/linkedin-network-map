@@ -6,7 +6,10 @@
  * server-side; the React tree just reflects it.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CrmBoard, CrmContact, CrmImportRow, CrmStage, CrmTemp } from "@app/shared";
+import type {
+  CrmBoard, CrmContact, CrmImportRow, CrmStage, CrmTemp,
+  CrmColumnDef, CrmColumnType, CrmRowHeight, CrmDropdownOption,
+} from "@app/shared";
 import { api } from "../lib/api";
 import { useModal } from "./Modal";
 import { initials, avatarGrad } from "../design/mockProspects";
@@ -19,54 +22,89 @@ import { ExternalCleanupModal } from "./ExternalCleanupModal";
 // ========== Column configuration ==========
 
 /**
- * Every table column is described here — id, label, width (passed to the grid
- * template), render function, and alwaysVisible flag for columns the user
- * can't hide (the selection checkbox + the person column).
+ * The CRM table is driven by a single per-board column schema (`CrmColumnDef[]`)
+ * stored on the board itself, not in localStorage. That way collaborators see
+ * each other's columns, renames, and reorders in real time. Built-in columns
+ * (`builtin: true`) back real contact fields (name/title/email/...). User-
+ * added columns (`builtin: false`) store their values in `contact.customFields[id]`.
  *
- * Visibility + order per-board are persisted in localStorage under
- * "crm.cols.v1.<boardId>" as a string[] of column ids in the desired order.
+ * Built-in columns can be renamed and hidden but not deleted or retyped — the
+ * underlying DB column stays. Custom columns can be renamed, retyped, deleted,
+ * and re-ordered freely.
  */
-export interface TableColumnDef {
-  id: string;
-  label: string;
-  width: string;
-  alwaysVisible?: boolean;
-  numeric?: boolean;
+export type TableColumnDef = CrmColumnDef & { alwaysVisible?: boolean; numeric?: boolean };
+
+/** Columns the user can't hide or delete. The kanban relies on Stage, the
+ *  table layout relies on Person; everything else is fair game. */
+const REQUIRED_COLS: readonly string[] = ["_select", "person", "stage"];
+
+/** Minimal seed for a fresh board — just the row checkbox, the Person
+ *  column (name + avatar; can't be removed), and the Stage column (drives
+ *  the kanban). Every other column on the board is something the user
+ *  adds explicitly from the "+" menu. The underlying DB still has fields
+ *  for email/phone/linkedin/title/company/etc. — Apollo enrichment, CSV
+ *  import, and the contact drawer all still use them — but they don't
+ *  pollute the table by default. */
+function defaultColumns(): CrmColumnDef[] {
+  return [
+    { id: "_select", builtin: true, label: "",       width: "36px",   type: "select" },
+    { id: "person",  builtin: true, label: "Person", width: "1.8fr",  type: "person" },
+    { id: "stage",   builtin: true, label: "Stage",  width: "120px",  type: "stage" },
+  ];
 }
 
-const TABLE_COLUMNS: TableColumnDef[] = [
-  { id: "_select",  label: "",           width: "36px",   alwaysVisible: true },
-  { id: "person",   label: "Person",     width: "1.8fr",  alwaysVisible: true },
-  { id: "title",    label: "Title",      width: "1.1fr" },
-  { id: "company",  label: "Company",    width: "1.1fr" },
-  { id: "email",    label: "Email",      width: "1.2fr" },
-  { id: "phone",    label: "Phone",      width: "130px" },
-  { id: "linkedin", label: "LinkedIn",   width: "1.2fr" },
-  { id: "stage",    label: "Stage",      width: "120px" },
-  { id: "temp",     label: "Temp",       width: "90px"  },
-  { id: "sent",     label: "Sent",       width: "64px",  numeric: true },
-  { id: "opens",    label: "Opens",      width: "64px",  numeric: true },
-  { id: "replies",  label: "Replies",    width: "64px",  numeric: true },
-  { id: "nextStep", label: "Next step",  width: "1.3fr" },
-  { id: "source",   label: "Source",     width: "1fr"   },
-  { id: "messageNotes", label: "Personalize", width: "1.5fr" },
-  { id: "notes",    label: "Notes",      width: "1.5fr" },
-];
+/** Numeric columns get monospace + center-align by default. */
+const NUMERIC_TYPES: readonly CrmColumnType[] = ["number"];
 
-const BUILTIN_COL_IDS = TABLE_COLUMNS.map((c) => c.id);
-const REQUIRED_COLS = TABLE_COLUMNS.filter((c) => c.alwaysVisible).map((c) => c.id);
-
-/** User-defined column. Values live in contact.customFields[id]. */
+/** Backward-compat shape for components that still consume `CustomColumn[]`
+ *  (KanbanCard, KanbanFieldsMenu, CRMDrawer). Derived from the column schema. */
 export interface CustomColumn {
   id: string;
   label: string;
-  /** Width used in grid-template-columns. Defaults to "1fr" for text. */
   width?: string;
+  type?: CrmColumnType;
+  options?: CrmDropdownOption[];
 }
 
-function colsKey(boardId: string) { return `crm.cols.v1.${boardId}`; }
-function customColsKey(boardId: string) { return `crm.customcols.v1.${boardId}`; }
+function customColsFromSchema(cols: CrmColumnDef[]): CustomColumn[] {
+  return cols.filter((c) => !c.builtin).map((c) => ({
+    id: c.id, label: c.label, width: c.width, type: c.type, options: c.options,
+  }));
+}
+
+function visibleColIds(cols: CrmColumnDef[]): string[] {
+  return cols.filter((c) => !c.hidden).map((c) => c.id);
+}
+
+/** Reconcile a stored column schema against the seed defaults — guarantees
+ *  Person + Stage always exist even if a stored schema predates them. We
+ *  also drop any preloaded built-ins (title/company/email/...) from the
+ *  schema so older saves get cleaned up on next load. The user can still
+ *  add Email / Phone / Title / etc. as their own custom columns; the
+ *  underlying DB fields stay in place for Apollo / CSV import. */
+const LEGACY_BUILTIN_IDS = new Set([
+  "title", "company", "email", "phone", "linkedin", "temp",
+  "sent", "opens", "replies", "nextStep", "source", "messageNotes", "notes",
+]);
+
+function reconcileColumns(stored: CrmColumnDef[]): CrmColumnDef[] {
+  const trimmed = stored.filter((c) => !c.builtin || !LEGACY_BUILTIN_IDS.has(c.id));
+  const def = defaultColumns();
+  const known = new Set(trimmed.map((c) => c.id));
+  const merged: CrmColumnDef[] = trimmed.slice();
+  for (const d of def) {
+    if (!known.has(d.id)) merged.unshift(d); // prepend so Person/Stage stay near the front
+  }
+  return merged;
+}
+
 function kanbanFieldsKey(boardId: string) { return `crm.kanbanfields.v1.${boardId}`; }
+function rowHeightKey(boardId: string) { return `crm.rowheight.v1.${boardId}`; }
+
+// Legacy localStorage keys — read once on first load to migrate into the
+// server-backed schema, then never touched again.
+function legacyColsKey(boardId: string) { return `crm.cols.v1.${boardId}`; }
+function legacyCustomColsKey(boardId: string) { return `crm.customcols.v1.${boardId}`; }
 
 /** Fields the user can opt into showing on each kanban card. Order matters. */
 const KANBAN_FIELD_OPTIONS = [
@@ -99,49 +137,46 @@ function saveKanbanFields(boardId: string, ids: string[]) {
   try { localStorage.setItem(kanbanFieldsKey(boardId), JSON.stringify(ids)); } catch { /* noop */ }
 }
 
-function loadCustomCols(boardId: string): CustomColumn[] {
-  if (!boardId) return [];
+/** Read row height from localStorage as an instant first-paint cache. The
+ *  server is the source of truth; this just stops the table from blinking
+ *  back to "medium" on remount before the boards GET lands. */
+function loadRowHeightCached(boardId: string): CrmRowHeight {
+  if (!boardId) return "medium";
   try {
-    const raw = localStorage.getItem(customColsKey(boardId));
-    if (!raw) return [];
-    const arr = JSON.parse(raw) as unknown;
-    if (!Array.isArray(arr)) return [];
-    return (arr as CustomColumn[]).filter((c) => c && typeof c.id === "string" && typeof c.label === "string");
-  } catch { return []; }
+    const raw = localStorage.getItem(rowHeightKey(boardId));
+    if (raw === "short" || raw === "medium" || raw === "tall") return raw;
+  } catch { /* noop */ }
+  return "medium";
 }
-function saveCustomCols(boardId: string, cols: CustomColumn[]) {
+function cacheRowHeight(boardId: string, h: CrmRowHeight) {
   if (!boardId) return;
-  try { localStorage.setItem(customColsKey(boardId), JSON.stringify(cols)); } catch { /* noop */ }
+  try { localStorage.setItem(rowHeightKey(boardId), h); } catch { /* noop */ }
 }
 
-/** Columns added to the built-in set AFTER the first release of this
- *  feature. Existing users have a saved config that predates these, so
- *  we auto-add them on load. Once the user toggles a new column off, it
- *  gets written into the saved array and stays off from then on. */
-const AUTO_ADD_NEW_BUILTINS = ["linkedin"];
-
-function loadColsConfig(boardId: string, customIds: string[]): string[] {
-  const all = [...BUILTIN_COL_IDS, ...customIds];
-  if (!boardId) return all;
+/** Pull any user-defined columns out of the legacy localStorage config and
+ *  graft them onto the new minimal default schema. We deliberately ignore
+ *  the legacy "visible built-ins" list — the new model says preloaded
+ *  built-ins shouldn't exist in the schema at all. Returns null when the
+ *  user has nothing to migrate, so the caller falls through to defaults. */
+function migrateLegacyColumns(boardId: string): CrmColumnDef[] | null {
+  if (!boardId) return null;
+  let legacyCustom: { id: string; label: string; width?: string }[] = [];
   try {
-    const raw = localStorage.getItem(colsKey(boardId));
-    if (!raw) return all;
-    const arr = JSON.parse(raw) as unknown;
-    if (!Array.isArray(arr)) return all;
-    const valid = (arr as string[]).filter((id) => all.includes(id));
-    const required = REQUIRED_COLS.filter((id) => !valid.includes(id));
-    // Migrate: append any AUTO_ADD_NEW_BUILTINS the saved config doesn't
-    // know about. Prevents existing boards from hiding freshly-shipped
-    // columns just because their config was written before the column
-    // existed.
-    const migrated = AUTO_ADD_NEW_BUILTINS.filter((id) => !valid.includes(id));
-    return [...required, ...valid, ...migrated];
-  } catch { return all; }
-}
+    const raw = localStorage.getItem(legacyCustomColsKey(boardId));
+    if (raw) {
+      const arr = JSON.parse(raw) as unknown;
+      if (Array.isArray(arr)) {
+        legacyCustom = (arr as { id: string; label: string; width?: string }[])
+          .filter((c) => c && typeof c.id === "string" && typeof c.label === "string");
+      }
+    }
+  } catch { /* noop */ }
+  if (legacyCustom.length === 0) return null;
 
-function saveColsConfig(boardId: string, ids: string[]) {
-  if (!boardId) return;
-  try { localStorage.setItem(colsKey(boardId), JSON.stringify(ids)); } catch { /* noop */ }
+  const customs: CrmColumnDef[] = legacyCustom.map((c) => ({
+    id: c.id, builtin: false, label: c.label, width: c.width ?? "1fr", type: "text",
+  }));
+  return [...defaultColumns(), ...customs];
 }
 
 /** Turn a free-form label into a stable id: "Lead score" → "lead-score-<rnd>". */
@@ -466,8 +501,78 @@ function KanbanFieldsMenu({
   );
 }
 
+/** Kanban stage column header — inline editable. Double-click the title to
+ *  rename, click the swatch to cycle color, hover for an X to delete (with
+ *  reassignment of contacts in that stage to the next remaining one). */
+function KanbanColumnHeader({
+  stage, count, isFirst, isOnly, onRename, onCycleColor, onDelete,
+}: {
+  stage: StageDef;
+  count: number;
+  isFirst: boolean;
+  isOnly: boolean;
+  onRename: (label: string) => void;
+  onCycleColor: () => void;
+  onDelete: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(stage.label);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) ref.current?.select(); }, [editing]);
+  useEffect(() => { setDraft(stage.label); }, [stage.label]);
+
+  const commit = () => {
+    setEditing(false);
+    const next = draft.trim();
+    if (next && next !== stage.label) onRename(next);
+    else setDraft(stage.label);
+  };
+
+  return (
+    <div className="kanban-head">
+      <button
+        className="kanban-bar kanban-bar-btn"
+        title="Cycle color"
+        onClick={onCycleColor}
+      />
+      {editing ? (
+        <input
+          ref={ref}
+          className="kanban-title-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") { setDraft(stage.label); setEditing(false); }
+          }}
+        />
+      ) : (
+        <span
+          className="kanban-title"
+          onDoubleClick={() => setEditing(true)}
+          title="Double-click to rename"
+        >
+          {stage.label}
+        </span>
+      )}
+      <span className="kanban-count">{count}</span>
+      {!isOnly && (
+        <button
+          className="kanban-del"
+          title="Delete stage"
+          onClick={onDelete}
+        >
+          <IconClose size={11} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 function KanbanBoard({
   contacts, onOpen, onMoveStage, onDelete, fields, customCols, stages,
+  onStagesChange, onReassign,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
@@ -476,14 +581,56 @@ function KanbanBoard({
   fields: string[];
   customCols: CustomColumn[];
   stages: StageDef[];
+  onStagesChange: (next: StageDef[]) => void;
+  /** Called when a stage is deleted so contacts in it can be moved. */
+  onReassign: (fromId: string, toId: string) => void;
 }) {
+  const modal = useModal();
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [overStage, setOverStage] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const newRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (adding) setTimeout(() => newRef.current?.focus(), 0); }, [adding]);
+
   const list = stages.length > 0 ? stages : DEFAULT_STAGES;
-  // Collect contacts whose stage id isn't in the current stage config so we
-  // can still render them in an "Other" column rather than losing track.
   const validIds = new Set(list.map((s) => s.id));
   const orphan = contacts.filter((c) => !validIds.has(c.stage));
+
+  const renameStage = (id: string, label: string) => {
+    onStagesChange(list.map((s) => (s.id === id ? { ...s, label } : s)));
+  };
+  const cycleStageColor = (id: string) => {
+    onStagesChange(list.map((s) => {
+      if (s.id !== id) return s;
+      const idx = STAGE_PALETTE.findIndex((p) => p.color === s.color);
+      const next = STAGE_PALETTE[(idx + 1 + STAGE_PALETTE.length) % STAGE_PALETTE.length]!;
+      return { ...s, color: next.color, tint: next.tint };
+    }));
+  };
+  const deleteStage = async (id: string) => {
+    if (list.length <= 1) return;
+    const target = list.find((s) => s.id === id);
+    if (!target) return;
+    const fallback = list.find((s) => s.id !== id)!;
+    const ok = await modal.confirm({
+      title: `Delete "${target.label}"?`,
+      message: `Any contacts in this stage will move to "${fallback.label}".`,
+      confirmLabel: "Delete stage",
+      destructive: true,
+    });
+    if (!ok) return;
+    onStagesChange(list.filter((s) => s.id !== id));
+    onReassign(id, fallback.id);
+  };
+  const commitNewStage = () => {
+    const label = newName.trim();
+    if (!label) { setAdding(false); setNewName(""); return; }
+    const palette = STAGE_PALETTE[list.length % STAGE_PALETTE.length]!;
+    onStagesChange([...list, { id: makeStageId(label), label, ...palette }]);
+    setAdding(false);
+    setNewName("");
+  };
 
   return (
     <div className="kanban">
@@ -513,12 +660,15 @@ function KanbanBoard({
               }
             }}
           >
-            <div className="kanban-head">
-              <span className="kanban-bar" />
-              <span className="kanban-title">{stage.label}</span>
-              <span className="kanban-count">{items.length}</span>
-              <button className="kanban-add" title="Add"><IconNewChat size={12} /></button>
-            </div>
+            <KanbanColumnHeader
+              stage={stage}
+              count={items.length}
+              isFirst={list.indexOf(stage) === 0}
+              isOnly={list.length === 1}
+              onRename={(label) => renameStage(stage.id, label)}
+              onCycleColor={() => cycleStageColor(stage.id)}
+              onDelete={() => deleteStage(stage.id)}
+            />
             <div className="kanban-list">
               {items.map((p) => (
                 <KanbanCard
@@ -571,6 +721,29 @@ function KanbanBoard({
           </div>
         </div>
       )}
+      {/* Inline "+ Add stage" column at the end. */}
+      <div className="kanban-col kanban-col-add" onClick={(e) => e.stopPropagation()}>
+        {adding ? (
+          <div className="kanban-add-row">
+            <input
+              ref={newRef}
+              className="ed-input"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onBlur={commitNewStage}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitNewStage();
+                if (e.key === "Escape") { setAdding(false); setNewName(""); }
+              }}
+              placeholder="Stage name"
+            />
+          </div>
+        ) : (
+          <button className="kanban-add-stage" onClick={() => setAdding(true)} title="Add stage">
+            <span style={{ fontSize: 18, lineHeight: 1 }}>+</span> Add stage
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -731,44 +904,593 @@ function TempCell({ temp, onChange }: { temp: CrmTemp; onChange: (t: CrmTemp) =>
   );
 }
 
+// ---- Type-aware cell editors ----
+
+const TYPE_LABELS: Record<CrmColumnType, string> = {
+  text: "Text",
+  longtext: "Long text",
+  number: "Number",
+  dropdown: "Dropdown",
+  email: "Email",
+  phone: "Phone",
+  link: "Link",
+  date: "Date",
+  checkbox: "Checkbox",
+  stage: "Stage",
+  temp: "Temp",
+  person: "Person",
+  select: "Select",
+};
+
+/** Types the user can pick when adding a custom column or changing one's type.
+ *  Built-in types like "stage", "temp", "person", "select" are excluded — those
+ *  are reserved for built-in columns and have specialized rendering. */
+const USER_PICKABLE_TYPES: CrmColumnType[] = [
+  "text", "longtext", "number", "dropdown", "email", "phone", "link", "date", "checkbox",
+];
+
+const DROPDOWN_PALETTE = [
+  "oklch(0.72 0.04 280)",
+  "oklch(0.7 0.10 240)",
+  "oklch(0.7 0.14 65)",
+  "oklch(0.65 0.16 165)",
+  "oklch(0.6 0.14 155)",
+  "oklch(0.62 0.16 25)",
+  "oklch(0.62 0.14 300)",
+  "oklch(0.65 0.14 110)",
+];
+
+/** Saturate the option color into a tint background. */
+function tintFor(color: string): string {
+  return color.replace(/oklch\(([^)]+)\)/i, (_m, body) => {
+    const parts = (body as string).split(/\s+/);
+    if (parts.length < 3) return color;
+    parts[0] = "0.95";
+    return `oklch(${parts.join(" ")} / 0.7)`;
+  });
+}
+
+function NumberCellEditor({
+  value, onSave,
+}: { value: number | null | undefined; onSave: (n: number) => void }) {
+  return (
+    <EditableCell
+      value={value ?? ""}
+      align="center"
+      onSave={(v) => onSave(Number(v) || 0)}
+    />
+  );
+}
+
+function CheckboxCellEditor({
+  value, onSave,
+}: { value: string | null | undefined; onSave: (v: string) => void }) {
+  const on = value === "true" || value === "1" || value === "yes";
+  return (
+    <span
+      className="cb-cell"
+      onClick={(e) => { e.stopPropagation(); onSave(on ? "" : "true"); }}
+      title={on ? "Uncheck" : "Check"}
+    >
+      <span className={`cb-box${on ? " on" : ""}`}>
+        {on && <IconCheck size={10} />}
+      </span>
+    </span>
+  );
+}
+
+function DateCellEditor({
+  value, onSave,
+}: { value: string | null | undefined; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
+  const display = value ? formatDateDisplay(value) : "";
+  return editing ? (
+    <input
+      ref={ref}
+      type="date"
+      className="ed-input"
+      defaultValue={value ?? ""}
+      onBlur={(e) => { setEditing(false); if (e.target.value !== (value ?? "")) onSave(e.target.value); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        if (e.key === "Escape") setEditing(false);
+      }}
+      onClick={(e) => e.stopPropagation()}
+    />
+  ) : (
+    <span
+      className="ed-cell"
+      onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+      style={{ width: "100%" }}
+    >
+      {display || <em style={{ color: "var(--text-mute)" }}>—</em>}
+    </span>
+  );
+}
+
+function formatDateDisplay(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!m) return iso;
+  return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+function DropdownCellEditor({
+  value, options, onSave,
+}: {
+  value: string | null | undefined;
+  options: CrmDropdownOption[];
+  onSave: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const opt = options.find((o) => o.value === value);
+  const color = opt?.color ?? DROPDOWN_PALETTE[0]!;
+  return (
+    <div className="stage-cell" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}>
+      {value ? (
+        <span
+          className="tbl-stage"
+          style={{ "--stage-color": color, "--stage-tint": tintFor(color) } as React.CSSProperties}
+        >
+          {value}
+        </span>
+      ) : (
+        <span className="ed-cell" style={{ color: "var(--text-mute)" }}><em>—</em></span>
+      )}
+      {open && (
+        <div className="stage-menu" onMouseLeave={() => setOpen(false)}>
+          {options.length === 0 ? (
+            <div style={{ padding: 8, fontSize: 11, color: "var(--text-mute)" }}>
+              No options yet — edit them in the column header menu.
+            </div>
+          ) : options.map((o) => (
+            <button
+              key={o.value}
+              onClick={(e) => { e.stopPropagation(); onSave(o.value); setOpen(false); }}
+            >
+              <span className="stage-dot" style={{ background: o.color ?? DROPDOWN_PALETTE[0]! }} />
+              {o.value}
+            </button>
+          ))}
+          {value && (
+            <>
+              <div className="bm-sep" />
+              <button onClick={(e) => { e.stopPropagation(); onSave(""); setOpen(false); }}>
+                <span className="stage-dot" style={{ background: "var(--hairline)" }} />
+                Clear
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Generic link cell — same UX as LinkedInCell but doesn't normalize. */
+function LinkCellEditor({
+  value, onSave,
+}: { value: string | null | undefined; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [v, setV] = useState(value ?? "");
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
+  useEffect(() => { setV(value ?? ""); }, [value]);
+  const commit = () => { setEditing(false); if (v !== (value ?? "")) onSave(v); };
+  if (editing) {
+    return (
+      <input
+        ref={ref}
+        className="ed-input"
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") { setV(value ?? ""); setEditing(false); }
+        }}
+        onClick={(e) => e.stopPropagation()}
+        placeholder="https://..."
+      />
+    );
+  }
+  if (!value) {
+    return (
+      <span
+        className="ed-cell"
+        onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+        style={{ width: "100%", color: "var(--text-mute)" }}
+      >
+        <em>—</em>
+      </span>
+    );
+  }
+  const display = value.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
+  const href = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  return (
+    <span
+      className="ed-cell"
+      onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
+      onClick={(e) => e.stopPropagation()}
+      style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}
+      title="Double-click to edit"
+    >
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          color: "var(--accent)", textDecoration: "none",
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
+        }}
+      >
+        {display}
+      </a>
+    </span>
+  );
+}
+
+/** Email cell — chip with a mailto link when filled, EditableCell when not. */
+function EmailCellEditor({
+  value, onSave,
+}: { value: string | null | undefined; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [v, setV] = useState(value ?? "");
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editing) ref.current?.focus(); }, [editing]);
+  useEffect(() => { setV(value ?? ""); }, [value]);
+  const commit = () => { setEditing(false); if (v !== (value ?? "")) onSave(v); };
+  if (editing) {
+    return (
+      <input
+        ref={ref}
+        className="ed-input"
+        type="email"
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") { setV(value ?? ""); setEditing(false); }
+        }}
+        onClick={(e) => e.stopPropagation()}
+      />
+    );
+  }
+  return (
+    <span
+      className="ed-cell"
+      onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
+      onClick={(e) => { e.stopPropagation(); if (!value) setEditing(true); }}
+      style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}
+      title={value ? "Double-click to edit" : "Click to add"}
+    >
+      {value ? (
+        <a
+          href={`mailto:${value}`}
+          style={{ color: "var(--accent)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
+        >
+          {value}
+        </a>
+      ) : (
+        <em style={{ color: "var(--text-mute)" }}>—</em>
+      )}
+    </span>
+  );
+}
+
+/** Inline editable column header. Click the label to rename. The chevron
+ *  on hover opens a menu with type / dropdown options / hide / delete /
+ *  width controls. */
+function HeaderCell({
+  col, onChange, onDelete,
+}: {
+  col: CrmColumnDef;
+  onChange: (next: CrmColumnDef) => void;
+  onDelete: () => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState(col.label);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (renaming) ref.current?.select(); }, [renaming]);
+  useEffect(() => { setDraft(col.label); }, [col.label]);
+
+  const commitRename = () => {
+    setRenaming(false);
+    const next = draft.trim();
+    if (next && next !== col.label) onChange({ ...col, label: next });
+    else setDraft(col.label);
+  };
+
+  const isLocked = REQUIRED_COLS.includes(col.id);
+  const isBuiltinReserved =
+    col.builtin && (col.type === "stage" || col.type === "temp" || col.type === "person" || col.type === "select");
+
+  return (
+    <div className={`hdr-cell${isLocked ? " locked" : ""}`}>
+      {renaming ? (
+        <input
+          ref={ref}
+          className="hdr-rename"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitRename}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitRename();
+            if (e.key === "Escape") { setDraft(col.label); setRenaming(false); }
+          }}
+        />
+      ) : (
+        <span
+          className="hdr-label"
+          onDoubleClick={() => !isLocked && setRenaming(true)}
+          title={isLocked ? "" : "Double-click to rename"}
+        >
+          {col.label || <span style={{ color: "var(--text-mute)" }}>—</span>}
+        </span>
+      )}
+      {!isLocked && (
+        <button
+          className="hdr-chev"
+          onClick={(e) => { e.stopPropagation(); setMenuOpen((o) => !o); }}
+          title="Column options"
+        >
+          <IconChevD size={10} />
+        </button>
+      )}
+      {menuOpen && (
+        <>
+          <div className="board-menu-bg" onClick={() => setMenuOpen(false)} />
+          <div className="hdr-menu" onClick={(e) => e.stopPropagation()}>
+            <button className="bm-item" onClick={() => { setRenaming(true); setMenuOpen(false); }}>
+              <span style={{ width: 14, textAlign: "center" }}>Aa</span>
+              <span style={{ flex: 1 }}>Rename</span>
+            </button>
+            {!isBuiltinReserved && !col.builtin && (
+              <>
+                <div className="bm-sep" />
+                <div className="bm-label">Type</div>
+                <div className="hdr-type-grid">
+                  {USER_PICKABLE_TYPES.map((t) => (
+                    <button
+                      key={t}
+                      className={`type-chip${col.type === t ? " on" : ""}`}
+                      onClick={() => onChange({ ...col, type: t, options: t === "dropdown" ? (col.options ?? []) : undefined })}
+                    >
+                      {TYPE_LABELS[t]}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            {col.type === "dropdown" && (
+              <>
+                <div className="bm-sep" />
+                <DropdownOptionsEditor
+                  value={col.options ?? []}
+                  onChange={(opts) => onChange({ ...col, options: opts })}
+                />
+              </>
+            )}
+            <div className="bm-sep" />
+            <div className="bm-label">Width</div>
+            <div className="hdr-type-grid">
+              {([
+                { id: "narrow", label: "Narrow", w: "90px" },
+                { id: "normal", label: "Normal", w: "1fr" },
+                { id: "wide",   label: "Wide",   w: "2fr" },
+              ] as const).map((p) => (
+                <button
+                  key={p.id}
+                  className={`type-chip${col.width === p.w ? " on" : ""}`}
+                  onClick={() => onChange({ ...col, width: p.w })}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="bm-sep" />
+            <button className="bm-item" onClick={() => { onChange({ ...col, hidden: true }); setMenuOpen(false); }}>
+              <IconClose size={11} /><span>Hide column</span>
+            </button>
+            {!col.builtin && (
+              <button
+                className="bm-item"
+                style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
+                onClick={() => { onDelete(); setMenuOpen(false); }}
+              >
+                <IconClose size={11} /><span>Delete column</span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Inline editor for a dropdown column's option list. */
+function DropdownOptionsEditor({
+  value, onChange,
+}: { value: CrmDropdownOption[]; onChange: (next: CrmDropdownOption[]) => void }) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const v = draft.trim();
+    if (!v) return;
+    if (value.some((o) => o.value === v)) { setDraft(""); return; }
+    const color = DROPDOWN_PALETTE[value.length % DROPDOWN_PALETTE.length]!;
+    onChange([...value, { value: v, color }]);
+    setDraft("");
+  };
+  const remove = (val: string) => onChange(value.filter((o) => o.value !== val));
+  const recolor = (val: string) => onChange(value.map((o) => {
+    if (o.value !== val) return o;
+    const idx = DROPDOWN_PALETTE.indexOf(o.color ?? DROPDOWN_PALETTE[0]!);
+    const next = DROPDOWN_PALETTE[(idx + 1) % DROPDOWN_PALETTE.length]!;
+    return { ...o, color: next };
+  }));
+  return (
+    <div style={{ padding: "4px 8px 8px" }}>
+      <div className="bm-label" style={{ padding: "6px 0 6px" }}>Options</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {value.map((o) => (
+          <div key={o.value} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button
+              className="stage-dot-btn"
+              onClick={() => recolor(o.value)}
+              title="Cycle color"
+              style={{ background: o.color ?? DROPDOWN_PALETTE[0]! }}
+            />
+            <span style={{ flex: 1, fontSize: 12, color: "var(--text)" }}>{o.value}</span>
+            <button
+              className="hdr-x"
+              onClick={() => remove(o.value)}
+              title="Remove option"
+            >
+              <IconClose size={10} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+        <input
+          className="ed-input"
+          style={{ flex: 1, margin: 0 }}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+          placeholder="Add option…"
+        />
+        <button className="pill-btn" onClick={add}><IconCheck size={11} />Add</button>
+      </div>
+    </div>
+  );
+}
+
+/** "+" pill at the end of the header row. Click → choose type → name it. */
+function AddColumnButton({
+  onAdd,
+}: {
+  onAdd: (col: CrmColumnDef) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<"choose" | "name">("choose");
+  const [pickedType, setPickedType] = useState<CrmColumnType>("text");
+  const [name, setName] = useState("");
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (step === "name") setTimeout(() => ref.current?.focus(), 0); }, [step]);
+
+  const reset = () => { setOpen(false); setStep("choose"); setPickedType("text"); setName(""); };
+
+  const create = () => {
+    const label = name.trim();
+    if (!label) return;
+    const id = makeCustomColId(label);
+    const col: CrmColumnDef = {
+      id, builtin: false, label, type: pickedType,
+      width: pickedType === "checkbox" ? "80px" : pickedType === "number" ? "90px" : "1fr",
+      options: pickedType === "dropdown" ? [] : undefined,
+    };
+    onAdd(col);
+    reset();
+  };
+
+  return (
+    <div className="hdr-cell hdr-add">
+      <button className="hdr-add-btn" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }} title="Add column">
+        +
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={reset} />
+          <div className="hdr-menu" style={{ minWidth: 240 }} onClick={(e) => e.stopPropagation()}>
+            {step === "choose" ? (
+              <>
+                <div className="bm-label">Add a column</div>
+                <div className="hdr-type-grid">
+                  {USER_PICKABLE_TYPES.map((t) => (
+                    <button
+                      key={t}
+                      className="type-chip"
+                      onClick={() => { setPickedType(t); setStep("name"); }}
+                    >
+                      {TYPE_LABELS[t]}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bm-label">Name your {(TYPE_LABELS[pickedType] ?? "").toLowerCase()} column</div>
+                <div style={{ padding: "4px 8px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
+                  <input
+                    ref={ref}
+                    className="ed-input"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); create(); }
+                      if (e.key === "Escape") reset();
+                    }}
+                    placeholder="e.g. Lead score"
+                  />
+                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    <button className="pill-btn" onClick={() => setStep("choose")}>Back</button>
+                    <button className="pill-btn primary" onClick={create}>
+                      <IconCheck size={11} />Add
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TableView({
-  contacts, onOpen, onPatch, columns, customCols, stages,
+  contacts, onOpen, onPatch, columns, onColumnsChange, stages, rowHeight,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
-  /** Ordered list of visible column ids. */
-  columns: string[];
-  customCols: CustomColumn[];
+  columns: CrmColumnDef[];
+  onColumnsChange: (next: CrmColumnDef[]) => void;
   stages: StageDef[];
+  rowHeight: CrmRowHeight;
 }) {
-  // Build the full registry (builtins + custom) on the fly so custom columns
-  // get TableColumnDef shape without special-casing callsites.
-  const customDefs: TableColumnDef[] = customCols.map((c) => ({
-    id: c.id,
-    label: c.label,
-    width: c.width ?? "1fr",
-  }));
-  const registry = [...TABLE_COLUMNS, ...customDefs];
-  const colDefs = useMemo(
-    () => columns.map((id) => registry.find((c) => c.id === id)).filter((c): c is TableColumnDef => !!c),
-    [columns, customCols],
-  );
-  const gridTemplate = colDefs.map((c) => c.width).join(" ");
+  const visibleCols = useMemo(() => columns.filter((c) => !c.hidden), [columns]);
+  const gridTemplate = visibleCols.map((c) => c.width ?? "1fr").join(" ") + " 36px";
 
-  const isCustom = (id: string) => customCols.some((c) => c.id === id);
+  const updateCol = (id: string, patch: Partial<CrmColumnDef>) => {
+    onColumnsChange(columns.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  };
+  const replaceCol = (next: CrmColumnDef) => updateCol(next.id, next);
+  const deleteCol = (id: string) => onColumnsChange(columns.filter((c) => c.id !== id));
+  const addCol = (col: CrmColumnDef) => onColumnsChange([...columns, col]);
 
-  const renderCell = (col: TableColumnDef, p: CrmContact, i: number) => {
-    if (isCustom(col.id)) {
+  const isNumeric = (col: CrmColumnDef) => NUMERIC_TYPES.includes(col.type);
+
+  const renderCell = (col: CrmColumnDef, p: CrmContact, i: number) => {
+    if (!col.builtin) {
       const val = (p.customFields ?? {})[col.id] ?? "";
-      // Only send the diff — the server merges with the existing bag so
-      // unrelated keys stay intact.
-      return (
-        <EditableCell
-          value={val}
-          onSave={(v) => onPatch(p.id, { customFields: { [col.id]: v } })}
-        />
-      );
+      const setVal = (v: string) => onPatch(p.id, { customFields: { [col.id]: v } });
+      switch (col.type) {
+        case "number":   return <NumberCellEditor value={val ? Number(val) : null} onSave={(n) => setVal(String(n))} />;
+        case "dropdown": return <DropdownCellEditor value={val} options={col.options ?? []} onSave={setVal} />;
+        case "email":    return <EmailCellEditor value={val} onSave={setVal} />;
+        case "phone":    return <EditableCell value={val} onSave={setVal} />;
+        case "link":     return <LinkCellEditor value={val} onSave={setVal} />;
+        case "date":     return <DateCellEditor value={val} onSave={setVal} />;
+        case "checkbox": return <CheckboxCellEditor value={val} onSave={setVal} />;
+        case "longtext": return <EditableCell value={val} onSave={setVal} />;
+        case "text":
+        default:         return <EditableCell value={val} onSave={setVal} />;
+      }
     }
     switch (col.id) {
       case "_select":
@@ -786,8 +1508,8 @@ function TableView({
         );
       case "title":   return <EditableCell value={p.title}   onSave={(v) => onPatch(p.id, { title: v })} />;
       case "company": return <EditableCell value={p.company} onSave={(v) => onPatch(p.id, { company: v })} />;
-      case "email":   return <EditableCell value={p.email}   onSave={(v) => onPatch(p.id, { email: v })} />;
-      case "phone":   return <EditableCell value={p.phone}   onSave={(v) => onPatch(p.id, { phone: v })} />;
+      case "email":   return <EmailCellEditor value={p.email} onSave={(v) => onPatch(p.id, { email: v })} />;
+      case "phone":   return <EditableCell value={p.phone} onSave={(v) => onPatch(p.id, { phone: v })} />;
       case "linkedin": return (
         <LinkedInCell
           value={p.linkedin}
@@ -796,9 +1518,9 @@ function TableView({
       );
       case "stage":   return <StageCell stage={p.stage} stages={stages} onChange={(v) => onPatch(p.id, { stage: v })} />;
       case "temp":    return <TempCell  temp={p.temp}   onChange={(v) => onPatch(p.id, { temp: v })} />;
-      case "sent":    return <EditableCell value={p.sent}    align="center" onSave={(v) => onPatch(p.id, { sent: Number(v) || 0 })} />;
-      case "opens":   return <EditableCell value={p.opens}   align="center" onSave={(v) => onPatch(p.id, { opens: Number(v) || 0 })} />;
-      case "replies": return <EditableCell value={p.replies} align="center" onSave={(v) => onPatch(p.id, { replies: Number(v) || 0 })} />;
+      case "sent":    return <NumberCellEditor value={p.sent}    onSave={(n) => onPatch(p.id, { sent: n })} />;
+      case "opens":   return <NumberCellEditor value={p.opens}   onSave={(n) => onPatch(p.id, { opens: n })} />;
+      case "replies": return <NumberCellEditor value={p.replies} onSave={(n) => onPatch(p.id, { replies: n })} />;
       case "nextStep":return <EditableCell value={p.nextStep} onSave={(v) => onPatch(p.id, { nextStep: v })} />;
       case "source":  return <span className="src-chip">{p.source ?? ""}</span>;
       case "messageNotes": return <EditableCell value={p.messageNotes} onSave={(v) => onPatch(p.id, { messageNotes: v })} />;
@@ -808,12 +1530,23 @@ function TableView({
   };
 
   return (
-    <div className="tbl-wrap">
+    <div className={`tbl-wrap rh-${rowHeight}`}>
       <div className="tbl">
         <div className="tbl-row tbl-head" style={{ gridTemplateColumns: gridTemplate }}>
-          {colDefs.map((c) => (
-            <div key={c.id} className={`tbl-cell${c.numeric ? " c-num" : ""}`}>{c.label}</div>
+          {visibleCols.map((c) => (
+            <div key={c.id} className={`tbl-cell hdr${isNumeric(c) ? " c-num" : ""}`}>
+              {c.id === "_select" ? null : (
+                <HeaderCell
+                  col={c}
+                  onChange={replaceCol}
+                  onDelete={() => deleteCol(c.id)}
+                />
+              )}
+            </div>
           ))}
+          <div className="tbl-cell hdr">
+            <AddColumnButton onAdd={addCol} />
+          </div>
         </div>
         {contacts.map((p, i) => (
           <div
@@ -822,11 +1555,12 @@ function TableView({
             onClick={() => onOpen(p)}
             style={{ gridTemplateColumns: gridTemplate }}
           >
-            {colDefs.map((c) => (
-              <div key={c.id} className={`tbl-cell${c.numeric ? " c-num" : ""}${c.id === "person" ? " c-name" : ""}`}>
+            {visibleCols.map((c) => (
+              <div key={c.id} className={`tbl-cell${isNumeric(c) ? " c-num" : ""}${c.id === "person" ? " c-name" : ""}`}>
                 {renderCell(c, p, i)}
               </div>
             ))}
+            <div className="tbl-cell" />
           </div>
         ))}
         {contacts.length === 0 && (
@@ -839,145 +1573,31 @@ function TableView({
   );
 }
 
-/** Dropdown menu for toggling column visibility per board AND managing
- *  user-defined custom columns. Visibility state + custom defs both persist
- *  in localStorage, keyed by board id. */
-function ColumnsMenu({
-  boardId, value, onChange, customCols, onCustomColsChange,
-}: {
-  boardId: string;
-  value: string[];
-  onChange: (next: string[]) => void;
-  customCols: CustomColumn[];
-  onCustomColsChange: (next: CustomColumn[]) => void;
-}) {
-  const modal = useModal();
+/** Toolbar pill for switching row height between short / medium / tall. */
+function RowHeightMenu({
+  value, onChange,
+}: { value: CrmRowHeight; onChange: (next: CrmRowHeight) => void }) {
   const [open, setOpen] = useState(false);
-  const toggle = (id: string) => {
-    const isBuiltIn = TABLE_COLUMNS.find((c) => c.id === id);
-    if (isBuiltIn?.alwaysVisible) return;
-    const next = value.includes(id) ? value.filter((x) => x !== id) : [...value, id];
-    onChange(next);
-    saveColsConfig(boardId, next);
-  };
-  const reset = () => {
-    const all = [...BUILTIN_COL_IDS, ...customCols.map((c) => c.id)];
-    onChange(all);
-    saveColsConfig(boardId, all);
-  };
-  const addCustom = async () => {
-    const label = await modal.prompt({
-      title: "Add column",
-      label: "Column name",
-      placeholder: "e.g. Lead score",
-      confirmLabel: "Add column",
-    });
-    if (!label) return;
-    const id = makeCustomColId(label);
-    const nextCols = [...customCols, { id, label, width: "1fr", type: "text" as const }];
-    onCustomColsChange(nextCols);
-    saveCustomCols(boardId, nextCols);
-    const nextVisible = [...value, id];
-    onChange(nextVisible);
-    saveColsConfig(boardId, nextVisible);
-  };
-  const removeCustom = async (id: string) => {
-    const col = customCols.find((c) => c.id === id);
-    const ok = await modal.confirm({
-      title: `Remove "${col?.label ?? "column"}"?`,
-      message: "Data stored in this column is kept on each contact but hidden.",
-      confirmLabel: "Remove",
-      destructive: true,
-    });
-    if (!ok) return;
-    const nextCols = customCols.filter((c) => c.id !== id);
-    onCustomColsChange(nextCols);
-    saveCustomCols(boardId, nextCols);
-    const nextVisible = value.filter((v) => v !== id);
-    onChange(nextVisible);
-    saveColsConfig(boardId, nextVisible);
-  };
-  const renameCustom = async (id: string) => {
-    const existing = customCols.find((c) => c.id === id);
-    if (!existing) return;
-    const label = await modal.prompt({
-      title: "Rename column",
-      label: "New name",
-      defaultValue: existing.label,
-      confirmLabel: "Rename",
-    });
-    if (!label) return;
-    const nextCols = customCols.map((c) => (c.id === id ? { ...c, label } : c));
-    onCustomColsChange(nextCols);
-    saveCustomCols(boardId, nextCols);
-  };
-
+  const labels: Record<CrmRowHeight, string> = { short: "Short", medium: "Medium", tall: "Tall" };
   return (
     <div style={{ position: "relative" }}>
-      <button className="pill-btn" title="Show/hide + add columns" onClick={() => setOpen((o) => !o)}>
-        <IconSheet size={12} />Columns
+      <button className="pill-btn" onClick={() => setOpen((o) => !o)} title="Row height">
+        <IconList size={12} />{labels[value]}
       </button>
       {open && (
         <>
           <div className="board-menu-bg" onClick={() => setOpen(false)} />
-          <div className="board-menu" style={{ minWidth: 240, right: 0, left: "auto", maxHeight: "70vh", overflowY: "auto" }}>
-            <div className="bm-label">Built-in</div>
-            {TABLE_COLUMNS.filter((c) => c.id !== "_select").map((c) => {
-              const on = value.includes(c.id);
-              const locked = c.alwaysVisible;
-              return (
-                <button
-                  key={c.id}
-                  className="bm-item"
-                  onClick={() => toggle(c.id)}
-                  disabled={locked}
-                  style={locked ? { opacity: 0.5, cursor: "default" } : undefined}
-                >
-                  <ColCheckbox on={on} />
-                  <span style={{ flex: 1, textAlign: "left" }}>{c.label}</span>
-                  {locked && <span style={{ fontSize: 10, color: "var(--text-mute)" }}>locked</span>}
-                </button>
-              );
-            })}
-            {customCols.length > 0 && <>
-              <div className="bm-sep" />
-              <div className="bm-label">Your columns</div>
-              {customCols.map((c) => {
-                const on = value.includes(c.id);
-                return (
-                  <div key={c.id} className="bm-item" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <button
-                      style={{ display: "flex", gap: 8, flex: 1, alignItems: "center", textAlign: "left", padding: 0, background: "none", border: 0, cursor: "pointer", color: "inherit" }}
-                      onClick={() => toggle(c.id)}
-                    >
-                      <ColCheckbox on={on} />
-                      <span>{c.label}</span>
-                    </button>
-                    <button
-                      title="Rename"
-                      onClick={(e) => { e.stopPropagation(); renameCustom(c.id); }}
-                      style={{ fontSize: 10.5, color: "var(--text-mute)", padding: "2px 6px", borderRadius: 4 }}
-                    >
-                      rename
-                    </button>
-                    <button
-                      title="Remove"
-                      onClick={(e) => { e.stopPropagation(); removeCustom(c.id); }}
-                      style={{ fontSize: 10.5, color: "var(--danger, oklch(0.55 0.2 25))", padding: "2px 6px", borderRadius: 4 }}
-                    >
-                      remove
-                    </button>
-                  </div>
-                );
-              })}
-            </>}
-            <div className="bm-sep" />
-            <button className="bm-item" onClick={addCustom}>
-              <IconNewChat size={13} /><span>Add column…</span>
-            </button>
-            <button className="bm-item" onClick={reset}>
-              <IconArrowR size={13} /><span>Show all</span>
-            </button>
+          <div className="board-menu" style={{ minWidth: 160, right: 0, left: "auto" }}>
+            {(["short", "medium", "tall"] as const).map((h) => (
+              <button
+                key={h}
+                className={`bm-item${value === h ? " active" : ""}`}
+                onClick={() => { onChange(h); setOpen(false); }}
+              >
+                <span style={{ flex: 1 }}>{labels[h]}</span>
+                {value === h && <IconCheck size={11} />}
+              </button>
+            ))}
           </div>
         </>
       )}
@@ -1086,126 +1706,6 @@ function BoardShareMenu({
                 </button>
               </>
             )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** Per-board stage editor. Add, rename, recolor, reorder (delete moves the
- *  contacts on that stage to the next remaining stage). Persisted to
- *  localStorage. Server accepts any stage string. */
-function StagesMenu({
-  boardId, value, onChange, onReassign,
-}: {
-  boardId: string;
-  value: StageDef[];
-  onChange: (next: StageDef[]) => void;
-  /** Called when a stage is deleted so callers can move the contacts on it. */
-  onReassign: (fromId: string, toId: string) => void;
-}) {
-  const modal = useModal();
-  const [open, setOpen] = useState(false);
-  const persist = (next: StageDef[]) => { onChange(next); saveStages(boardId, next); };
-
-  const addStage = async () => {
-    const label = await modal.prompt({
-      title: "New stage", label: "Stage name",
-      placeholder: "e.g. Qualified", confirmLabel: "Add stage",
-    });
-    if (!label) return;
-    const palette = STAGE_PALETTE[value.length % STAGE_PALETTE.length]!;
-    persist([...value, { id: makeStageId(label), label, ...palette }]);
-  };
-  const renameStage = async (id: string) => {
-    const existing = value.find((s) => s.id === id);
-    if (!existing) return;
-    const label = await modal.prompt({
-      title: "Rename stage", label: "New name",
-      defaultValue: existing.label, confirmLabel: "Rename",
-    });
-    if (!label) return;
-    persist(value.map((s) => (s.id === id ? { ...s, label } : s)));
-  };
-  const recolorStage = (id: string, paletteIdx: number) => {
-    const c = STAGE_PALETTE[paletteIdx]!;
-    persist(value.map((s) => (s.id === id ? { ...s, color: c.color, tint: c.tint } : s)));
-  };
-  const removeStage = async (id: string) => {
-    if (value.length <= 1) return;
-    const target = value.find((s) => s.id === id);
-    if (!target) return;
-    const fallback = value.find((s) => s.id !== id)!;
-    const ok = await modal.confirm({
-      title: `Delete "${target.label}"?`,
-      message: `Any contacts in this stage will move to "${fallback.label}".`,
-      confirmLabel: "Delete stage",
-      destructive: true,
-    });
-    if (!ok) return;
-    persist(value.filter((s) => s.id !== id));
-    onReassign(id, fallback.id);
-  };
-  const move = (idx: number, dir: -1 | 1) => {
-    const j = idx + dir;
-    if (j < 0 || j >= value.length) return;
-    const next = value.slice();
-    [next[idx], next[j]] = [next[j]!, next[idx]!];
-    persist(next);
-  };
-
-  return (
-    <div style={{ position: "relative" }}>
-      <button className="pill-btn" title="Edit pipeline stages" onClick={() => setOpen((o) => !o)}>
-        <IconList size={12} />Stages
-      </button>
-      {open && (
-        <>
-          <div className="board-menu-bg" onClick={() => setOpen(false)} />
-          <div className="board-menu" style={{ minWidth: 300, right: 0, left: "auto", maxHeight: "70vh", overflowY: "auto" }}>
-            <div className="bm-label">Pipeline stages</div>
-            {value.map((s, i) => (
-              <div key={s.id} className="bm-item" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: s.color, flexShrink: 0 }} />
-                <span style={{ flex: 1, textAlign: "left", color: "var(--text)", fontWeight: 500 }}>{s.label}</span>
-                <button
-                  title="Move up"
-                  disabled={i === 0}
-                  onClick={(e) => { e.stopPropagation(); move(i, -1); }}
-                  style={{ fontSize: 10.5, color: i === 0 ? "var(--text-mute)" : "var(--text-dim)", padding: "2px 4px" }}
-                >↑</button>
-                <button
-                  title="Move down"
-                  disabled={i === value.length - 1}
-                  onClick={(e) => { e.stopPropagation(); move(i, +1); }}
-                  style={{ fontSize: 10.5, color: i === value.length - 1 ? "var(--text-mute)" : "var(--text-dim)", padding: "2px 4px" }}
-                >↓</button>
-                <button
-                  title="Rename"
-                  onClick={(e) => { e.stopPropagation(); renameStage(s.id); }}
-                  style={{ fontSize: 10.5, color: "var(--text-mute)", padding: "2px 6px" }}
-                >rename</button>
-                <button
-                  title="Cycle color"
-                  onClick={(e) => { e.stopPropagation(); recolorStage(s.id, (i + 1) % STAGE_PALETTE.length); }}
-                  style={{ fontSize: 10.5, color: "var(--text-mute)", padding: "2px 6px" }}
-                >color</button>
-                <button
-                  title={value.length <= 1 ? "Keep at least one stage" : "Delete"}
-                  disabled={value.length <= 1}
-                  onClick={(e) => { e.stopPropagation(); removeStage(s.id); }}
-                  style={{ fontSize: 10.5, color: value.length <= 1 ? "var(--text-mute)" : "var(--danger, oklch(0.55 0.2 25))", padding: "2px 6px" }}
-                >delete</button>
-              </div>
-            ))}
-            <div className="bm-sep" />
-            <button className="bm-item" onClick={addStage}>
-              <IconNewChat size={13} /><span>Add stage…</span>
-            </button>
-            <button className="bm-item" onClick={() => persist(DEFAULT_STAGES)}>
-              <IconArrowR size={13} /><span>Reset to defaults</span>
-            </button>
           </div>
         </>
       )}
@@ -1816,10 +2316,14 @@ export function CRMView({
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
   const [backgrounding, setBackgrounding] = useState(false);
-  const [visibleCols, setVisibleCols] = useState<string[]>(BUILTIN_COL_IDS);
-  const [customCols, setCustomCols] = useState<CustomColumn[]>([]);
+  const [columns, setColumns] = useState<CrmColumnDef[]>(defaultColumns);
+  const [rowHeight, setRowHeight] = useState<CrmRowHeight>("medium");
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
   const [stages, setStages] = useState<StageDef[]>(DEFAULT_STAGES);
+  // Derived backward-compat shapes for callsites that haven't been
+  // refactored to consume the full schema (KanbanCard, CRMDrawer, etc).
+  const customCols = useMemo(() => customColsFromSchema(columns), [columns]);
+  const visibleCols = useMemo(() => visibleColIds(columns), [columns]);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -1834,16 +2338,15 @@ export function CRMView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFlash]);
 
-  // Whenever the active board changes, pull its saved column + kanban
-  // config. Stages/custom-cols/visible-cols are loaded here for the initial
-  // render; stages then auto-sync from the boards list whenever it updates
-  // (see the effect below that follows active?.stages).
+  // Whenever the active board changes, prime kanban + stages from local
+  // caches as a first paint. Columns and row height come from the server
+  // (see the effect that follows `active?.columns` below); we only seed
+  // sensible defaults here so the table doesn't flash empty on board
+  // switch.
   useEffect(() => {
     if (!activeId) return;
-    const cc = loadCustomCols(activeId);
-    setCustomCols(cc);
-    setVisibleCols(loadColsConfig(activeId, cc.map((c) => c.id)));
-    setKanbanFields(loadKanbanFields(activeId, cc.map((c) => c.id)));
+    setRowHeight(loadRowHeightCached(activeId));
+    setKanbanFields(loadKanbanFields(activeId, []));
     setStages(loadStages(activeId));
   }, [activeId]);
 
@@ -1942,6 +2445,82 @@ export function CRMView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id, activeStagesKey]);
+
+  // Keep the column schema in sync with the server. When the active board
+  // first loads, if the server has no schema yet, migrate from localStorage
+  // (or fall back to defaults) and persist back so collaborators see the
+  // same columns. After that, every server push (SSE or 30s poll) replaces
+  // the local schema in the same way as stages.
+  const activeColumnsKey = active?.columns ? JSON.stringify(active.columns) : "null";
+  useEffect(() => {
+    if (!active) return;
+    const raw = active.columns;
+    if (Array.isArray(raw) && raw.length > 0) {
+      const reconciled = reconcileColumns(raw as CrmColumnDef[]);
+      setColumns(reconciled);
+      // If reconcile added previously-unknown built-ins, push the merged
+      // schema back so other collaborators get the same union.
+      if (reconciled.length !== raw.length) {
+        api.patch(`/api/crm/boards/${active.id}`, { columns: reconciled }).catch(() => { /* non-fatal */ });
+      }
+      return;
+    }
+    // No server-side schema yet — migrate from localStorage if present,
+    // otherwise seed with defaults. Persist either way so collaborators
+    // see the same starting view.
+    const seed = migrateLegacyColumns(active.id) ?? defaultColumns();
+    setColumns(seed);
+    api.patch(`/api/crm/boards/${active.id}`, { columns: seed }).catch(() => { /* non-fatal */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, activeColumnsKey]);
+
+  // Same idea for row height.
+  useEffect(() => {
+    if (!active) return;
+    const rh = active.rowHeight;
+    if (rh === "short" || rh === "medium" || rh === "tall") {
+      setRowHeight(rh);
+      cacheRowHeight(active.id, rh);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, active?.rowHeight]);
+
+  /** Persist the column schema to the server (and update local state
+   *  optimistically). Collaborators receive the change via SSE within ~1s. */
+  const saveColumns = async (next: CrmColumnDef[]) => {
+    setColumns(next);
+    try {
+      await api.patch(`/api/crm/boards/${activeId}`, { columns: next });
+    } catch (e) {
+      onFlash(`Save columns failed: ${(e as Error).message}`);
+    }
+  };
+
+  const saveRowHeight = async (next: CrmRowHeight) => {
+    setRowHeight(next);
+    if (activeId) cacheRowHeight(activeId, next);
+    try {
+      await api.patch(`/api/crm/boards/${activeId}`, { rowHeight: next });
+    } catch { /* non-fatal — local state stays */ }
+  };
+
+  /** Persist the kanban stage list (rename/recolor/delete/add). Mirrors
+   *  saveColumns — local cache + server PATCH so collaborators see it via
+   *  SSE within ~1s. */
+  const persistStages = (next: StageDef[]) => {
+    setStages(next);
+    if (activeId) saveStages(activeId, next);
+  };
+
+  /** Move every contact stuck in a deleted stage to a fallback stage,
+   *  optimistically + via PATCH. Used when the kanban deletes a stage. */
+  const reassignStage = async (fromId: string, toId: string) => {
+    const affected = contacts.filter((c) => c.stage === fromId);
+    setContacts((cs) => cs.map((c) => (c.stage === fromId ? { ...c, stage: toId as CrmStage } : c)));
+    await Promise.all(affected.map((c) =>
+      api.patch(`/api/crm/contacts/${c.id}`, { stage: toId }).catch(() => { /* non-fatal */ }),
+    ));
+  };
 
   const patchContact = async (id: string, patch: Partial<CrmContact>) => {
     // Optimistic update — merge customFields instead of replacing so patching
@@ -2183,13 +2762,7 @@ export function CRMView({
                   />
                 )}
                 {viewMode === "table" ? (
-                  <ColumnsMenu
-                    boardId={activeId}
-                    value={visibleCols}
-                    onChange={setVisibleCols}
-                    customCols={customCols}
-                    onCustomColsChange={setCustomCols}
-                  />
+                  <RowHeightMenu value={rowHeight} onChange={saveRowHeight} />
                 ) : (
                   <KanbanFieldsMenu
                     boardId={activeId}
@@ -2198,18 +2771,6 @@ export function CRMView({
                     customCols={customCols}
                   />
                 )}
-                <StagesMenu
-                  boardId={activeId}
-                  value={stages}
-                  onChange={setStages}
-                  onReassign={async (fromId, toId) => {
-                    const affected = contacts.filter((c) => c.stage === fromId);
-                    setContacts((cs) => cs.map((c) => c.stage === fromId ? { ...c, stage: toId as CrmStage } : c));
-                    await Promise.all(affected.map((c) =>
-                      api.patch(`/api/crm/contacts/${c.id}`, { stage: toId }).catch(() => { /* non-fatal */ }),
-                    ));
-                  }}
-                />
                 {/* Direct actions — close Actions before (or alongside) their
                     state change so there's no overlap with the modal's
                     entrance animation. */}
@@ -2257,15 +2818,18 @@ export function CRMView({
           fields={kanbanFields}
           customCols={customCols}
           stages={stages}
+          onStagesChange={persistStages}
+          onReassign={reassignStage}
         />
       ) : (
         <TableView
           contacts={contacts}
           onOpen={setOpenContact}
           onPatch={patchContact}
-          columns={visibleCols}
-          customCols={customCols}
+          columns={columns}
+          onColumnsChange={saveColumns}
           stages={stages}
+          rowHeight={rowHeight}
         />
       )}
 

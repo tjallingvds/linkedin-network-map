@@ -943,7 +943,64 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   border-bottom: 1px solid var(--hairline);
 }
 .kanban-bar { width: 6px; height: 6px; border-radius: 50%; background: var(--stage-color); }
-.kanban-title { font-size: 12px; font-weight: 600; color: var(--text); letter-spacing: -0.005em; }
+.kanban-bar-btn {
+  cursor: pointer;
+  width: 10px; height: 10px;
+  border: 1px solid rgba(255,255,255,0.4);
+  transition: transform 140ms;
+}
+.kanban-bar-btn:hover { transform: scale(1.25); }
+.kanban-title {
+  font-size: 12px; font-weight: 600; color: var(--text); letter-spacing: -0.005em;
+  flex: 1; min-width: 0;
+  padding: 2px 4px; margin: -2px -4px;
+  border-radius: 4px;
+  cursor: text;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background 100ms;
+}
+.kanban-title:hover { background: var(--hairline); }
+.kanban-title-input {
+  flex: 1; min-width: 0;
+  padding: 2px 4px; margin: -2px -4px;
+  border: 1px solid var(--accent); border-radius: 4px;
+  background: var(--shell); color: var(--text);
+  font: inherit; font-size: 12px; font-weight: 600;
+  box-shadow: 0 0 0 3px var(--accent-soft); outline: none;
+}
+.kanban-del {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  color: var(--text-mute);
+  opacity: 0; transition: opacity 120ms, background 120ms, color 120ms;
+}
+.kanban-col:hover .kanban-del { opacity: 1; }
+.kanban-del:hover { background: var(--hairline); color: var(--danger, oklch(0.55 0.2 25)); }
+
+/* Inline "+ Add stage" column at the end of the kanban. */
+.kanban-col-add {
+  flex: 0 0 200px;
+  background: transparent;
+  border: 1px dashed var(--hairline-strong);
+  display: flex; align-items: flex-start;
+  padding: 12px;
+}
+.kanban-col-add::before { display: none; }
+.kanban-add-stage {
+  display: inline-flex; align-items: center; gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: var(--text-mute);
+  font-size: 12px; font-weight: 500;
+  transition: background 120ms, color 120ms;
+  cursor: pointer;
+  background: transparent; border: 0;
+  text-align: left;
+}
+.kanban-add-stage:hover { background: var(--panel-2); color: var(--accent); }
+.kanban-add-row { width: 100%; }
 .kanban-count {
   font-family: 'Geist Mono', monospace; font-size: 10.5px;
   color: var(--text-mute); padding: 1px 6px;
@@ -1599,4 +1656,158 @@ button:focus-visible { outline-offset: 3px; }
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ============== Spreadsheet-style table polish ============== */
+
+/* Row-height switch — applied to .tbl-wrap so all rows under it adopt it. */
+.tbl-wrap.rh-short  .tbl-row:not(.tbl-head) { min-height: 32px; }
+.tbl-wrap.rh-medium .tbl-row:not(.tbl-head) { min-height: 44px; }
+.tbl-wrap.rh-tall   .tbl-row:not(.tbl-head) { min-height: 60px; }
+.tbl-wrap.rh-tall   .tbl-cell { padding-top: 10px; padding-bottom: 10px; }
+
+/* Header cell: hosts the editable label, the hover chevron, and a popover. */
+.tbl-cell.hdr {
+  position: relative;
+  overflow: visible; /* let popovers escape */
+  gap: 4px;
+}
+.hdr-cell {
+  display: flex; align-items: center; gap: 4px;
+  width: 100%; min-width: 0;
+  position: relative;
+}
+.hdr-cell.locked { color: var(--text-mute); }
+.hdr-label {
+  flex: 1; min-width: 0;
+  padding: 4px 6px; margin: -4px -6px;
+  border-radius: 5px;
+  cursor: text;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background 100ms;
+}
+.hdr-label:hover { background: var(--hairline); }
+.hdr-cell.locked .hdr-label:hover { background: transparent; cursor: default; }
+.hdr-rename {
+  flex: 1; min-width: 0;
+  padding: 4px 6px; margin: -4px -6px;
+  border: 1px solid var(--accent); border-radius: 5px;
+  background: var(--shell); color: var(--text);
+  font: inherit;
+  text-transform: none; letter-spacing: 0;
+  box-shadow: 0 0 0 3px var(--accent-soft); outline: none;
+}
+
+/* Chevron — fades in on header-cell hover so it doesn't crowd the label. */
+.hdr-chev {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  color: var(--text-mute);
+  opacity: 0; transition: opacity 120ms, background 120ms;
+  flex: 0 0 auto;
+}
+.tbl-cell.hdr:hover .hdr-chev { opacity: 1; }
+.hdr-chev:hover { background: var(--hairline); color: var(--text); }
+
+/* Header / add-column popover — same vibe as .board-menu but anchored to
+   the header cell rather than the toolbar pill. */
+.hdr-menu {
+  position: absolute; top: calc(100% + 6px); left: 0;
+  z-index: 60; min-width: 220px; max-width: 320px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--hairline-strong);
+  box-shadow: 0 18px 40px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.08);
+  text-transform: none; letter-spacing: 0;
+  font-size: 12.5px; color: var(--text);
+}
+.hdr-type-grid {
+  display: grid; grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px; padding: 4px 8px 8px;
+}
+.type-chip {
+  padding: 6px 8px; border-radius: 6px;
+  background: var(--panel-2); color: var(--text);
+  font-size: 11.5px; font-weight: 500;
+  border: 1px solid transparent;
+  transition: background 120ms, border-color 120ms;
+  text-align: center;
+  cursor: pointer;
+}
+.type-chip:hover { background: var(--hairline); }
+.type-chip.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.hdr-x {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  color: var(--text-mute);
+  transition: background 120ms, color 120ms;
+}
+.hdr-x:hover { background: var(--hairline); color: var(--danger, oklch(0.55 0.2 25)); }
+.stage-dot-btn {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.3);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+/* Add-column pill at the end of the header row. */
+.hdr-add {
+  justify-content: flex-start;
+}
+.hdr-add-btn {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  background: var(--panel-2); color: var(--text-mute);
+  font-size: 16px; font-weight: 400; line-height: 1;
+  border: 1px dashed var(--hairline-strong);
+  transition: background 120ms, color 120ms, border-color 120ms;
+  cursor: pointer;
+}
+.hdr-add-btn:hover {
+  background: var(--accent-soft); color: var(--accent);
+  border-style: solid; border-color: var(--accent);
+}
+
+/* Checkbox cell — square box that toggles on click. */
+.cb-cell {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 100%; height: 100%; cursor: pointer;
+  padding: 4px 0;
+}
+.cb-box {
+  width: 16px; height: 16px;
+  border-radius: 4px;
+  border: 1.5px solid var(--hairline-strong);
+  background: var(--shell);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: transparent;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.cb-cell:hover .cb-box { border-color: var(--accent); }
+.cb-box.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+/* Sticky first-column person — Excel-style frozen first data column for
+   wide tables. The select column at index 1 (36px) and the person column
+   at index 2 are pinned. */
+@media (min-width: 1100px) {
+  .tbl-row > .tbl-cell:nth-child(1),
+  .tbl-row > .tbl-cell:nth-child(2) {
+    position: sticky; z-index: 1;
+    background: inherit;
+  }
+  .tbl-row > .tbl-cell:nth-child(1) { left: 0; }
+  .tbl-row > .tbl-cell:nth-child(2) { left: 36px; }
+  .tbl-row.tbl-head > .tbl-cell:nth-child(1),
+  .tbl-row.tbl-head > .tbl-cell:nth-child(2) { background: var(--panel-2); z-index: 3; }
+  .tbl-row:not(.tbl-head) > .tbl-cell:nth-child(1),
+  .tbl-row:not(.tbl-head) > .tbl-cell:nth-child(2) { background: var(--shell); }
+  .tbl-row:not(.tbl-head):hover > .tbl-cell:nth-child(1),
+  .tbl-row:not(.tbl-head):hover > .tbl-cell:nth-child(2) { background: var(--panel-2); }
 }
