@@ -88,12 +88,37 @@ const LEGACY_BUILTIN_IDS = new Set([
 ]);
 
 function reconcileColumns(stored: CrmColumnDef[]): CrmColumnDef[] {
-  const trimmed = stored.filter((c) => !c.builtin || !LEGACY_BUILTIN_IDS.has(c.id));
   const def = defaultColumns();
+  const defById = new Map(def.map((d) => [d.id, d]));
+  // 1. Drop legacy preloaded built-ins (Email, Phone, Title, etc.).
+  // 2. For any column whose id matches a structural default (_select,
+  //    person, stage), force builtin: true and the canonical type back
+  //    on. This rescues schemas where an older save persisted Stage as
+  //    a custom column with no options — which then rendered as empty
+  //    dropdown cells instead of the kanban-driving stage chip.
+  const trimmed = stored
+    .filter((c) => !c.builtin || !LEGACY_BUILTIN_IDS.has(c.id))
+    .map((c) => {
+      const d = defById.get(c.id);
+      if (d) {
+        return {
+          ...d,
+          // Keep the user's label / width / hidden customisations, but
+          // reset structural fields (builtin, type) so the renderer
+          // dispatches to StageCell / Person / row-checkbox correctly.
+          label: c.label || d.label,
+          width: c.width ?? d.width,
+          hidden: c.hidden,
+        };
+      }
+      return c;
+    });
   const known = new Set(trimmed.map((c) => c.id));
   const merged: CrmColumnDef[] = trimmed.slice();
+  // Required defaults that aren't already in the schema get appended so we
+  // never accidentally reorder the user's chosen column order.
   for (const d of def) {
-    if (!known.has(d.id)) merged.unshift(d); // prepend so Person/Stage stay near the front
+    if (!known.has(d.id)) merged.push(d);
   }
   return merged;
 }
@@ -2699,9 +2724,12 @@ export function CRMView({
     if (Array.isArray(raw) && raw.length > 0) {
       const reconciled = reconcileColumns(raw as CrmColumnDef[]);
       setColumns(reconciled);
-      // If reconcile added previously-unknown built-ins, push the merged
-      // schema back so other collaborators get the same union.
-      if (reconciled.length !== raw.length) {
+      // Push the reconciled schema back if we changed anything — added
+      // missing defaults, dropped legacy built-ins, OR normalised a
+      // structural column whose builtin/type got corrupted by an older
+      // save. Length-only check missed the last case, which is what was
+      // leaving Stage rendering as an empty dropdown.
+      if (JSON.stringify(reconciled) !== JSON.stringify(raw)) {
         api.patch(`/api/crm/boards/${active.id}`, { columns: reconciled }).catch(() => { /* non-fatal */ });
       }
       return;
