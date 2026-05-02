@@ -1209,6 +1209,26 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   box-shadow: 0 0 0 3px var(--accent-soft); outline: none;
 }
 .stage-cell { position: relative; cursor: pointer; }
+
+/* Inside a table cell, the editor fills the entire grid slot so a click
+   anywhere in the row's slot lands on the editor, not on the row's own
+   click handler. The negative margin pulls each editor out into the
+   parent's 6px/10px padding zone. */
+.tbl-row .tbl-cell .ed-cell,
+.tbl-row .tbl-cell .stage-cell {
+  display: flex; align-items: center;
+  padding: 6px 10px; margin: -6px -10px;
+  width: calc(100% + 20px);
+  min-height: calc(100% + 12px);
+  box-sizing: border-box;
+  border-radius: 0;
+}
+.tbl-row .tbl-cell .ed-input {
+  width: calc(100% + 20px); padding: 6px 10px; margin: -6px -10px;
+  border: 1px solid var(--accent); border-radius: 0;
+  box-shadow: inset 0 0 0 2px var(--accent-soft);
+}
+.tbl-row .tbl-cell .stage-cell:hover { background: var(--hairline); }
 .stage-menu {
   position: absolute; top: calc(100% + 4px); left: 0;
   background: var(--shell); border: 1px solid var(--hairline-strong);
@@ -1647,17 +1667,11 @@ button:focus-visible { outline-offset: 3px; }
 }
 .tbl-row:not(.tbl-head):hover::before { transform: scaleX(1); }
 
-/* ---- Editable cells — clearer "you can edit me" affordance. ---- */
-.ed-cell {
-  display: inline-block; min-height: 20px;
-  padding: 2px 6px; border-radius: 5px; margin: -2px -6px;
-  cursor: text;
-  transition: background 140ms ease, box-shadow 140ms ease;
-}
+/* Editable cells — full-cell click target. The earlier .ed-cell block
+   already sets up the fill geometry; here we just refine the hover
+   affordance so the whole cell lights up, not just a small pill. */
 .ed-cell:hover { background: var(--accent-soft); box-shadow: inset 0 0 0 1px oklch(0.72 0.14 155 / 0.3); }
 .ed-input {
-  padding: 2px 6px; border-radius: 5px; margin: -2px -6px;
-  background: var(--shell); color: var(--text);
   box-shadow: inset 0 0 0 1.5px var(--accent);
   animation: ed-focus 160ms ease;
 }
