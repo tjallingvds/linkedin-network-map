@@ -104,8 +104,15 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   background: var(--shell); border: 1px solid var(--hairline-strong);
   border-radius: 16px; z-index: 200;
   box-shadow: 0 24px 60px rgba(20,14,40,0.24), 0 2px 8px rgba(20,14,40,0.08);
-  animation: kmc-rise 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Animate opacity only — using kmc-rise here would overwrite the
+     translate(-50%, -50%) centering and cause the dialog to fly in from
+     the top-left before snapping into place. */
+  animation: app-modal-fade 160ms ease-out;
   overflow: hidden;
+}
+@keyframes app-modal-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .app-modal-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -1118,10 +1125,17 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .tbl-cell {
   font-size: 12.5px; color: var(--text-dim);
-  padding: 6px 6px;
+  padding: 6px 10px;
   display: flex; align-items: center; gap: 8px;
   min-width: 0;
+  /* Crisp vertical column dividers — every cell except the last one in a
+     row carries a right border, so the grid feels like a real spreadsheet
+     instead of a list. */
+  border-right: 1px solid var(--hairline);
 }
+.tbl-row > .tbl-cell:last-child { border-right: 0; }
+.tbl-row.tbl-head > .tbl-cell { border-right: 1px solid var(--hairline-strong); }
+.tbl-row.tbl-head > .tbl-cell:last-child { border-right: 0; }
 .tbl-cell.c-name { color: var(--text); }
 .tbl-cell.c-num { font-family: 'Geist Mono', monospace; justify-content: center; }
 .tbl-stage {
@@ -1698,18 +1712,20 @@ button:focus-visible { outline-offset: 3px; }
 .hdr-cell.drop-left::before  { left: -2px; }
 .hdr-cell.drop-right::after  { right: -2px; }
 
-/* Drag-to-resize grip on the right edge of every header cell. */
+/* Drag-to-resize grip on the right edge of every header cell. Sits on top
+   of the column divider so the divider line itself is what the user grabs. */
 .hdr-resize {
   position: absolute;
-  top: -8px; bottom: -8px; right: -6px;
-  width: 8px;
+  top: 0; bottom: 0; right: -3px;
+  width: 6px;
   cursor: col-resize;
-  z-index: 4;
+  z-index: 5;
   background: transparent;
   transition: background 120ms;
 }
+.tbl-cell.hdr:hover .hdr-resize { background: var(--hairline); }
 .hdr-resize:hover,
-.hdr-resize:active { background: var(--accent); }
+.hdr-resize:active { background: var(--accent) !important; }
 .hdr-cell.locked { color: var(--text-mute); }
 .hdr-label {
   flex: 1; min-width: 0;
@@ -1786,9 +1802,11 @@ button:focus-visible { outline-offset: 3px; }
 }
 
 /* Add-column pill at the end of the header row. */
-.hdr-add {
-  justify-content: flex-start;
-}
+/* The "+" pill always sits at the rightmost edge of a wide table, so its
+   popover must grow leftward — anchoring left:0 forced horizontal scroll
+   on any board wider than the viewport. */
+.hdr-add { justify-content: flex-start; }
+.hdr-add .hdr-menu { left: auto; right: 0; }
 .hdr-add-btn {
   width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;

@@ -1221,23 +1221,30 @@ function HeaderCell({
 
   if (isLabelLocked) return <div className="hdr-cell locked" />;
 
-  const onResizePointerDown = (e: React.PointerEvent) => {
+  // While the user is dragging the resize handle, the parent's `draggable`
+  // attribute is set to false so the browser doesn't initiate an HTML5
+  // drag-reorder on the column instead of resizing it.
+  const [resizing, setResizing] = useState(false);
+
+  const onResizePointerDown = (e: React.PointerEvent<HTMLSpanElement>) => {
     e.preventDefault();
     e.stopPropagation();
-    const cell = (e.currentTarget as HTMLElement).parentElement?.parentElement;
-    if (!cell) return;
+    setResizing(true);
+    const cell = (e.currentTarget as HTMLElement).closest(".tbl-cell") as HTMLElement | null;
+    if (!cell) { setResizing(false); return; }
     const startW = cell.getBoundingClientRect().width;
     const startX = e.clientX;
     const onMove = (ev: PointerEvent) => {
       const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
-      cell.style.width = `${next}px`; // visual-only feedback during drag
+      cell.style.width = `${next}px`;
     };
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
-      cell.style.width = ""; // clear inline override; the schema width will take effect
+      cell.style.width = ""; // clear inline override; the schema width takes effect
       onChange({ ...col, width: `${next}px` });
+      setResizing(false);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -1246,9 +1253,9 @@ function HeaderCell({
   return (
     <div
       className={`hdr-cell${dropEdge ? ` drop-${dropEdge}` : ""}`}
-      draggable={!isLabelLocked}
+      draggable={!isLabelLocked && !resizing}
       onDragStart={(e) => {
-        if (isLabelLocked) return;
+        if (isLabelLocked || resizing) { e.preventDefault(); return; }
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/x-col-id", col.id);
         onDragStart(col.id);
@@ -1361,7 +1368,14 @@ function HeaderCell({
           </div>
         </>
       )}
-      <span className="hdr-resize" onPointerDown={onResizePointerDown} title="Drag to resize" />
+      <span
+        className="hdr-resize"
+        onPointerDown={onResizePointerDown}
+        onMouseDown={(e) => e.stopPropagation()}
+        onDragStart={(e) => e.preventDefault()}
+        draggable={false}
+        title="Drag to resize"
+      />
     </div>
   );
 }
@@ -2851,6 +2865,9 @@ export function CRMView({
               <IconSheet size={12} />Table
             </button>
           </div>
+          {viewMode === "table" && (
+            <RowHeightMenu value={rowHeight} onChange={saveRowHeight} />
+          )}
         </div>
         <div className="crm-tools">
           <ActionsMenu>
@@ -2866,9 +2883,7 @@ export function CRMView({
                     onFlash={onFlash}
                   />
                 )}
-                {viewMode === "table" ? (
-                  <RowHeightMenu value={rowHeight} onChange={saveRowHeight} />
-                ) : (
+                {viewMode === "kanban" && (
                   <KanbanFieldsMenu
                     boardId={activeId}
                     value={kanbanFields}
