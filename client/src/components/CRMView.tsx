@@ -1017,15 +1017,35 @@ function formatDateDisplay(iso: string): string {
 }
 
 function DropdownCellEditor({
-  value, options, onSave,
+  value, options, onSave, onOptionsChange,
 }: {
   value: string | null | undefined;
   options: CrmDropdownOption[];
   onSave: (v: string) => void;
+  /** When provided, the cell exposes an inline "+ add option" input so the
+   *  user can grow the option set without going to the column header menu. */
+  onOptionsChange?: (next: CrmDropdownOption[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
   const opt = options.find((o) => o.value === value);
   const color = opt?.color ?? DROPDOWN_PALETTE[0]!;
+
+  const addOption = () => {
+    const v = draft.trim();
+    if (!v || !onOptionsChange) return;
+    if (options.some((o) => o.value === v)) {
+      // Already exists — just select it.
+      onSave(v); setDraft(""); setOpen(false); return;
+    }
+    const nextColor = DROPDOWN_PALETTE[options.length % DROPDOWN_PALETTE.length]!;
+    onOptionsChange([...options, { value: v, color: nextColor }]);
+    onSave(v);
+    setDraft("");
+    setOpen(false);
+  };
+
   return (
     <div className="stage-cell" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}>
       {value ? (
@@ -1039,12 +1059,8 @@ function DropdownCellEditor({
         <span className="ed-cell" style={{ color: "var(--text-mute)" }}><em>—</em></span>
       )}
       {open && (
-        <div className="stage-menu" onMouseLeave={() => setOpen(false)}>
-          {options.length === 0 ? (
-            <div style={{ padding: 8, fontSize: 11, color: "var(--text-mute)" }}>
-              No options yet — edit them in the column header menu.
-            </div>
-          ) : options.map((o) => (
+        <div className="stage-menu" onClick={(e) => e.stopPropagation()}>
+          {options.map((o) => (
             <button
               key={o.value}
               onClick={(e) => { e.stopPropagation(); onSave(o.value); setOpen(false); }}
@@ -1053,6 +1069,28 @@ function DropdownCellEditor({
               {o.value}
             </button>
           ))}
+          {onOptionsChange && (
+            <div className="dd-add">
+              <input
+                ref={inputRef}
+                className="ed-input"
+                style={{ margin: 0, fontSize: 12 }}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); addOption(); }
+                  if (e.key === "Escape") { setDraft(""); setOpen(false); }
+                }}
+                placeholder={options.length === 0 ? "Type a value, press Enter…" : "+ Add option"}
+                autoFocus={options.length === 0}
+              />
+            </div>
+          )}
+          {!onOptionsChange && options.length === 0 && (
+            <div style={{ padding: 8, fontSize: 11, color: "var(--text-mute)" }}>
+              No options yet.
+            </div>
+          )}
           {value && (
             <>
               <div className="bm-sep" />
@@ -1589,9 +1627,10 @@ function TableView({
     if (!col.builtin) {
       const val = (p.customFields ?? {})[col.id] ?? "";
       const setVal = (v: string) => onPatch(p.id, { customFields: { [col.id]: v } });
+      const setOptions = (next: CrmDropdownOption[]) => replaceCol({ ...col, options: next });
       switch (col.type) {
         case "number":   return <NumberCellEditor value={val ? Number(val) : null} onSave={(n) => setVal(String(n))} />;
-        case "dropdown": return <DropdownCellEditor value={val} options={col.options ?? []} onSave={setVal} />;
+        case "dropdown": return <DropdownCellEditor value={val} options={col.options ?? []} onSave={setVal} onOptionsChange={setOptions} />;
         case "email":    return <EmailCellEditor value={val} onSave={setVal} />;
         case "phone":    return <EditableCell value={val} onSave={setVal} />;
         case "link":     return <LinkCellEditor value={val} onSave={setVal} />;
@@ -2327,9 +2366,12 @@ export function CRMDrawer({
     if (!col.builtin) {
       const val = (contact.customFields ?? {})[col.id] ?? "";
       const setVal = (v: string) => onPatch(contact.id, { customFields: { [col.id]: v } });
+      const setOptions = onColumnsChange
+        ? (next: CrmDropdownOption[]) => onColumnsChange(columns.map((x) => (x.id === col.id ? { ...x, options: next } : x)))
+        : undefined;
       switch (col.type) {
         case "number":   return <NumberCellEditor value={val ? Number(val) : null} onSave={(n) => setVal(String(n))} />;
-        case "dropdown": return <DropdownCellEditor value={val} options={col.options ?? []} onSave={setVal} />;
+        case "dropdown": return <DropdownCellEditor value={val} options={col.options ?? []} onSave={setVal} onOptionsChange={setOptions} />;
         case "email":    return <EmailCellEditor value={val} onSave={setVal} />;
         case "link":     return <LinkCellEditor value={val} onSave={setVal} />;
         case "date":     return <DateCellEditor value={val} onSave={setVal} />;
@@ -2399,7 +2441,6 @@ export function CRMDrawer({
               </div>
               <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
                 <StageCell stage={contact.stage} stages={stageList} onChange={(v) => onPatch(contact.id, { stage: v })} />
-                <TempCell temp={contact.temp} onChange={(v) => onPatch(contact.id, { temp: v })} />
               </div>
             </div>
           </div>
@@ -2412,6 +2453,15 @@ export function CRMDrawer({
               <div key={c.id} className="dp-row">
                 <span className="dp-label">{c.label}</span>
                 <div className="dp-value">{renderProp(c)}</div>
+                {onColumnsChange && (
+                  <button
+                    className="dp-del"
+                    title={`Delete "${c.label}" field`}
+                    onClick={() => onColumnsChange(columns.filter((x) => x.id !== c.id))}
+                  >
+                    <IconClose size={11} />
+                  </button>
+                )}
               </div>
             ))}
             {onColumnsChange && (
