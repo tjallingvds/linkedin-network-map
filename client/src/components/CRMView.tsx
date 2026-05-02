@@ -34,9 +34,12 @@ import { ExternalCleanupModal } from "./ExternalCleanupModal";
  */
 export type TableColumnDef = CrmColumnDef & { alwaysVisible?: boolean; numeric?: boolean };
 
-/** Columns the user can't hide or delete. The kanban relies on Stage, the
- *  table layout relies on Person; everything else is fair game. */
-const REQUIRED_COLS: readonly string[] = ["_select", "person", "stage"];
+/** Columns the user can't delete from the table — only the row-checkbox
+ *  and Person (the avatar+name anchor). The kanban gets its stage list
+ *  from the board's `stages` JSONB, not from the table column schema, so
+ *  removing the Stage column from the table is purely a view choice and
+ *  doesn't break the kanban. */
+const REQUIRED_COLS: readonly string[] = ["_select", "person"];
 
 /** Minimal seed for a fresh board — just the row checkbox, the Person
  *  column (name + avatar; can't be removed), and the Stage column (drives
@@ -124,9 +127,12 @@ function reconcileColumns(stored: CrmColumnDef[]): CrmColumnDef[] {
     });
   const known = new Set(trimmed.map((c) => c.id));
   const merged: CrmColumnDef[] = trimmed.slice();
-  // Required defaults that aren't already in the schema get appended so we
-  // never accidentally reorder the user's chosen column order.
+  // Only re-add the truly required structural columns (_select + Person).
+  // Stage is in defaultColumns() to seed new boards, but if the user has
+  // explicitly removed it from the table we respect that — the kanban view
+  // gets its stage list from the board's `stages` JSONB independently.
   for (const d of def) {
+    if (!REQUIRED_COLS.includes(d.id)) continue;
     if (!known.has(d.id)) merged.push(d);
   }
   return merged;
@@ -220,10 +226,10 @@ function makeCustomColId(label: string): string {
 }
 
 // --- Stage definitions ---
-// Stages are now user-editable per board — the defaults below seed new
-// boards, but the ColumnsMenu ▸ Stages editor lets users add, rename,
-// recolor, and remove them. The config lives in localStorage keyed by
-// board id; the server accepts any stage string.
+// Stages are user-editable per board — DEFAULT_STAGES seeds new boards,
+// after that the inline kanban headers (rename / recolor / delete / +) own
+// the lifecycle. Persisted to the board's `stages` JSONB so collaborators
+// see the same kanban; localStorage holds a first-paint cache.
 export interface StageDef { id: string; label: string; color: string; tint: string; }
 const STAGE_PALETTE: { color: string; tint: string }[] = [
   { color: "oklch(0.72 0.04 280)", tint: "oklch(0.95 0.02 280 / 0.7)" },
@@ -429,14 +435,8 @@ function KanbanCard({
  *  into one popover. Render-prop API — children receives a `close`
  *  callback. Direct-action buttons (Import CSV, Add contact, Get email)
  *  should call `close()` alongside their own onClick so the popover
- *  dismisses cleanly. Submenu components (BoardShareMenu, ColumnsMenu,
- *  StagesMenu, KanbanFieldsMenu) MUST NOT call close so their nested
- *  popovers can stay open on top of Actions.
- *
- *  Previous implementation used event delegation to close on any pill-btn
- *  click — but that unmounted submenu children (destroying their just-
- *  opened state), and for direct actions the Actions unmount + modal mount
- *  in the same frame caused click-through onto the modal backdrop. */
+ *  dismisses cleanly. Submenu components (BoardShareMenu, KanbanFieldsMenu)
+ *  must NOT call close so their nested popovers stay on top of Actions. */
 function ActionsMenu({
   children,
 }: {
@@ -472,8 +472,8 @@ function ActionsMenu({
   );
 }
 
-/** Dropdown menu that toggles which fields show on kanban cards (per board,
- *  persisted to localStorage, same pattern as ColumnsMenu). */
+/** Dropdown menu that toggles which fields show on kanban cards (per
+ *  board, persisted to localStorage). */
 function KanbanFieldsMenu({
   boardId, value, onChange, customCols,
 }: {
@@ -1006,26 +1006,41 @@ function LongTextCellEditor({
   const [v, setV] = useState(value ?? "");
   const [editing, setEditing] = useState(false);
   const ref = useRef<HTMLTextAreaElement | null>(null);
-  useEffect(() => { if (editing) { ref.current?.focus(); ref.current?.setSelectionRange(v.length, v.length); } }, [editing]);
   useEffect(() => { setV(value ?? ""); }, [value]);
+
+  // Compute the initial textarea size from the current value so the very
+  // first frame already shows the right height — running autoGrow inside
+  // the ref callback caused a 1-frame jitter as the height jumped from
+  // the rows= default to scrollHeight.
+  const initialRows = Math.max(2, Math.min(10, (value ?? "").split("\n").length));
 
   const commit = () => {
     setEditing(false);
     if (v !== (value ?? "")) onSave(v);
   };
 
-  // Auto-grow the textarea while typing — bounded by a reasonable max so a
-  // single huge note doesn't push the rest of the row off-screen.
   const autoGrow = (el: HTMLTextAreaElement | null) => {
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
   };
 
+  // Focus + place caret at end + size to content, all in one paint frame
+  // after mount so the cursor doesn't visibly snap into place.
+  useEffect(() => {
+    if (!editing) return;
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(v.length, v.length);
+    autoGrow(el);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing]);
+
   if (editing) {
     return (
       <textarea
-        ref={(el) => { ref.current = el; autoGrow(el); }}
+        ref={ref}
         className="ed-input ed-textarea"
         value={v}
         onChange={(e) => { setV(e.target.value); autoGrow(e.currentTarget); }}
@@ -1036,7 +1051,7 @@ function LongTextCellEditor({
           if (e.key === "Escape") { e.preventDefault(); setV(value ?? ""); setEditing(false); }
         }}
         onClick={(e) => e.stopPropagation()}
-        rows={Math.max(2, Math.min(10, v.split("\n").length))}
+        rows={initialRows}
       />
     );
   }
@@ -1127,7 +1142,12 @@ function DropdownCellEditor({
       // Already exists — just select it.
       onSave(v); setDraft(""); setOpen(false); return;
     }
-    const nextColor = DROPDOWN_PALETTE[options.length % DROPDOWN_PALETTE.length]!;
+    // Pick the first palette colour not already in use so newly-added
+    // options don't collide with existing ones until the palette is full,
+    // then fall back to round-robin so we never run out.
+    const used = new Set(options.map((o) => o.color).filter(Boolean));
+    const nextColor = DROPDOWN_PALETTE.find((c) => !used.has(c))
+      ?? DROPDOWN_PALETTE[options.length % DROPDOWN_PALETTE.length]!;
     onOptionsChange([...options, { value: v, color: nextColor }]);
     onSave(v);
     setDraft("");
@@ -1497,7 +1517,9 @@ function DropdownOptionsEditor({
     const v = draft.trim();
     if (!v) return;
     if (value.some((o) => o.value === v)) { setDraft(""); return; }
-    const color = DROPDOWN_PALETTE[value.length % DROPDOWN_PALETTE.length]!;
+    const used = new Set(value.map((o) => o.color).filter(Boolean));
+    const color = DROPDOWN_PALETTE.find((c) => !used.has(c))
+      ?? DROPDOWN_PALETTE[value.length % DROPDOWN_PALETTE.length]!;
     onChange([...value, { value: v, color }]);
     setDraft("");
   };
@@ -1547,83 +1569,112 @@ function DropdownOptionsEditor({
 }
 
 /** "+" pill at the end of the header row. Click → choose type → name it. */
+/** Shared two-step popover: choose a column type → name it → fire onCreate.
+ *  Used by both the table's "+" pill and the drawer's "+ Add a field" row
+ *  so type-list / labels / sizing rules stay in one place. */
+function ColumnTypeWizard({
+  onCreate, onClose, anchor = "left", noun = "column",
+}: {
+  onCreate: (col: CrmColumnDef) => void;
+  onClose: () => void;
+  /** Which edge of the trigger the popover hugs. Right is for the table's
+   *  "+" pill at the rightmost column; left for the drawer add-field row. */
+  anchor?: "left" | "right";
+  /** Word used in copy — "column" in the table, "field" in the drawer. */
+  noun?: "column" | "field";
+}) {
+  const [step, setStep] = useState<"choose" | "name">("choose");
+  const [pickedType, setPickedType] = useState<CrmColumnType>("text");
+  const [name, setName] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => { if (step === "name") setTimeout(() => inputRef.current?.focus(), 0); }, [step]);
+
+  const create = () => {
+    const label = name.trim();
+    if (!label) return;
+    const id = makeCustomColId(label);
+    onCreate({
+      id, builtin: false, label, type: pickedType,
+      width: pickedType === "checkbox" ? "80px" : pickedType === "number" ? "90px" : "1fr",
+      options: pickedType === "dropdown" ? [] : undefined,
+    });
+    onClose();
+  };
+
+  const positionStyle: React.CSSProperties = anchor === "right"
+    ? { left: "auto", right: 0 }
+    : { left: 0, right: "auto" };
+
+  return (
+    <>
+      <div className="board-menu-bg" onClick={onClose} />
+      <div
+        className="hdr-menu"
+        style={{ minWidth: 240, maxWidth: "min(320px, calc(100vw - 24px))", ...positionStyle }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {step === "choose" ? (
+          <>
+            <div className="bm-label">Add a {noun}</div>
+            <div className="hdr-type-grid">
+              {USER_PICKABLE_TYPES.map((t) => (
+                <button
+                  key={t}
+                  className="type-chip"
+                  onClick={() => { setPickedType(t); setStep("name"); }}
+                >
+                  {TYPE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="bm-label">Name your {(TYPE_LABELS[pickedType] ?? "").toLowerCase()} {noun}</div>
+            <div style={{ padding: "4px 8px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
+              <input
+                ref={inputRef}
+                className="ed-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); create(); }
+                  if (e.key === "Escape") onClose();
+                }}
+                placeholder="e.g. Lead score"
+              />
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                <button className="pill-btn" onClick={() => setStep("choose")}>Back</button>
+                <button className="pill-btn primary" onClick={create}>
+                  <IconCheck size={11} />Add
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
 function AddColumnButton({
   onAdd,
 }: {
   onAdd: (col: CrmColumnDef) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<"choose" | "name">("choose");
-  const [pickedType, setPickedType] = useState<CrmColumnType>("text");
-  const [name, setName] = useState("");
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (step === "name") setTimeout(() => ref.current?.focus(), 0); }, [step]);
-
-  const reset = () => { setOpen(false); setStep("choose"); setPickedType("text"); setName(""); };
-
-  const create = () => {
-    const label = name.trim();
-    if (!label) return;
-    const id = makeCustomColId(label);
-    const col: CrmColumnDef = {
-      id, builtin: false, label, type: pickedType,
-      width: pickedType === "checkbox" ? "80px" : pickedType === "number" ? "90px" : "1fr",
-      options: pickedType === "dropdown" ? [] : undefined,
-    };
-    onAdd(col);
-    reset();
-  };
-
   return (
     <div className="hdr-cell hdr-add">
       <button className="hdr-add-btn" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }} title="Add column">
         +
       </button>
       {open && (
-        <>
-          <div className="board-menu-bg" onClick={reset} />
-          <div className="hdr-menu" style={{ minWidth: 240 }} onClick={(e) => e.stopPropagation()}>
-            {step === "choose" ? (
-              <>
-                <div className="bm-label">Add a column</div>
-                <div className="hdr-type-grid">
-                  {USER_PICKABLE_TYPES.map((t) => (
-                    <button
-                      key={t}
-                      className="type-chip"
-                      onClick={() => { setPickedType(t); setStep("name"); }}
-                    >
-                      {TYPE_LABELS[t]}
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="bm-label">Name your {(TYPE_LABELS[pickedType] ?? "").toLowerCase()} column</div>
-                <div style={{ padding: "4px 8px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
-                  <input
-                    ref={ref}
-                    className="ed-input"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") { e.preventDefault(); create(); }
-                      if (e.key === "Escape") reset();
-                    }}
-                    placeholder="e.g. Lead score"
-                  />
-                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                    <button className="pill-btn" onClick={() => setStep("choose")}>Back</button>
-                    <button className="pill-btn primary" onClick={create}>
-                      <IconCheck size={11} />Add
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </>
+        <ColumnTypeWizard
+          onCreate={(col) => onAdd(col)}
+          onClose={() => setOpen(false)}
+          anchor="right"
+          noun="column"
+        />
       )}
     </div>
   );
@@ -2353,30 +2404,10 @@ function BoardSwitcher({
 // ========== CRMDrawer — per-contact side panel ==========
 
 /** Inline "+ Add field" row at the bottom of the drawer's properties grid.
- *  Click → pick a type → name it → it lands as a new column on the board's
- *  schema, instantly showing up here AND on the table for everyone. */
+ *  Reuses the shared ColumnTypeWizard so the type list and copy stay in
+ *  one place. */
 function DrawerAddField({ onAdd }: { onAdd: (col: CrmColumnDef) => void }) {
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<"choose" | "name">("choose");
-  const [pickedType, setPickedType] = useState<CrmColumnType>("text");
-  const [name, setName] = useState("");
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (step === "name") setTimeout(() => ref.current?.focus(), 0); }, [step]);
-
-  const reset = () => { setOpen(false); setStep("choose"); setPickedType("text"); setName(""); };
-
-  const create = () => {
-    const label = name.trim();
-    if (!label) return;
-    const id = makeCustomColId(label);
-    onAdd({
-      id, builtin: false, label, type: pickedType,
-      width: pickedType === "checkbox" ? "80px" : pickedType === "number" ? "90px" : "1fr",
-      options: pickedType === "dropdown" ? [] : undefined,
-    });
-    reset();
-  };
-
   return (
     <div className="dp-add-row">
       <button className="dp-add-btn" onClick={() => setOpen(true)}>
@@ -2384,57 +2415,12 @@ function DrawerAddField({ onAdd }: { onAdd: (col: CrmColumnDef) => void }) {
         <span>Add a field</span>
       </button>
       {open && (
-        <>
-          <div className="board-menu-bg" onClick={reset} />
-          <div
-            className="hdr-menu"
-            // Anchor to the row's left edge but cap the popover width so a
-            // narrow drawer doesn't get a menu that overflows past its
-            // right border.
-            style={{ minWidth: 240, maxWidth: "min(320px, calc(100% - 12px))", position: "absolute", left: 0, top: "calc(100% + 6px)" }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {step === "choose" ? (
-              <>
-                <div className="bm-label">Add a field</div>
-                <div className="hdr-type-grid">
-                  {USER_PICKABLE_TYPES.map((t) => (
-                    <button
-                      key={t}
-                      className="type-chip"
-                      onClick={() => { setPickedType(t); setStep("name"); }}
-                    >
-                      {TYPE_LABELS[t]}
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="bm-label">Name your {(TYPE_LABELS[pickedType] ?? "").toLowerCase()} field</div>
-                <div style={{ padding: "4px 8px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
-                  <input
-                    ref={ref}
-                    className="ed-input"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") { e.preventDefault(); create(); }
-                      if (e.key === "Escape") reset();
-                    }}
-                    placeholder="e.g. Lead score"
-                  />
-                  <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                    <button className="pill-btn" onClick={() => setStep("choose")}>Back</button>
-                    <button className="pill-btn primary" onClick={create}>
-                      <IconCheck size={11} />Add
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </>
+        <ColumnTypeWizard
+          onCreate={(col) => onAdd(col)}
+          onClose={() => setOpen(false)}
+          anchor="left"
+          noun="field"
+        />
       )}
     </div>
   );
