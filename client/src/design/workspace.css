@@ -1232,6 +1232,39 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   box-shadow: inset 0 0 0 2px var(--accent-soft);
 }
 .tbl-row .tbl-cell .stage-cell:hover { background: var(--hairline); }
+
+/* Multi-line / long-text cell display — preserves newlines, wraps, and
+   stays readable inside the row. The display is clamped at 6 lines so a
+   long note doesn't push the rest of the table around; click to expand
+   into the textarea editor. */
+.ed-cell-multi {
+  white-space: pre-wrap !important;
+  text-overflow: clip !important;
+  align-items: flex-start !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.45;
+}
+/* Excel-style multi-line editor — auto-grows up to 320px, monospace
+   feel, accent border like the inline input. */
+.ed-textarea {
+  display: block;
+  font: inherit;
+  font-family: inherit;
+  line-height: 1.45;
+  min-height: 60px;
+  max-height: 320px;
+  resize: vertical;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+.tbl-row .tbl-cell .ed-textarea {
+  width: calc(100% + 20px); padding: 6px 10px; margin: -6px -10px;
+  border: 1px solid var(--accent); border-radius: 0;
+  box-shadow: inset 0 0 0 2px var(--accent-soft);
+}
 .stage-menu {
   position: absolute; top: calc(100% + 4px); left: 0;
   background: var(--shell); border: 1px solid var(--hairline-strong);

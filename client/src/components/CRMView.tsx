@@ -996,6 +996,60 @@ function NumberCellEditor({
   );
 }
 
+/** Excel / Notion-style multi-line text editor. The display preserves
+ *  newlines; clicking expands into a textarea where Enter commits,
+ *  Shift+Enter inserts a newline, Escape cancels. Content auto-grows
+ *  vertically while editing so long notes feel like a real spreadsheet. */
+function LongTextCellEditor({
+  value, onSave,
+}: { value: string | null | undefined; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value ?? "");
+  const [editing, setEditing] = useState(false);
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => { if (editing) { ref.current?.focus(); ref.current?.setSelectionRange(v.length, v.length); } }, [editing]);
+  useEffect(() => { setV(value ?? ""); }, [value]);
+
+  const commit = () => {
+    setEditing(false);
+    if (v !== (value ?? "")) onSave(v);
+  };
+
+  // Auto-grow the textarea while typing — bounded by a reasonable max so a
+  // single huge note doesn't push the rest of the row off-screen.
+  const autoGrow = (el: HTMLTextAreaElement | null) => {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
+  };
+
+  if (editing) {
+    return (
+      <textarea
+        ref={(el) => { ref.current = el; autoGrow(el); }}
+        className="ed-input ed-textarea"
+        value={v}
+        onChange={(e) => { setV(e.target.value); autoGrow(e.currentTarget); }}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          // Excel feel: Enter commits, Shift+Enter newline, Escape cancels.
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); return; }
+          if (e.key === "Escape") { e.preventDefault(); setV(value ?? ""); setEditing(false); }
+        }}
+        onClick={(e) => e.stopPropagation()}
+        rows={Math.max(2, Math.min(10, v.split("\n").length))}
+      />
+    );
+  }
+  return (
+    <span
+      className="ed-cell ed-cell-multi"
+      onClick={(e) => { e.stopPropagation(); setEditing(true); }}
+    >
+      {v || <em style={{ color: "var(--text-mute)" }}>—</em>}
+    </span>
+  );
+}
+
 function CheckboxCellEditor({
   value, onSave,
 }: { value: string | null | undefined; onSave: (v: string) => void }) {
@@ -1594,20 +1648,35 @@ function TableView({
   // effect (the parent grid template owns the width) and the user gets no
   // feedback until release.
   const [liveWidth, setLiveWidth] = useState<{ id: string; px: number } | null>(null);
+  // Track the active resize cleanup so the window listeners get removed
+  // even if the component unmounts mid-drag (e.g. the user switches
+  // boards while resizing) — otherwise the next pointermove anywhere in
+  // the page would still call into a stale setLiveWidth.
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    return () => { resizeCleanupRef.current?.(); resizeCleanupRef.current = null; };
+  }, []);
 
   const startResize = (colId: string, startX: number, startW: number) => {
+    // Cancel any in-flight resize before starting a new one.
+    resizeCleanupRef.current?.();
     const onMove = (ev: PointerEvent) => {
       const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
       setLiveWidth({ id: colId, px: next });
     };
     const onUp = (ev: PointerEvent) => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      cleanup();
       const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
       setLiveWidth(null);
       // Persist the new width in the schema (which then syncs to collaborators).
       onColumnsChange(columns.map((c) => (c.id === colId ? { ...c, width: `${next}px` } : c)));
     };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      resizeCleanupRef.current = null;
+    };
+    resizeCleanupRef.current = cleanup;
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
   };
@@ -1670,7 +1739,7 @@ function TableView({
         case "link":     return <LinkCellEditor value={val} onSave={setVal} />;
         case "date":     return <DateCellEditor value={val} onSave={setVal} />;
         case "checkbox": return <CheckboxCellEditor value={val} onSave={setVal} />;
-        case "longtext": return <EditableCell value={val} onSave={setVal} />;
+        case "longtext": return <LongTextCellEditor value={val} onSave={setVal} />;
         case "text":
         default:         return <EditableCell value={val} onSave={setVal} />;
       }
@@ -1706,8 +1775,8 @@ function TableView({
       case "replies": return <NumberCellEditor value={p.replies} onSave={(n) => onPatch(p.id, { replies: n })} />;
       case "nextStep":return <EditableCell value={p.nextStep} onSave={(v) => onPatch(p.id, { nextStep: v })} />;
       case "source":  return <span className="src-chip">{p.source ?? ""}</span>;
-      case "messageNotes": return <EditableCell value={p.messageNotes} onSave={(v) => onPatch(p.id, { messageNotes: v })} />;
-      case "notes":   return <EditableCell value={p.notes} onSave={(v) => onPatch(p.id, { notes: v })} />;
+      case "messageNotes": return <LongTextCellEditor value={p.messageNotes} onSave={(v) => onPatch(p.id, { messageNotes: v })} />;
+      case "notes":   return <LongTextCellEditor value={p.notes} onSave={(v) => onPatch(p.id, { notes: v })} />;
       default:        return null;
     }
   };
@@ -2317,7 +2386,14 @@ function DrawerAddField({ onAdd }: { onAdd: (col: CrmColumnDef) => void }) {
       {open && (
         <>
           <div className="board-menu-bg" onClick={reset} />
-          <div className="hdr-menu" style={{ minWidth: 260, position: "absolute", left: 0, top: "calc(100% + 6px)" }} onClick={(e) => e.stopPropagation()}>
+          <div
+            className="hdr-menu"
+            // Anchor to the row's left edge but cap the popover width so a
+            // narrow drawer doesn't get a menu that overflows past its
+            // right border.
+            style={{ minWidth: 240, maxWidth: "min(320px, calc(100% - 12px))", position: "absolute", left: 0, top: "calc(100% + 6px)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
             {step === "choose" ? (
               <>
                 <div className="bm-label">Add a field</div>
@@ -2410,6 +2486,7 @@ export function CRMDrawer({
         case "link":     return <LinkCellEditor value={val} onSave={setVal} />;
         case "date":     return <DateCellEditor value={val} onSave={setVal} />;
         case "checkbox": return <CheckboxCellEditor value={val} onSave={setVal} />;
+        case "longtext": return <LongTextCellEditor value={val} onSave={setVal} />;
         default:         return <EditableCell value={val} onSave={setVal} />;
       }
     }
@@ -2429,8 +2506,8 @@ export function CRMDrawer({
       case "replies":      return <NumberCellEditor value={contact.replies} onSave={(n) => onPatch(contact.id, { replies: n })} />;
       case "nextStep":     return <EditableCell value={contact.nextStep} onSave={(v) => onPatch(contact.id, { nextStep: v })} />;
       case "source":       return <EditableCell value={contact.source} onSave={(v) => onPatch(contact.id, { source: v })} />;
-      case "messageNotes": return <EditableCell value={contact.messageNotes} onSave={(v) => onPatch(contact.id, { messageNotes: v })} />;
-      case "notes":        return <EditableCell value={contact.notes} onSave={(v) => onPatch(contact.id, { notes: v })} />;
+      case "messageNotes": return <LongTextCellEditor value={contact.messageNotes} onSave={(v) => onPatch(contact.id, { messageNotes: v })} />;
+      case "notes":        return <LongTextCellEditor value={contact.notes} onSave={(v) => onPatch(contact.id, { notes: v })} />;
       default:             return null;
     }
   };

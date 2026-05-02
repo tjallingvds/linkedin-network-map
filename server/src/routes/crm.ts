@@ -346,6 +346,10 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     }
   }
 
+  // Pick the most specific event type so the client knows whether to
+  // also refresh stages alongside the boards refetch. Column / row-height
+  // edits go out as "board" too — the client refetches boards on that
+  // event, which carries the new column schema.
   notifyBoard(req.params.id, body.stages !== undefined ? "stages" : "board");
   res.json({
     id: row.id, name: row.name, emoji: row.emoji,
