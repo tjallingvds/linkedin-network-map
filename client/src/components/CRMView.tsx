@@ -48,8 +48,11 @@ const REQUIRED_COLS: readonly string[] = ["_select", "person", "stage"];
 function defaultColumns(): CrmColumnDef[] {
   return [
     { id: "_select", builtin: true, label: "",       width: "36px",   type: "select" },
-    { id: "person",  builtin: true, label: "Person", width: "1.8fr",  type: "person" },
-    { id: "stage",   builtin: true, label: "Stage",  width: "120px",  type: "stage" },
+    // Fixed-pixel default widths — using fr units made Person bloat to fill
+    // the entire table whenever there were only a few columns, shoving
+    // Stage far to the right and making them look unrelated.
+    { id: "person",  builtin: true, label: "Person", width: "240px",  type: "person" },
+    { id: "stage",   builtin: true, label: "Stage",  width: "140px",  type: "stage" },
   ];
 }
 
@@ -101,13 +104,19 @@ function reconcileColumns(stored: CrmColumnDef[]): CrmColumnDef[] {
     .map((c) => {
       const d = defById.get(c.id);
       if (d) {
+        // Convert any legacy fr-based stored width (e.g. "1.8fr") back
+        // to the canonical pixel default. Fr units bloated Person to
+        // fill the whole table whenever only a few columns were
+        // visible. Pixel resizes the user explicitly chose are kept.
+        const storedWidth = c.width;
+        const useStoredWidth = storedWidth && !storedWidth.includes("fr");
         return {
           ...d,
-          // Keep the user's label / width / hidden customisations, but
-          // reset structural fields (builtin, type) so the renderer
+          // Keep the user's label / hidden customisations, but reset
+          // structural fields (builtin, type) so the renderer
           // dispatches to StageCell / Person / row-checkbox correctly.
           label: c.label || d.label,
-          width: c.width ?? d.width,
+          width: useStoredWidth ? storedWidth : d.width,
           hidden: c.hidden,
         };
       }

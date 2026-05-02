@@ -1145,7 +1145,10 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .tbl-wrap::-webkit-scrollbar { height: 8px; width: 8px; }
 .tbl-wrap::-webkit-scrollbar-thumb { background: rgba(20,14,40,0.12); border-radius: 4px; }
-.tbl { min-width: 1480px; }
+/* The grid sizes to its declared columns — no min-width forcing it to
+   fill the wrap and bloat fr-based columns. Horizontal scroll kicks in
+   only when the user actually has more columns than fit. */
+.tbl { width: max-content; min-width: 100%; }
 .tbl-row {
   display: grid;
   /* grid-template-columns is set inline by TableView so columns can be
