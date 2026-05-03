@@ -238,6 +238,46 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .drawer-bg-block a { color: var(--accent); }
 
+/* Pages — long-form docs attached to a contact. Each row is a clickable
+   card that opens the focused editor. */
+.drawer-pages { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; border-top: 1px solid var(--hairline); }
+.page-list { display: flex; flex-direction: column; gap: 4px; }
+.page-row {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--panel);
+  text-align: left;
+  cursor: pointer;
+  transition: background 100ms, border-color 100ms;
+}
+.page-row:hover { background: var(--panel-2); border-color: var(--hairline-strong); }
+.page-row-title { font-size: 13px; font-weight: 500; color: var(--text); }
+.page-row-snippet {
+  font-size: 11.5px; color: var(--text-mute);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Focused page editor — Notion-page feel: huge title, big body, no
+   visible chrome around either. */
+.page-editor { padding: 20px 26px 32px; gap: 12px; }
+.page-title {
+  font-size: 24px; font-weight: 600; line-height: 1.2;
+  border: 0; outline: none; background: transparent; color: var(--text);
+  font-family: inherit;
+  padding: 0;
+}
+.page-title::placeholder { color: var(--text-mute); }
+.page-body {
+  flex: 1;
+  width: 100%; min-height: 320px; padding: 0;
+  border: 0; outline: none; background: transparent; color: var(--text);
+  font-size: 14px; line-height: 1.6; font-family: inherit;
+  resize: none;
+}
+.page-body::placeholder { color: var(--text-mute); }
+
 /* Prospect card quick-access icons (LinkedIn / email). */
 .pc-quick { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
 .pc-quick-btn {
@@ -1863,6 +1903,28 @@ button:focus-visible { outline-offset: 3px; }
    from the board's numeric rowHeight. Drag handle on the header bottom
    updates this var live. */
 .tbl-wrap .tbl-row:not(.tbl-head) { min-height: var(--rh, 44px); }
+
+/* Row-height drag handle — sits on the header row's bottom edge,
+   spans the full table width, lights up on hover so users can grab it. */
+.tbl-row.tbl-head { position: relative; }
+.row-resize {
+  position: absolute;
+  left: 0; right: 0; bottom: -3px;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 4;
+  display: flex; align-items: stretch; justify-content: stretch;
+}
+.row-resize::after {
+  content: '';
+  flex: 1;
+  margin: 2px 0;
+  background: transparent;
+  border-radius: 1px;
+  transition: background 100ms;
+}
+.row-resize:hover::after,
+.row-resize:active::after { background: var(--accent); }
 
 /* Header cell: hosts the editable label, the hover chevron, and a popover. */
 .tbl-cell.hdr {

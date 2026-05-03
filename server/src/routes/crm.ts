@@ -108,6 +108,7 @@ function toCamelContact(row: Record<string, unknown>) {
     messageNotes: row.message_notes ?? null,
     background: (row.background as string | null | undefined) ?? null,
     customFields: (row.custom_fields ?? {}) as Record<string, string>,
+    documents: (row.documents ?? []) as Array<{ id: string; title: string; body: string; updatedAt: string }>,
     positionIdx: row.position_idx,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -445,6 +446,12 @@ const contactInput = z.object({
   notes: z.string().nullish(),
   messageNotes: z.string().nullish(),
   customFields: z.record(z.string().max(2000)).optional(),
+  documents: z.array(z.object({
+    id: z.string().min(1).max(48),
+    title: z.string().max(200),
+    body: z.string().max(200_000),
+    updatedAt: z.string().max(40),
+  })).max(200).optional(),
 });
 
 router.get("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
@@ -699,6 +706,14 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
     update.custom_fields = merged as any;
   }
 
+  if (body.documents !== undefined) {
+    // Documents are sent as a complete array (not a delta) — the client
+    // owns the list, server just persists. Explicit ::jsonb cast for the
+    // same reason as columns/stages: kysely's pg driver treats arrays of
+    // objects as Postgres array literals otherwise.
+    update.documents = sql`${JSON.stringify(body.documents)}::jsonb`;
+  }
+
   const row = await db
     .updateTable("crm_contacts")
     .set(update)
@@ -820,6 +835,7 @@ router.post("/boards/:boardId/background", async (req: AuthedRequest, res) => {
   // backgrounds weren't persisting — this makes the endpoint self-healing).
   try {
     await sql`ALTER TABLE crm_contacts ADD COLUMN IF NOT EXISTS background TEXT`.execute(db);
+    await sql`ALTER TABLE crm_contacts ADD COLUMN IF NOT EXISTS documents JSONB`.execute(db);
   } catch (err) {
     console.warn("[background] ensure-column failed:", (err as Error).message);
   }

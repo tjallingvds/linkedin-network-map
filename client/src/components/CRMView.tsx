@@ -390,7 +390,7 @@ function KanbanCard({
   const customById = Object.fromEntries(customCols.map((c) => [c.id, c]));
 
   const renderField = (id: string): React.ReactNode => {
-    const customLabel = customById[id]?.label;
+    const custom = customById[id];
     const raw: string | null | undefined =
       id === "title" ? p.title :
       id === "company" ? p.company :
@@ -402,12 +402,32 @@ function KanbanCard({
       id === "source" ? p.source :
       id === "messageNotes" ? p.messageNotes ?? null :
       id === "notes" ? p.notes :
-      customLabel ? (p.customFields ?? {})[id] ?? null :
+      custom ? (p.customFields ?? {})[id] ?? null :
       null;
     if (!raw) return null;
+
+    // Dropdown columns (e.g. an "Assignee" picker) render their value as
+    // a coloured chip on the card so it actually looks like an
+    // assignment / status, not just plain text.
+    if (custom?.type === "dropdown") {
+      const opt = (custom.options ?? []).find((o) => o.value === raw);
+      const color = opt?.color ?? "oklch(0.7 0.04 280)";
+      return (
+        <div key={id} className="kc-field">
+          <span className="kc-field-label">{custom.label}:</span>
+          <span
+            className="tbl-stage"
+            style={{ "--stage-color": color, "--stage-tint": tintFor(color) } as React.CSSProperties}
+          >
+            {raw}
+          </span>
+        </div>
+      );
+    }
+
     return (
       <div key={id} className="kc-field">
-        {customLabel && <span className="kc-field-label">{customLabel}:</span>}
+        {custom && <span className="kc-field-label">{custom.label}:</span>}
         <span className="kc-field-value">{raw}</span>
       </div>
     );
@@ -1700,7 +1720,7 @@ function AddColumnButton({
 }
 
 function TableView({
-  contacts, onOpen, onPatch, columns, onColumnsChange, stages, rowHeight,
+  contacts, onOpen, onPatch, columns, onColumnsChange, stages, rowHeight, onRowHeightChange,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
@@ -1709,6 +1729,9 @@ function TableView({
   onColumnsChange: (next: CrmColumnDef[]) => void;
   stages: StageDef[];
   rowHeight: CrmRowHeight;
+  /** Persist a new row height (px). Drag-resize from the header bottom
+   *  edge calls this on pointer release. */
+  onRowHeightChange: (next: CrmRowHeight) => void;
 }) {
   const visibleCols = useMemo(() => columns.filter((c) => !c.hidden), [columns]);
 
@@ -1755,6 +1778,40 @@ function TableView({
     if (liveWidth && liveWidth.id === c.id) return `${liveWidth.px}px`;
     return c.width ?? "200px";
   }).join(" ") + " 36px";
+
+  // Row-height drag — same pattern as the column-width handle. Drag any
+  // body row's bottom edge OR the header's bottom edge to set the
+  // board-wide row height. Live preview via a CSS var on the wrap.
+  const [liveRowH, setLiveRowH] = useState<number | null>(null);
+  const rowResizeCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => { rowResizeCleanupRef.current?.(); rowResizeCleanupRef.current = null; }, []);
+
+  const startRowResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    rowResizeCleanupRef.current?.();
+    const startY = e.clientY;
+    const startH = rowHeight;
+    const onMove = (ev: PointerEvent) => {
+      const next = clampRowHeight(startH + (ev.clientY - startY));
+      setLiveRowH(next);
+    };
+    const onUp = (ev: PointerEvent) => {
+      cleanup();
+      const next = clampRowHeight(startH + (ev.clientY - startY));
+      setLiveRowH(null);
+      if (next !== rowHeight) onRowHeightChange(next);
+    };
+    const cleanup = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      rowResizeCleanupRef.current = null;
+    };
+    rowResizeCleanupRef.current = cleanup;
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+  const effectiveRowH = liveRowH ?? rowHeight;
 
   const updateCol = (id: string, patch: Partial<CrmColumnDef>) => {
     onColumnsChange(columns.map((c) => (c.id === id ? { ...c, ...patch } : c)));
@@ -1850,7 +1907,7 @@ function TableView({
   };
 
   return (
-    <div className="tbl-wrap" style={{ "--rh": `${rowHeight}px` } as React.CSSProperties}>
+    <div className="tbl-wrap" style={{ "--rh": `${effectiveRowH}px` } as React.CSSProperties}>
       <div className="tbl">
         <div className="tbl-row tbl-head" style={{ gridTemplateColumns: gridTemplate }}>
           {visibleCols.map((c) => (
@@ -1870,6 +1927,10 @@ function TableView({
           <div className="tbl-cell hdr">
             <AddColumnButton onAdd={addCol} />
           </div>
+          {/* Row-height drag handle — sits on the header's bottom edge,
+              spans the full row width, drag down/up to set the
+              board-wide row height. */}
+          <span className="row-resize" onPointerDown={startRowResize} title="Drag to resize rows" />
         </div>
         {contacts.map((p, i) => (
           <div
@@ -2361,6 +2422,55 @@ function DrawerAddField({ onAdd }: { onAdd: (col: CrmColumnDef) => void }) {
   );
 }
 
+/** Focused page editor — replaces the drawer body when a page is open.
+ *  Title input on top, full-height body textarea below. Saves go through
+ *  the parent drawer's onPatch via the onChange callback. */
+function PageEditorView({
+  page, onChange, onBack, onDelete,
+}: {
+  page: { id: string; title: string; body: string; updatedAt: string };
+  onChange: (patch: { title?: string; body?: string }) => void;
+  onBack: () => void;
+  onDelete: () => void;
+}) {
+  const modal = useModal();
+  return (
+    <div className="drawer-body drawer-body-page page-editor">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <button className="pill-btn" onClick={onBack}>
+          <IconArrowR size={11} style={{ transform: "rotate(180deg)" }} />Back
+        </button>
+        <button
+          className="pill-btn"
+          style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
+          onClick={async () => {
+            const ok = await modal.confirm({
+              title: `Delete "${page.title || "Untitled"}"?`,
+              confirmLabel: "Delete page",
+              destructive: true,
+            });
+            if (ok) onDelete();
+          }}
+        >
+          <IconClose size={11} />Delete
+        </button>
+      </div>
+      <input
+        className="page-title"
+        defaultValue={page.title}
+        placeholder="Untitled"
+        onBlur={(e) => { if (e.target.value !== page.title) onChange({ title: e.target.value }); }}
+      />
+      <textarea
+        className="page-body"
+        defaultValue={page.body}
+        placeholder="Type anything — Shift+Enter for newline. Markdown links work in the brief."
+        onBlur={(e) => { if (e.target.value !== page.body) onChange({ body: e.target.value }); }}
+      />
+    </div>
+  );
+}
+
 export function CRMDrawer({
   contact, idx, onClose, onPatch, onDelete, columns = [], stages = DEFAULT_STAGES, onColumnsChange,
 }: {
@@ -2377,6 +2487,30 @@ export function CRMDrawer({
 }) {
   const modal = useModal();
   const stageList = stages.length > 0 ? stages : DEFAULT_STAGES;
+
+  // When a page is open the drawer body swaps to the editor view.
+  const [openPageId, setOpenPageId] = useState<string | null>(null);
+  const documents = contact.documents ?? [];
+  const openPage = openPageId ? documents.find((d) => d.id === openPageId) : null;
+
+  const saveDocs = (next: typeof documents) => onPatch(contact.id, { documents: next });
+
+  const addPage = () => {
+    const id = `doc_${Math.random().toString(36).slice(2, 10)}`;
+    const now = new Date().toISOString();
+    const next = [...documents, { id, title: "Untitled", body: "", updatedAt: now }];
+    saveDocs(next);
+    setOpenPageId(id);
+  };
+
+  const updatePage = (id: string, patch: Partial<{ title: string; body: string }>) => {
+    saveDocs(documents.map((d) => (d.id === id ? { ...d, ...patch, updatedAt: new Date().toISOString() } : d)));
+  };
+
+  const deletePage = (id: string) => {
+    saveDocs(documents.filter((d) => d.id !== id));
+    setOpenPageId(null);
+  };
 
   const advanceStage = () => {
     const i = stageList.findIndex((s) => s.id === contact.stage);
@@ -2461,6 +2595,14 @@ export function CRMDrawer({
             )}
           </div>
         </div>
+        {openPage ? (
+          <PageEditorView
+            page={openPage}
+            onChange={(patch) => updatePage(openPage.id, patch)}
+            onBack={() => setOpenPageId(null)}
+            onDelete={() => deletePage(openPage.id)}
+          />
+        ) : (
         <div className="drawer-body drawer-body-page">
           <div className="profile-hero">
             <div className="profile-avatar profile-avatar-lg" style={{ background: avatarGrad(idx) }}>{initials(contact.name)}</div>
@@ -2524,7 +2666,36 @@ export function CRMDrawer({
               if ((contact.notes ?? "") !== v) onPatch(contact.id, { notes: v });
             }}
           />
+
+          {/* Pages — long-form attached docs. Click one to open the
+              focused editor. New pages spawn untitled and open
+              immediately so the user lands in the editor. */}
+          <div className="drawer-pages">
+            <div className="dp-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span>Pages</span>
+              <button className="pill-btn" onClick={addPage} title="New page">
+                <IconNewChat size={11} />New page
+              </button>
+            </div>
+            {documents.length === 0 ? (
+              <div style={{ fontSize: 12, color: "var(--text-mute)", padding: "8px 0" }}>
+                No pages yet — create one to write a brief, meeting notes, or anything else.
+              </div>
+            ) : (
+              <div className="page-list">
+                {documents.map((d) => (
+                  <button key={d.id} className="page-row" onClick={() => setOpenPageId(d.id)}>
+                    <span className="page-row-title">{d.title || "Untitled"}</span>
+                    <span className="page-row-snippet">
+                      {d.body.slice(0, 80) || <em style={{ color: "var(--text-mute)" }}>Empty</em>}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
+        )}
         <div className="drawer-foot">
           {onDelete && (
             <button
@@ -3092,6 +3263,7 @@ export function CRMView({
           onColumnsChange={saveColumns}
           stages={stages}
           rowHeight={rowHeight}
+          onRowHeightChange={saveRowHeight}
         />
       )}
 
