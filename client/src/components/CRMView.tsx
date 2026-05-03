@@ -103,28 +103,28 @@ function reconcileColumns(stored: CrmColumnDef[]): CrmColumnDef[] {
   //    on. This rescues schemas where an older save persisted Stage as
   //    a custom column with no options — which then rendered as empty
   //    dropdown cells instead of the kanban-driving stage chip.
+  // Strip fr units from any stored width (built-in or custom). Fr columns
+  // stretch with available space, so the table resized whenever the
+  // sidebar collapsed. Pixel-only widths keep the layout stable.
+  const dropFrWidth = (w?: string) => (w && !w.includes("fr") ? w : undefined);
   const trimmed = stored
     .filter((c) => !c.builtin || !LEGACY_BUILTIN_IDS.has(c.id))
     .map((c) => {
       const d = defById.get(c.id);
       if (d) {
-        // Convert any legacy fr-based stored width (e.g. "1.8fr") back
-        // to the canonical pixel default. Fr units bloated Person to
-        // fill the whole table whenever only a few columns were
-        // visible. Pixel resizes the user explicitly chose are kept.
-        const storedWidth = c.width;
-        const useStoredWidth = storedWidth && !storedWidth.includes("fr");
         return {
           ...d,
           // Keep the user's label / hidden customisations, but reset
           // structural fields (builtin, type) so the renderer
           // dispatches to StageCell / Person / row-checkbox correctly.
           label: c.label || d.label,
-          width: useStoredWidth ? storedWidth : d.width,
+          width: dropFrWidth(c.width) ?? d.width,
           hidden: c.hidden,
         };
       }
-      return c;
+      // Custom column: also migrate any stored fr width to a sensible px
+      // default. The user can drag-resize from there.
+      return { ...c, width: dropFrWidth(c.width) ?? "200px" };
     });
   const known = new Set(trimmed.map((c) => c.id));
   const merged: CrmColumnDef[] = trimmed.slice();
@@ -215,7 +215,7 @@ function migrateLegacyColumns(boardId: string): CrmColumnDef[] | null {
   if (legacyCustom.length === 0) return null;
 
   const customs: CrmColumnDef[] = legacyCustom.map((c) => ({
-    id: c.id, builtin: false, label: c.label, width: c.width ?? "1fr", type: "text",
+    id: c.id, builtin: false, label: c.label, width: c.width ?? "200px", type: "text",
   }));
   return [...defaultColumns(), ...customs];
 }
@@ -1460,7 +1460,7 @@ function HeaderCell({
             <div className="hdr-type-grid">
               {([
                 { id: "narrow", label: "Narrow", w: "90px" },
-                { id: "normal", label: "Normal", w: "1fr" },
+                { id: "normal", label: "Normal", w: "200px" },
                 { id: "wide",   label: "Wide",   w: "2fr" },
               ] as const).map((p) => (
                 <button
@@ -1591,7 +1591,10 @@ function ColumnTypeWizard({
     const id = makeCustomColId(label);
     onCreate({
       id, builtin: false, label, type: pickedType,
-      width: pickedType === "checkbox" ? "80px" : pickedType === "number" ? "90px" : "1fr",
+      // Fixed pixel widths only — fr units stretch with the available
+      // space, which means the column resizes whenever the sidebar
+      // collapses. Pixel widths keep the layout stable across viewports.
+      width: pickedType === "checkbox" ? "80px" : pickedType === "number" ? "90px" : "200px",
       options: pickedType === "dropdown" ? [] : undefined,
     });
     onClose();
@@ -1730,7 +1733,7 @@ function TableView({
 
   const gridTemplate = visibleCols.map((c) => {
     if (liveWidth && liveWidth.id === c.id) return `${liveWidth.px}px`;
-    return c.width ?? "1fr";
+    return c.width ?? "200px";
   }).join(" ") + " 36px";
 
   const updateCol = (id: string, patch: Partial<CrmColumnDef>) => {

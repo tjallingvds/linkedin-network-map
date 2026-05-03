@@ -365,7 +365,12 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .nav-item:hover, .bm-item:hover { transform: translateX(1px); }
 .drawer { transition: transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .drawer-bg { animation: fade-in 180ms ease; }
-.import-modal { animation: kmc-rise 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+/* Modals are centered with translate(-50%, -50%); animating them via
+   kmc-rise (which sets transform: translateY(...)) overrides the
+   centering and causes a one-frame snap from the upper-left into the
+   middle. Use a fade-only animation instead so the modal stays put. */
+.import-modal,
+.pack-modal { animation: app-modal-fade 160ms ease-out; }
 @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
 
 /* Respect reduced-motion preferences. */
@@ -1193,10 +1198,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .tbl-wrap::-webkit-scrollbar { height: 8px; width: 8px; }
 .tbl-wrap::-webkit-scrollbar-thumb { background: rgba(20,14,40,0.12); border-radius: 4px; }
-/* The grid sizes to its declared columns — no min-width forcing it to
-   fill the wrap and bloat fr-based columns. Horizontal scroll kicks in
-   only when the user actually has more columns than fit. */
-.tbl { width: max-content; min-width: 100%; }
+/* The grid sizes to its declared column widths — period. No min-width
+   forcing it to stretch and no fr units anywhere by default, so the
+   table stays the same size when the sidebar collapses (the wrap just
+   gets more empty space on its right). */
+.tbl { width: max-content; }
 .tbl-row {
   display: grid;
   /* grid-template-columns is set inline by TableView so columns can be
