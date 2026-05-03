@@ -34,12 +34,10 @@ import { ExternalCleanupModal } from "./ExternalCleanupModal";
  */
 export type TableColumnDef = CrmColumnDef & { alwaysVisible?: boolean; numeric?: boolean };
 
-/** Columns the user can't delete from the table — only the row-checkbox
- *  and Person (the avatar+name anchor). The kanban gets its stage list
- *  from the board's `stages` JSONB, not from the table column schema, so
- *  removing the Stage column from the table is purely a view choice and
- *  doesn't break the kanban. */
-const REQUIRED_COLS: readonly string[] = ["_select", "person"];
+/** Only Person (the avatar+name anchor) is required on the table.
+ *  Everything else — including Stage, which the kanban gets from the
+ *  board's `stages` JSONB independently — is the user's call. */
+const REQUIRED_COLS: readonly string[] = ["person"];
 
 /** Minimal seed for a fresh board — just the row checkbox, the Person
  *  column (name + avatar; can't be removed), and the Stage column (drives
@@ -50,12 +48,11 @@ const REQUIRED_COLS: readonly string[] = ["_select", "person"];
  *  pollute the table by default. */
 function defaultColumns(): CrmColumnDef[] {
   return [
-    { id: "_select", builtin: true, label: "",       width: "36px",   type: "select" },
     // Fixed-pixel default widths — using fr units made Person bloat to fill
     // the entire table whenever there were only a few columns, shoving
     // Stage far to the right and making them look unrelated.
-    { id: "person",  builtin: true, label: "Person", width: "240px",  type: "person" },
-    { id: "stage",   builtin: true, label: "Stage",  width: "140px",  type: "stage" },
+    { id: "person", builtin: true, label: "Person", width: "240px", type: "person" },
+    { id: "stage",  builtin: true, label: "Stage",  width: "140px", type: "stage" },
   ];
 }
 
@@ -89,8 +86,12 @@ function visibleColIds(cols: CrmColumnDef[]): string[] {
  *  add Email / Phone / Title / etc. as their own custom columns; the
  *  underlying DB fields stay in place for Apollo / CSV import. */
 const LEGACY_BUILTIN_IDS = new Set([
+  // Old preloaded built-ins we don't surface by default anymore.
   "title", "company", "email", "phone", "linkedin", "temp",
   "sent", "opens", "replies", "nextStep", "source", "messageNotes", "notes",
+  // Old non-functional row-checkbox column. Stored on legacy boards but
+  // no longer rendered.
+  "_select",
 ]);
 
 function reconcileColumns(stored: CrmColumnDef[]): CrmColumnDef[] {
@@ -1359,16 +1360,12 @@ function HeaderCell({
     else setDraft(col.label);
   };
 
-  // The row-select checkbox column has no label and no menu.
-  const isLabelLocked = col.id === "_select";
-  // Person + Stage are required by the table layout / kanban — the user can
-  // rename their label but can't hide or delete them.
+  // Person is required as the row anchor — can rename + width-tweak but
+  // can't be hidden or deleted.
   const isStructureLocked = REQUIRED_COLS.includes(col.id);
   // Built-in columns whose underlying field has fixed semantics (the
   // person card, the kanban stage chip) can't have their type swapped.
   const isTypeLocked = col.builtin;
-
-  if (isLabelLocked) return <div className="hdr-cell locked" />;
 
   const onResizePointerDown = (e: React.PointerEvent<HTMLSpanElement>) => {
     e.preventDefault();
@@ -1381,9 +1378,8 @@ function HeaderCell({
   return (
     <div
       className={`hdr-cell${dropEdge ? ` drop-${dropEdge}` : ""}`}
-      draggable={!isLabelLocked}
+      draggable
       onDragStart={(e) => {
-        if (isLabelLocked) { e.preventDefault(); return; }
         e.dataTransfer.effectAllowed = "move";
         e.dataTransfer.setData("text/x-col-id", col.id);
         onDragStart(col.id);
@@ -1796,8 +1792,6 @@ function TableView({
       }
     }
     switch (col.id) {
-      case "_select":
-        return <div className="pc-check" onClick={(e) => e.stopPropagation()} />;
       case "person":
         return (
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, width: "100%" }}>
@@ -1838,18 +1832,16 @@ function TableView({
         <div className="tbl-row tbl-head" style={{ gridTemplateColumns: gridTemplate }}>
           {visibleCols.map((c) => (
             <div key={c.id} className={`tbl-cell hdr${isNumeric(c) ? " c-num" : ""}`}>
-              {c.id === "_select" ? null : (
-                <HeaderCell
-                  col={c}
-                  onChange={replaceCol}
-                  onDelete={() => deleteCol(c.id)}
-                  onDragStart={onHeaderDragStart}
-                  onDragOver={onHeaderDragOver}
-                  onDrop={onHeaderDrop}
-                  dropEdge={dropTarget?.id === c.id ? dropTarget.edge : null}
-                  onResizeStart={startResize}
-                />
-              )}
+              <HeaderCell
+                col={c}
+                onChange={replaceCol}
+                onDelete={() => deleteCol(c.id)}
+                onDragStart={onHeaderDragStart}
+                onDragOver={onHeaderDragOver}
+                onDrop={onHeaderDrop}
+                dropEdge={dropTarget?.id === c.id ? dropTarget.edge : null}
+                onResizeStart={startResize}
+              />
             </div>
           ))}
           <div className="tbl-cell hdr">
@@ -2353,54 +2345,6 @@ function Field({ label, children, required }: { label: string; children: React.R
   );
 }
 
-function BoardSwitcher({
-  boards, activeId, onSelect, onNew, onDelete,
-}: {
-  boards: CrmBoard[];
-  activeId: string;
-  onSelect: (id: string) => void;
-  onNew: () => void;
-  onDelete: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const active = boards.find((b) => b.id === activeId) ?? boards[0];
-  if (!active) return null;
-  return (
-    <div className="board-switcher">
-      <button className="board-btn" onClick={() => setOpen((o) => !o)}>
-        <span className="board-name">{active.name}</span>
-        <span className="board-count">{active.contactCount ?? 0}</span>
-        <IconChevD size={12} />
-      </button>
-      {open && (
-        <>
-          <div className="board-menu-bg" onClick={() => setOpen(false)} />
-          <div className="board-menu">
-            <div className="bm-label">Boards</div>
-            {boards.map((b) => (
-              <button key={b.id} className={`bm-item ${b.id === activeId ? "active" : ""}`}
-                onClick={() => { onSelect(b.id); setOpen(false); }}>
-                <span style={{ flex: 1, textAlign: "left" }}>{b.name}</span>
-                <span className="board-count">{b.contactCount ?? 0}</span>
-              </button>
-            ))}
-            <div className="bm-sep" />
-            <button className="bm-item" onClick={() => { onNew(); setOpen(false); }}>
-              <IconNewChat size={13} /><span>New board</span>
-            </button>
-            {boards.length > 1 && (
-              <button className="bm-item" onClick={() => { onDelete(activeId); setOpen(false); }}
-                style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}>
-                <IconClose size={13} /><span>Delete "{active.name}"</span>
-              </button>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 // ========== CRMDrawer — per-contact side panel ==========
 
 /** Inline "+ Add field" row at the bottom of the drawer's properties grid.
@@ -2453,7 +2397,7 @@ export function CRMDrawer({
   // chosen order. The hero already shows Person / Stage / Temp so we don't
   // repeat them; the row-select column is irrelevant here.
   const propCols = columns.filter(
-    (c) => c.id !== "_select" && c.id !== "person" && c.id !== "stage" && c.id !== "temp" && !c.hidden,
+    (c) => c.id !== "person" && c.id !== "stage" && c.id !== "temp" && !c.hidden,
   );
 
   /** Render the right cell editor for the column's type. Built-in columns
@@ -3072,13 +3016,6 @@ export function CRMView({
     <div className="crm-wrap">
       <div className="crm-toolbar">
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <BoardSwitcher
-            boards={boards}
-            activeId={activeId}
-            onSelect={setActiveId}
-            onNew={addBoard}
-            onDelete={deleteBoard}
-          />
           <div className="view-toggle">
             <button className={viewMode === "kanban" ? "active" : ""} onClick={() => setViewMode("kanban")}>
               <IconList size={12} style={{ transform: "rotate(90deg)" }} />Board

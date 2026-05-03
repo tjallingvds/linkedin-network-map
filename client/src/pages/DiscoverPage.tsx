@@ -847,7 +847,6 @@ export function DiscoverPage() {
               />
             ) : view === "hero" ? (
               <div className="hero">
-                <div className="hero-eyebrow">Prospecting · Enrichment · Outreach</div>
                 <div className="orb-wrap"><div className={`orb ${streaming ? "thinking" : ""}`} /></div>
                 <h1>Describe your <em>ideal prospect.</em></h1>
               </div>

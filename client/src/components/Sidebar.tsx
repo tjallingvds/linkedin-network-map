@@ -1,8 +1,8 @@
 /**
- * Sidebar — collapsible, with a working search and a live API-usage card in
- * place of the old "Upgrade to Pro" pitch.
+ * Sidebar — collapsible, with the past-searches + CRM-boards lists and
+ * a live API-usage card at the bottom.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   IconNewChat, IconSidebar, IconSearch, IconUsers, IconSparkle, IconClose,
 } from "../design/icons";
@@ -44,14 +44,6 @@ export function Sidebar({
   collapsed, onToggleCollapse, usage, onOpenSettings,
   onRenameSearch, onDeleteSearch, onRenameBoard, onDeleteBoard,
 }: Props) {
-  const [q, setQ] = useState("");
-
-  const filteredSearches = useMemo(
-    () => filterByQuery(savedSearches, q),
-    [savedSearches, q],
-  );
-  const filteredLists = useMemo(() => filterByQuery(lists, q), [lists, q]);
-
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
       {/* Sidebar header — single 54px row in both states so the divider
@@ -85,22 +77,13 @@ export function Sidebar({
           </>
         ) : (
           <>
-            <div className="search-input">
-              <IconSearch size={13} />
-              <input
-                placeholder="Search prospects, lists…"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
-            </div>
-
             <NavSection
               label="Past searches"
-              items={filteredSearches}
+              items={savedSearches}
               icon={<IconSearch size={13} />}
               activeNav={activeNav}
               onSelect={onSelect}
-              emptyMsg={q ? "No matches" : savedSearches.length === 0 ? "Your searches appear here" : undefined}
+              emptyMsg={savedSearches.length === 0 ? "Your searches appear here" : undefined}
               onRename={onRenameSearch}
               onDelete={onDeleteSearch}
               onAdd={onNewChat}
@@ -110,11 +93,11 @@ export function Sidebar({
 
             <NavSection
               label="CRM boards"
-              items={filteredLists}
+              items={lists}
               icon={<IconUsers size={13} />}
               activeNav={activeNav}
               onSelect={onSelect}
-              emptyMsg={q ? "No matches" : lists.length === 0 ? "Create your first board" : undefined}
+              emptyMsg={lists.length === 0 ? "Create your first board" : undefined}
               onRename={onRenameBoard}
               onDelete={onDeleteBoard}
               onAdd={onNewBoard}
@@ -123,7 +106,6 @@ export function Sidebar({
 
             <div className="sidebar-spacer" />
 
-            <LegacyLink />
             <UsageCard usage={usage} onOpenSettings={onOpenSettings} />
           </>
         )}
@@ -132,46 +114,7 @@ export function Sidebar({
   );
 }
 
-/** Escape hatch to the pre-rewrite static app (served at /legacy by the
- *  server). Always opens a fresh browser tab so it doesn't confuse the
- *  SPA router. */
-function LegacyLink() {
-  return (
-    <a
-      href="/legacy/"
-      target="_blank"
-      rel="noopener noreferrer"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "6px 10px",
-        marginBottom: 6,
-        fontSize: 11.5,
-        color: "var(--text-dim)",
-        textDecoration: "none",
-        borderRadius: 6,
-        border: "1px solid var(--hairline)",
-      }}
-      title="Open the pre-rewrite legacy app (same-tab fallback while the new Find pipeline stabilises)"
-    >
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.8 }}>
-        <path d="M10 3h3v3" />
-        <path d="M13 3l-7 7" />
-        <path d="M12 9v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" />
-      </svg>
-      <span>Legacy version</span>
-    </a>
-  );
-}
-
 // ---------- helpers ----------
-
-function filterByQuery(items: NavEntry[], q: string): NavEntry[] {
-  if (!q.trim()) return items;
-  const needle = q.toLowerCase();
-  return items.filter((i) => i.label.toLowerCase().includes(needle));
-}
 
 function NavSection({
   label, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete, onAdd, addTitle, scrollable,
