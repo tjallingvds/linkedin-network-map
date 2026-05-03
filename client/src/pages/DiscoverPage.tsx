@@ -928,14 +928,19 @@ export function DiscoverPage() {
                         m.keyMissing ? (
                           <div className="key-missing-card">
                             <div className="kmc-icon"><IconSparkle size={14} /></div>
-                            <div style={{ flex: 1 }}>
-                              <div className="kmc-title">Add your {m.keyMissing.providers.join(" + ")} key to get started</div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div className="kmc-title">Connect a model to get started</div>
                               <div className="kmc-body">
-                                Nontrivial uses your own API keys so your searches hit your own quota — nothing is stored on our servers.
+                                Nontrivial runs on your own API keys, so every search hits your own quota — nothing is stored on our side. Add a key from any one of:
+                              </div>
+                              <div className="kmc-providers">
+                                <span className="kmc-provider">OpenAI</span>
+                                <span className="kmc-provider">Claude (Anthropic)</span>
+                                <span className="kmc-provider">DeepSeek</span>
                               </div>
                             </div>
                             <button className="pill-btn primary" onClick={() => setSettingsOpen(true)}>
-                              Add keys
+                              Add a key
                             </button>
                           </div>
                         ) : (
