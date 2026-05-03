@@ -1280,9 +1280,8 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .stage-cell { position: relative; cursor: pointer; }
 
 /* Inside a table cell, the editor fills the entire grid slot so a click
-   anywhere in the row's slot lands on the editor, not on the row's own
-   click handler. The negative margin pulls each editor out into the
-   parent's 6px/10px padding zone. */
+   anywhere in the row's slot lands on the editor. The negative margin
+   pulls each editor out into the parent's 6px/10px padding zone. */
 .tbl-row .tbl-cell .ed-cell,
 .tbl-row .tbl-cell .stage-cell {
   display: flex; align-items: center;
@@ -1297,7 +1296,23 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   border: 1px solid var(--accent); border-radius: 0;
   box-shadow: inset 0 0 0 2px var(--accent-soft);
 }
-.tbl-row .tbl-cell .stage-cell:hover { background: var(--hairline); }
+
+/* Hover affordance lives on the .tbl-cell itself so the highlight
+   always fills the full grid slot. The editor inside has no hover
+   styling of its own in table contexts — we don't want a second box
+   inside the cell. */
+.tbl-row:not(.tbl-head) .tbl-cell {
+  transition: background 100ms, box-shadow 100ms;
+}
+.tbl-row:not(.tbl-head) .tbl-cell:hover {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px oklch(0.72 0.14 155 / 0.3);
+}
+.tbl-row .tbl-cell .ed-cell:hover,
+.tbl-row .tbl-cell .stage-cell:hover {
+  background: transparent;
+  box-shadow: none;
+}
 
 /* Multi-line / long-text cell display — preserves newlines, wraps, and
    stays readable inside the row. The display is clamped at 6 lines so a
