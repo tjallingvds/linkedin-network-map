@@ -178,20 +178,40 @@ function saveKanbanFields(boardId: string, ids: string[]) {
   try { localStorage.setItem(kanbanFieldsKey(boardId), JSON.stringify(ids)); } catch { /* noop */ }
 }
 
+/** Default row height in pixels. Matches what used to be the "medium" preset. */
+const DEFAULT_ROW_HEIGHT = 44;
+/** Map any legacy enum string ("short" / "medium" / "tall") OR a number
+ *  string back to a clamped px integer. Older boards stored the enum, so
+ *  this lets them load without an explicit migration. */
+function normaliseRowHeight(v: unknown): CrmRowHeight {
+  if (typeof v === "number" && Number.isFinite(v)) return clampRowHeight(v);
+  if (typeof v === "string") {
+    if (v === "short")  return 32;
+    if (v === "medium") return 44;
+    if (v === "tall")   return 60;
+    const n = parseInt(v, 10);
+    if (Number.isFinite(n)) return clampRowHeight(n);
+  }
+  return DEFAULT_ROW_HEIGHT;
+}
+function clampRowHeight(n: number): CrmRowHeight {
+  return Math.max(28, Math.min(200, Math.round(n)));
+}
+
 /** Read row height from localStorage as an instant first-paint cache. The
  *  server is the source of truth; this just stops the table from blinking
- *  back to "medium" on remount before the boards GET lands. */
+ *  on remount before the boards GET lands. */
 function loadRowHeightCached(boardId: string): CrmRowHeight {
-  if (!boardId) return "medium";
+  if (!boardId) return DEFAULT_ROW_HEIGHT;
   try {
     const raw = localStorage.getItem(rowHeightKey(boardId));
-    if (raw === "short" || raw === "medium" || raw === "tall") return raw;
+    if (raw) return normaliseRowHeight(raw);
   } catch { /* noop */ }
-  return "medium";
+  return DEFAULT_ROW_HEIGHT;
 }
 function cacheRowHeight(boardId: string, h: CrmRowHeight) {
   if (!boardId) return;
-  try { localStorage.setItem(rowHeightKey(boardId), h); } catch { /* noop */ }
+  try { localStorage.setItem(rowHeightKey(boardId), String(h)); } catch { /* noop */ }
 }
 
 /** Pull any user-defined columns out of the legacy localStorage config and
@@ -1830,7 +1850,7 @@ function TableView({
   };
 
   return (
-    <div className={`tbl-wrap rh-${rowHeight}`}>
+    <div className="tbl-wrap" style={{ "--rh": `${rowHeight}px` } as React.CSSProperties}>
       <div className="tbl">
         <div className="tbl-row tbl-head" style={{ gridTemplateColumns: gridTemplate }}>
           {visibleCols.map((c) => (
@@ -1872,38 +1892,6 @@ function TableView({
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-/** Toolbar pill for switching row height between short / medium / tall. */
-function RowHeightMenu({
-  value, onChange,
-}: { value: CrmRowHeight; onChange: (next: CrmRowHeight) => void }) {
-  const [open, setOpen] = useState(false);
-  const labels: Record<CrmRowHeight, string> = { short: "Short", medium: "Medium", tall: "Tall" };
-  return (
-    <div style={{ position: "relative" }}>
-      <button className="pill-btn" onClick={() => setOpen((o) => !o)} title="Row height">
-        <IconList size={12} />{labels[value]}
-      </button>
-      {open && (
-        <>
-          <div className="board-menu-bg" onClick={() => setOpen(false)} />
-          <div className="board-menu" style={{ minWidth: 160, right: 0, left: "auto" }}>
-            {(["short", "medium", "tall"] as const).map((h) => (
-              <button
-                key={h}
-                className={`bm-item${value === h ? " active" : ""}`}
-                onClick={() => { onChange(h); setOpen(false); }}
-              >
-                <span style={{ flex: 1 }}>{labels[h]}</span>
-                {value === h && <IconCheck size={11} />}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -2516,31 +2504,26 @@ export function CRMDrawer({
           </div>
 
           {contact.background && (
-            <div className="drawer-page-block">
-              <div className="dp-section-label">Background</div>
-              <div
-                className="drawer-bg-block"
-                // Background is LLM-generated markdown with inline links.
-                // Render it minimally — linkify [label](url) and preserve
-                // bullets. Source: trusted backend, no user input.
-                dangerouslySetInnerHTML={{ __html: renderBackgroundMarkdown(contact.background) }}
-              />
-            </div>
+            <div
+              className="drawer-bg-block"
+              // Background is LLM-generated markdown with inline links.
+              // Render it minimally — linkify [label](url) and preserve
+              // bullets. Source: trusted backend, no user input.
+              dangerouslySetInnerHTML={{ __html: renderBackgroundMarkdown(contact.background) }}
+            />
           )}
 
-          {/* Notion-style page body — one big freeform notes area. */}
-          <div className="drawer-page-block">
-            <div className="dp-section-label">Notes</div>
-            <textarea
-              className="drawer-page-notes"
-              defaultValue={contact.notes ?? ""}
-              placeholder="Type anything — meeting notes, follow-ups, ideas, what they said…"
-              onBlur={(e) => {
-                const v = e.target.value;
-                if ((contact.notes ?? "") !== v) onPatch(contact.id, { notes: v });
-              }}
-            />
-          </div>
+          {/* Notion-style page body — one big freeform notes area, no
+              header, just a typing surface like a real page. */}
+          <textarea
+            className="drawer-page-notes"
+            defaultValue={contact.notes ?? ""}
+            placeholder="Type anything — meeting notes, follow-ups, ideas, what they said…"
+            onBlur={(e) => {
+              const v = e.target.value;
+              if ((contact.notes ?? "") !== v) onPatch(contact.id, { notes: v });
+            }}
+          />
         </div>
         <div className="drawer-foot">
           {onDelete && (
@@ -2602,7 +2585,7 @@ export function CRMView({
   const [enriching, setEnriching] = useState(false);
   const [backgrounding, setBackgrounding] = useState(false);
   const [columns, setColumns] = useState<CrmColumnDef[]>(defaultColumns);
-  const [rowHeight, setRowHeight] = useState<CrmRowHeight>("medium");
+  const [rowHeight, setRowHeight] = useState<CrmRowHeight>(DEFAULT_ROW_HEIGHT);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
   const [stages, setStages] = useState<StageDef[]>(DEFAULT_STAGES);
   // Derived backward-compat shapes for callsites that haven't been
@@ -2765,10 +2748,10 @@ export function CRMView({
   // Same idea for row height.
   useEffect(() => {
     if (!active) return;
-    const rh = active.rowHeight;
-    if (rh === "short" || rh === "medium" || rh === "tall") {
-      setRowHeight(rh);
-      cacheRowHeight(active.id, rh);
+    if (active.rowHeight != null) {
+      const next = normaliseRowHeight(active.rowHeight);
+      setRowHeight(next);
+      cacheRowHeight(active.id, next);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id, active?.rowHeight]);
@@ -3027,9 +3010,6 @@ export function CRMView({
               <IconSheet size={12} />Table
             </button>
           </div>
-          {viewMode === "table" && (
-            <RowHeightMenu value={rowHeight} onChange={saveRowHeight} />
-          )}
         </div>
         <div className="crm-tools">
           <ActionsMenu>

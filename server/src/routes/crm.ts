@@ -274,7 +274,12 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     emoji: z.string().min(1).max(8).optional(),
     stages: z.array(stageDef).min(1).max(20).nullable().optional(),
     columns: z.array(columnDef).max(64).nullable().optional(),
-    rowHeight: z.enum(["short", "medium", "tall"]).nullable().optional(),
+    // Row height is now a pixel integer. Old enum values still come in
+    // from older clients — accept both and normalise on read.
+    rowHeight: z.union([
+      z.number().int().min(28).max(200),
+      z.enum(["short", "medium", "tall"]),
+    ]).nullable().optional(),
   }).parse(req.body);
 
   // Shared members can edit board config (stages, columns, row height) —
@@ -322,7 +327,17 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
   // Use an explicit sql`...`::jsonb cast so the value is unambiguous.
   if (body.stages !== undefined) update.stages = sql`${JSON.stringify(body.stages)}::jsonb`;
   if (body.columns !== undefined) update.columns = sql`${JSON.stringify(body.columns)}::jsonb`;
-  if (body.rowHeight !== undefined) update.row_height = body.rowHeight;
+  if (body.rowHeight !== undefined) {
+    // Coerce both incoming shapes to a stable px-string for the TEXT column.
+    const rh = body.rowHeight;
+    let stored: string | null = null;
+    if (rh == null) stored = null;
+    else if (typeof rh === "number") stored = String(rh);
+    else if (rh === "short")  stored = "32";
+    else if (rh === "medium") stored = "44";
+    else if (rh === "tall")   stored = "60";
+    update.row_height = stored;
+  }
 
   const row = await db
     .updateTable("crm_boards")

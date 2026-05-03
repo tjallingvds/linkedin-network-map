@@ -145,13 +145,16 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: flex; flex-direction: column; gap: 2px;
 }
 .dp-row {
-  display: grid; grid-template-columns: 140px 1fr 22px;
-  align-items: center; gap: 12px;
-  padding: 4px 0;
-  min-height: 28px;
+  display: grid; grid-template-columns: 120px 1fr 22px;
+  align-items: center; gap: 10px;
+  padding: 2px 6px; margin: 0 -6px;
+  min-height: 30px;
+  border-radius: 6px;
+  transition: background 100ms;
 }
+.dp-row:hover { background: var(--panel-2); }
 .dp-label {
-  font-size: 12px; color: var(--text-mute);
+  font-size: 12px; color: var(--text-mute); font-weight: 500;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 /* Delete-field button — fades in on row hover so deletions are
@@ -223,12 +226,17 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   outline: none;
 }
 .drawer-page-notes::placeholder { color: var(--text-mute); }
+/* Background brief — subtler than a boxed panel so it reads as inline
+   page content, not a separate card. */
 .drawer-bg-block {
-  padding: 10px 12px; border-radius: 8px;
-  background: var(--panel); border: 1px solid var(--hairline);
-  font-size: 12.5px; line-height: 1.55; color: var(--text);
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  background: transparent;
+  font-size: 12.5px; line-height: 1.6; color: var(--text-dim);
   white-space: pre-wrap;
 }
+.drawer-bg-block a { color: var(--accent); }
 
 /* Prospect card quick-access icons (LinkedIn / email). */
 .pc-quick { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
@@ -651,16 +659,16 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 /* Composer */
 .composer-wrap {
-  /* Was 12px 28px 16px with a heavy gradient fade that visually added
-     ~30px of empty space above the input. Tightened so the selection
-     bar sits flush against the composer. */
+  /* Centred + max-width capped so the input stops feeling like it's
+     stretching across the whole canvas on wider viewports. Padding kept
+     tight so the selection bar sits flush above. */
   padding: 4px 28px 12px;
-  /* Transparent — the parent .app already paints --shell. Stacking a
-     second shell-with-alpha on top made the strip behind the composer
-     look visibly darker than the canvas above it. */
   background: transparent;
+  display: flex; justify-content: center;
 }
 .composer {
+  width: 100%;
+  max-width: 760px;
   background: var(--panel); border: 1px solid var(--hairline-strong);
   border-radius: var(--r-lg);
   padding: 12px 14px 8px;
@@ -1836,10 +1844,10 @@ button:focus-visible { outline-offset: 3px; }
 /* ============== Spreadsheet-style table polish ============== */
 
 /* Row-height switch — applied to .tbl-wrap so all rows under it adopt it. */
-.tbl-wrap.rh-short  .tbl-row:not(.tbl-head) { min-height: 32px; }
-.tbl-wrap.rh-medium .tbl-row:not(.tbl-head) { min-height: 44px; }
-.tbl-wrap.rh-tall   .tbl-row:not(.tbl-head) { min-height: 60px; }
-.tbl-wrap.rh-tall   .tbl-cell { padding-top: 10px; padding-bottom: 10px; }
+/* Row height comes from a CSS var on the wrap, set inline by TableView
+   from the board's numeric rowHeight. Drag handle on the header bottom
+   updates this var live. */
+.tbl-wrap .tbl-row:not(.tbl-head) { min-height: var(--rh, 44px); }
 
 /* Header cell: hosts the editable label, the hover chevron, and a popover. */
 .tbl-cell.hdr {

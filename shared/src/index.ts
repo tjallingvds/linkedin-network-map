@@ -132,8 +132,20 @@ export interface CrmContact {
   /** User-defined columns: map of column-id → cell value. Optional for
    *  backward compat with clients that haven't loaded the new schema. */
   customFields?: Record<string, string>;
+  /** Notion-style long-form pages attached to this contact (meeting
+   *  notes, briefs, proposals, …). Each entry has its own title + body;
+   *  the drawer renders a Pages list with a focused editor view. */
+  documents?: CrmDocument[];
   positionIdx: number;
   createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmDocument {
+  id: string;
+  title: string;
+  body: string;
+  /** ISO timestamp of the last edit, used for sort + dirty checks. */
   updatedAt: string;
 }
 
@@ -185,7 +197,9 @@ export type CrmColumnType =
   | "person"
   | "select"; // internal: row-select checkbox
 
-export type CrmRowHeight = "short" | "medium" | "tall";
+/** Row height in pixels. Min 28, max 200. The legacy enum values map to:
+ *  short = 32, medium = 44, tall = 60. */
+export type CrmRowHeight = number;
 
 export interface CrmDropdownOption {
   value: string;

@@ -785,7 +785,13 @@ export function DiscoverPage() {
   // user's raw prompt — the title lives in chatList keyed by chatId and
   // gets updated as soon as the server returns one from /completion.
   const breadcrumb = useMemo(() => {
-    if (appMode === "crm") return ["Outreach CRM", crmViewMode === "kanban" ? "Pipeline board" : "All contacts"];
+    if (appMode === "crm") {
+      // Always show the actual board name as the second crumb regardless
+      // of whether the user is on the kanban or table view — switching
+      // views is intra-board navigation, not a different page.
+      const board = boardLists.find((b) => b.id === activeNav);
+      return ["CRM", board?.label ?? "Board"];
+    }
     if (view === "hero") return ["Discover", "New search"];
     const current = chatId ? chatList.find((c) => c.id === chatId) : undefined;
     if (current?.title && current.title !== "New search" && current.title !== "New chat") {
@@ -793,7 +799,7 @@ export function DiscoverPage() {
     }
     const firstUser = thread.find((m): m is Extract<ThreadEntry, { role: "user" }> => m.role === "user")?.text;
     return ["Discover", firstUser ? firstUser.slice(0, 40) + (firstUser.length > 40 ? "…" : "") : "Untitled"];
-  }, [appMode, crmViewMode, view, thread, chatId, chatList]);
+  }, [appMode, activeNav, boardLists, view, thread, chatId, chatList]);
 
   return (
     <div className="stage">

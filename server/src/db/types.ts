@@ -156,6 +156,8 @@ export interface CrmContactsTable {
   message_notes: string | null;
   background: string | null;
   custom_fields: Generated<Record<string, unknown>>;
+  /** Notion-style long-form pages attached to this contact. JSONB. */
+  documents: unknown | null;
   position_idx: Generated<number>;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
