@@ -2153,21 +2153,30 @@ button:focus-visible { outline-offset: 3px; }
   color: white;
 }
 
-/* Sticky first-column person — Excel-style frozen first data column for
-   wide tables. The select column at index 1 (36px) and the person column
-   at index 2 are pinned. */
+/* Sticky Person (first data column) — stays pinned to the left when the
+   table scrolls horizontally. Now that _select is gone, Person sits at
+   nth-child(1). Solid backgrounds + a higher z-index than non-sticky
+   cells stop other columns from bleeding under it as they scroll. */
 @media (min-width: 1100px) {
-  .tbl-row > .tbl-cell:nth-child(1),
-  .tbl-row > .tbl-cell:nth-child(2) {
-    position: sticky; z-index: 1;
-    background: inherit;
+  .tbl-row > .tbl-cell:nth-child(1) {
+    position: sticky;
+    left: 0;
+    z-index: 2;
   }
-  .tbl-row > .tbl-cell:nth-child(1) { left: 0; }
-  .tbl-row > .tbl-cell:nth-child(2) { left: 36px; }
-  .tbl-row.tbl-head > .tbl-cell:nth-child(1),
-  .tbl-row.tbl-head > .tbl-cell:nth-child(2) { background: var(--panel-2); z-index: 3; }
-  .tbl-row:not(.tbl-head) > .tbl-cell:nth-child(1),
-  .tbl-row:not(.tbl-head) > .tbl-cell:nth-child(2) { background: var(--shell); }
-  .tbl-row:not(.tbl-head):hover > .tbl-cell:nth-child(1),
-  .tbl-row:not(.tbl-head):hover > .tbl-cell:nth-child(2) { background: var(--panel-2); }
+  /* Header sticky-cell — sits above body cells (z 3) AND above the
+     sticky-top of the header strip (z 2). Solid panel-2 so headers to
+     the right don't ghost through. */
+  .tbl-row.tbl-head > .tbl-cell:nth-child(1) {
+    background: var(--panel-2);
+    z-index: 3;
+  }
+  /* Body sticky-cell — solid shell so body cells to the right don't
+     show through. Hover lifts both the cell-bg AND the row-bg the
+     same amount so the sticky cell never falls out of step. */
+  .tbl-row:not(.tbl-head) > .tbl-cell:nth-child(1) {
+    background: var(--shell);
+  }
+  .tbl-row:not(.tbl-head):hover > .tbl-cell:nth-child(1) {
+    background: var(--accent-soft);
+  }
 }
