@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CrmBoard, CrmContact, CrmImportRow, CrmStage, CrmTemp,
-  CrmColumnDef, CrmColumnType, CrmRowHeight, CrmDropdownOption,
+  CrmColumnDef, CrmColumnType, CrmRowHeight, CrmDropdownOption, CrmDocument,
 } from "@app/shared";
 import { api } from "../lib/api";
 import { useModal } from "./Modal";
@@ -991,6 +991,7 @@ const TYPE_LABELS: Record<CrmColumnType, string> = {
   link: "Link",
   date: "Date",
   checkbox: "Checkbox",
+  page: "Page",
   stage: "Stage",
   temp: "Temp",
   person: "Person",
@@ -1001,7 +1002,7 @@ const TYPE_LABELS: Record<CrmColumnType, string> = {
  *  Built-in types like "stage", "temp", "person", "select" are excluded — those
  *  are reserved for built-in columns and have specialized rendering. */
 const USER_PICKABLE_TYPES: CrmColumnType[] = [
-  "text", "longtext", "number", "dropdown", "email", "phone", "link", "date", "checkbox",
+  "text", "longtext", "number", "dropdown", "email", "phone", "link", "date", "checkbox", "page",
 ];
 
 const DROPDOWN_PALETTE = [
@@ -1102,6 +1103,43 @@ function LongTextCellEditor({
       onClick={(e) => { e.stopPropagation(); setEditing(true); }}
     >
       {v || <em style={{ color: "var(--text-mute)" }}>—</em>}
+    </span>
+  );
+}
+
+/** Page-column cell. The cell stores a document id pointing into the
+ *  contact's `documents` array. Clicking opens that page in the focused
+ *  Notion-style editor. Empty cells spin up a fresh doc, link it, and
+ *  open it in one go. */
+function PageCellEditor({
+  value, documents, onCreateLinked, onOpenExisting,
+}: {
+  value: string | null | undefined;
+  documents: CrmDocument[];
+  /** Create a new doc, store its id as this cell's value, open it. */
+  onCreateLinked: () => void;
+  /** Open an already-linked doc in the editor. */
+  onOpenExisting: (docId: string) => void;
+}) {
+  const doc = value ? documents.find((d) => d.id === value) : null;
+  const open = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (doc) onOpenExisting(doc.id);
+    else onCreateLinked();
+  };
+  return (
+    <span className="ed-cell page-cell" onClick={open}>
+      {doc ? (
+        <span className="page-chip">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flex: "0 0 11px" }}>
+            <path d="M3 2h6l4 4v8a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" />
+            <path d="M9 2v4h4" />
+          </svg>
+          <span className="page-chip-title">{doc.title || "Untitled"}</span>
+        </span>
+      ) : (
+        <span className="page-empty">+ Open page</span>
+      )}
     </span>
   );
 }
@@ -1634,7 +1672,11 @@ function ColumnTypeWizard({
       // Fixed pixel widths only — fr units stretch with the available
       // space, which means the column resizes whenever the sidebar
       // collapses. Pixel widths keep the layout stable across viewports.
-      width: pickedType === "checkbox" ? "80px" : pickedType === "number" ? "90px" : "200px",
+      width:
+        pickedType === "checkbox" ? "80px" :
+        pickedType === "number" ? "90px" :
+        pickedType === "page" ? "180px" :
+        "200px",
       options: pickedType === "dropdown" ? [] : undefined,
     });
     onClose();
@@ -1720,7 +1762,7 @@ function AddColumnButton({
 }
 
 function TableView({
-  contacts, onOpen, onPatch, columns, onColumnsChange, stages, rowHeight, onRowHeightChange,
+  contacts, onOpen, onPatch, columns, onColumnsChange, stages, rowHeight, onRowHeightChange, onOpenPage,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
@@ -1729,6 +1771,9 @@ function TableView({
   onColumnsChange: (next: CrmColumnDef[]) => void;
   stages: StageDef[];
   rowHeight: CrmRowHeight;
+  /** Open the focused page editor for a given contact + doc id. Used by
+   *  Page-type cells and by the drawer's Pages list. */
+  onOpenPage: (contact: CrmContact, docId: string) => void;
   /** Persist a new row height (px). Drag-resize from the header bottom
    *  edge calls this on pointer release. */
   onRowHeightChange: (next: CrmRowHeight) => void;
@@ -1870,6 +1915,23 @@ function TableView({
         case "date":     return <DateCellEditor value={val} onSave={setVal} />;
         case "checkbox": return <CheckboxCellEditor value={val} onSave={setVal} />;
         case "longtext": return <LongTextCellEditor value={val} onSave={setVal} />;
+        case "page": {
+          const docs = p.documents ?? [];
+          return (
+            <PageCellEditor
+              value={val}
+              documents={docs}
+              onOpenExisting={(docId) => onOpenPage(p, docId)}
+              onCreateLinked={() => {
+                const id = `doc_${Math.random().toString(36).slice(2, 10)}`;
+                const now = new Date().toISOString();
+                const nextDocs = [...docs, { id, title: "Untitled", body: "", updatedAt: now }];
+                onPatch(p.id, { documents: nextDocs, customFields: { [col.id]: id } });
+                onOpenPage(p, id);
+              }}
+            />
+          );
+        }
         case "text":
         default:         return <EditableCell value={val} onSave={setVal} />;
       }
@@ -2479,7 +2541,7 @@ function PageEditorView({
 }
 
 export function CRMDrawer({
-  contact, idx, onClose, onPatch, onDelete, columns = [], stages = DEFAULT_STAGES, onColumnsChange,
+  contact, idx, onClose, onPatch, onDelete, columns = [], stages = DEFAULT_STAGES, onColumnsChange, initialOpenPageId,
 }: {
   contact: CrmContact;
   idx: number;
@@ -2491,12 +2553,19 @@ export function CRMDrawer({
   stages?: StageDef[];
   /** Persist a schema change (used by the inline "+ Add field" button). */
   onColumnsChange?: (next: CrmColumnDef[]) => void;
+  /** When the user clicks a Page-type cell in the table, the parent
+   *  passes the doc id so the drawer mounts directly into the editor. */
+  initialOpenPageId?: string | null;
 }) {
   const modal = useModal();
   const stageList = stages.length > 0 ? stages : DEFAULT_STAGES;
 
   // When a page is open the drawer body swaps to the editor view.
-  const [openPageId, setOpenPageId] = useState<string | null>(null);
+  const [openPageId, setOpenPageId] = useState<string | null>(initialOpenPageId ?? null);
+  // Honour later changes to initialOpenPageId without forcing a remount —
+  // useful when the user clicks a different page cell while the drawer
+  // is already open for the same contact.
+  useEffect(() => { if (initialOpenPageId) setOpenPageId(initialOpenPageId); }, [initialOpenPageId]);
   const documents = contact.documents ?? [];
   const openPage = openPageId ? documents.find((d) => d.id === openPageId) : null;
 
@@ -2549,6 +2618,23 @@ export function CRMDrawer({
         case "date":     return <DateCellEditor value={val} onSave={setVal} />;
         case "checkbox": return <CheckboxCellEditor value={val} onSave={setVal} />;
         case "longtext": return <LongTextCellEditor value={val} onSave={setVal} />;
+        case "page": {
+          const docs = contact.documents ?? [];
+          return (
+            <PageCellEditor
+              value={val}
+              documents={docs}
+              onOpenExisting={(docId) => setOpenPageId(docId)}
+              onCreateLinked={() => {
+                const id = `doc_${Math.random().toString(36).slice(2, 10)}`;
+                const now = new Date().toISOString();
+                const nextDocs = [...docs, { id, title: "Untitled", body: "", updatedAt: now }];
+                onPatch(contact.id, { documents: nextDocs, customFields: { [col.id]: id } });
+                setOpenPageId(id);
+              }}
+            />
+          );
+        }
         default:         return <EditableCell value={val} onSave={setVal} />;
       }
     }
@@ -2759,6 +2845,13 @@ export function CRMView({
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [openContact, setOpenContact] = useState<CrmContact | null>(null);
+  // When the user clicks a Page-type cell in the table, we open the
+  // contact's drawer AND focus the specific page in the editor view.
+  const [drawerInitialPageId, setDrawerInitialPageId] = useState<string | null>(null);
+  const openPage = (contact: CrmContact, docId: string) => {
+    setOpenContact(contact);
+    setDrawerInitialPageId(docId);
+  };
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
   const [backgrounding, setBackgrounding] = useState(false);
@@ -3271,6 +3364,7 @@ export function CRMView({
           stages={stages}
           rowHeight={rowHeight}
           onRowHeightChange={saveRowHeight}
+          onOpenPage={openPage}
         />
       )}
 
@@ -3310,10 +3404,11 @@ export function CRMView({
         <CRMDrawer
           contact={openContact}
           idx={contacts.findIndex((c) => c.id === openContact.id)}
-          onClose={() => setOpenContact(null)}
+          onClose={() => { setOpenContact(null); setDrawerInitialPageId(null); }}
           columns={columns}
           onColumnsChange={saveColumns}
           stages={stages}
+          initialOpenPageId={drawerInitialPageId}
           onPatch={(id, patch) => {
             patchContact(id, patch);
             setOpenContact((c) => {

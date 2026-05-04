@@ -264,7 +264,7 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     label: z.string().max(60),
     type: z.enum([
       "text", "longtext", "number", "dropdown", "email", "phone",
-      "link", "date", "checkbox", "stage", "temp", "person", "select",
+      "link", "date", "checkbox", "page", "stage", "temp", "person", "select",
     ]),
     width: z.string().max(30).optional(),
     hidden: z.boolean().optional(),

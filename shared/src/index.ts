@@ -192,6 +192,10 @@ export type CrmColumnType =
   | "link"
   | "date"
   | "checkbox"
+  /** Each cell links to its own per-row Notion-style page. The cell
+   *  stores the document id; the document body lives on the contact's
+   *  `documents` JSONB array. */
+  | "page"
   | "stage"
   | "temp"
   | "person"

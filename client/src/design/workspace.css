@@ -278,6 +278,27 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .page-body::placeholder { color: var(--text-mute); }
 
+/* Page-type cell — chip with a doc icon + title when linked, faint
+   "+ Open page" affordance when empty. Click anywhere in the cell to
+   open the focused page editor. */
+.page-cell { cursor: pointer; }
+.page-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 9px; border-radius: 6px;
+  background: var(--accent-soft); color: var(--accent);
+  font-size: 11.5px; font-weight: 500;
+  max-width: 100%;
+}
+.page-chip-title {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.page-empty {
+  font-size: 11.5px; color: var(--text-mute);
+  font-style: italic;
+}
+.tbl-row .tbl-cell .page-cell:hover .page-empty { color: var(--accent); }
+
 /* Prospect card quick-access icons (LinkedIn / email). */
 .pc-quick { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
 .pc-quick-btn {
