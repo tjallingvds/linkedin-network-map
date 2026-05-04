@@ -306,21 +306,6 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     await sql`ALTER TABLE crm_boards ADD COLUMN IF NOT EXISTS row_height TEXT`.execute(db);
   } catch { /* already exists */ }
 
-  // If the column schema is changing AND the new schema drops some custom
-  // columns, scrub their keys from every contact's custom_fields so we
-  // don't leak orphaned data forever. Built-in column drops aren't real
-  // deletions (the underlying field stays); they only hide on the table.
-  let droppedCustomIds: string[] = [];
-  if (body.columns !== undefined && body.columns !== null) {
-    type PrevCol = { id?: string; builtin?: boolean };
-    const prevColumns = Array.isArray(ownerCheck?.columns) ? ownerCheck!.columns as PrevCol[] : [];
-    const prevCustomIds = new Set(
-      prevColumns.filter((c) => c && !c.builtin && typeof c.id === "string").map((c) => c.id as string),
-    );
-    const nextIds = new Set(body.columns.map((c) => c.id));
-    droppedCustomIds = [...prevCustomIds].filter((id) => !nextIds.has(id));
-  }
-
   const update: Record<string, unknown> = { updated_at: new Date() };
   if (body.name !== undefined) update.name = body.name;
   if (body.emoji !== undefined) update.emoji = body.emoji;
@@ -350,19 +335,13 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     .executeTakeFirst();
   if (!row) return res.status(404).json({ error: "not_found" });
 
-  // After saving the new schema, drop the orphaned keys from every
-  // contact on the board. One UPDATE per dropped key keeps it simple and
-  // safe; the typical drop is one column at a time.
-  if (droppedCustomIds.length > 0) {
-    for (const cid of droppedCustomIds) {
-      await sql`
-        UPDATE crm_contacts
-           SET custom_fields = custom_fields - ${cid},
-               updated_at = NOW()
-         WHERE board_id = ${row.id}
-      `.execute(db);
-    }
-  }
+  // We deliberately don't scrub the custom_fields keys when a column is
+  // dropped from the schema. Wiping data on column-delete turned out to
+  // be catastrophic when the user clicked the wrong button — entire
+  // columns of work erased in one click. Now column delete only removes
+  // the schema entry; the cell values stay attached to each contact's
+  // custom_fields under the old id (orphaned but recoverable). The
+  // chevron menu's confirm modal still warns the user before deleting.
 
   // Pick the most specific event type so the client knows whether to
   // also refresh stages alongside the boards refetch. Column / row-height

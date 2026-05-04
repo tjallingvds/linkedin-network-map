@@ -155,7 +155,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: flex; flex-direction: column; gap: 2px;
 }
 .dp-row {
-  display: grid; grid-template-columns: 120px 1fr 22px;
+  display: grid; grid-template-columns: 120px 1fr;
   align-items: center; gap: 10px;
   padding: 2px 6px; margin: 0 -6px;
   min-height: 30px;

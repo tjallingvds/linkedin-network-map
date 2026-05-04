@@ -1010,28 +1010,33 @@ function LinkedInCell({
   // Shorten for display: strip protocol + trailing slash so the cell
   // shows "linkedin.com/in/username" rather than a full https URL.
   const display = value.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
+  // Single click anywhere in the cell starts editing — clicking on
+  // the value is meant to be a "select to change" gesture, not "open
+  // in new tab". The small ↗ icon next to the text is the affordance
+  // for actually opening the URL.
   return (
     <span
       className="ed-cell"
-      onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
-      onClick={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); setEditing(true); }}
       style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}
-      title="Double-click to edit"
+      title="Click to edit"
     >
+      <span style={{ color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+        {display}
+      </span>
       <a
         href={value}
         target="_blank"
         rel="noopener noreferrer"
-        style={{
-          color: "var(--accent)",
-          textDecoration: "none",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          flex: 1,
-        }}
+        title="Open"
+        onClick={(e) => e.stopPropagation()}
+        style={{ color: "var(--text-mute)", flex: "0 0 auto", display: "inline-flex" }}
       >
-        {display}
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M10 3h3v3" />
+          <path d="M13 3l-7 7" />
+          <path d="M12 9v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" />
+        </svg>
       </a>
     </span>
   );
@@ -1543,21 +1548,26 @@ function LinkCellEditor({
   return (
     <span
       className="ed-cell"
-      onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
-      onClick={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); setEditing(true); }}
       style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}
-      title="Double-click to edit"
+      title="Click to edit"
     >
+      <span style={{ color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+        {display}
+      </span>
       <a
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        style={{
-          color: "var(--accent)", textDecoration: "none",
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1,
-        }}
+        title="Open"
+        onClick={(e) => e.stopPropagation()}
+        style={{ color: "var(--text-mute)", flex: "0 0 auto", display: "inline-flex" }}
       >
-        {display}
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M10 3h3v3" />
+          <path d="M13 3l-7 7" />
+          <path d="M12 9v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" />
+        </svg>
       </a>
     </span>
   );
@@ -1593,18 +1603,27 @@ function EmailCellEditor({
   return (
     <span
       className="ed-cell"
-      onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
-      onClick={(e) => { e.stopPropagation(); if (!value) setEditing(true); }}
+      onClick={(e) => { e.stopPropagation(); setEditing(true); }}
       style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}
-      title={value ? "Double-click to edit" : "Click to add"}
+      title="Click to edit"
     >
       {value ? (
-        <a
-          href={`mailto:${value}`}
-          style={{ color: "var(--accent)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}
-        >
-          {value}
-        </a>
+        <>
+          <span style={{ color: "var(--accent)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+            {value}
+          </span>
+          <a
+            href={`mailto:${value}`}
+            title={`Email ${value}`}
+            onClick={(e) => e.stopPropagation()}
+            style={{ color: "var(--text-mute)", flex: "0 0 auto", display: "inline-flex" }}
+          >
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M2 4h12v8H2z" />
+              <path d="M2 4l6 5 6-5" />
+            </svg>
+          </a>
+        </>
       ) : (
         <em style={{ color: "var(--text-mute)" }}>—</em>
       )}
@@ -1772,7 +1791,7 @@ function HeaderCell({
                       setMenuOpen(false);
                       const ok = await modal.confirm({
                         title: `Delete the "${col.label}" column?`,
-                        message: `This removes the column from the table AND clears its value on every contact on this board. This can't be undone.`,
+                        message: `The column is removed from the table. The cell values stay attached to each contact, so re-adding a column won't restore them visibly — but no data is wiped from the database.`,
                         confirmLabel: "Delete column",
                         destructive: true,
                       });
@@ -2927,23 +2946,6 @@ export function CRMDrawer({
               <div key={c.id} className="dp-row">
                 <span className="dp-label">{c.label}</span>
                 <div className="dp-value">{renderProp(c)}</div>
-                {onColumnsChange && (
-                  <button
-                    className="dp-del"
-                    title={`Delete the "${c.label}" field for every contact`}
-                    onClick={async () => {
-                      const ok = await modal.confirm({
-                        title: `Delete the "${c.label}" field?`,
-                        message: `This removes the column from the table AND clears its value on every contact on this board. This can't be undone.`,
-                        confirmLabel: "Delete field",
-                        destructive: true,
-                      });
-                      if (ok) onColumnsChange(columns.filter((x) => x.id !== c.id));
-                    }}
-                  >
-                    <IconClose size={11} />
-                  </button>
-                )}
               </div>
             ))}
             {onColumnsChange && (
