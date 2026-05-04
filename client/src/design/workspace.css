@@ -1232,6 +1232,29 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   transition: transform 140ms;
 }
 .kanban-bar-btn:hover { transform: scale(1.2); }
+
+/* Drag handle hint on the kanban head — column-grab cursor when the
+   user can drag-reorder. */
+.kanban-head { cursor: grab; }
+.kanban-head:active { cursor: grabbing; }
+.kanban-head input,
+.kanban-head button { cursor: pointer; }
+.kanban-head .kanban-title-input { cursor: text; }
+
+/* Drop-edge indicator while dragging a stage — accent bar on the side
+   the column will land on. */
+.kanban-col.stage-drop-left::before,
+.kanban-col.stage-drop-right::after {
+  content: ''; position: absolute;
+  top: 4px; bottom: 4px; width: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 0 8px var(--accent);
+  pointer-events: none;
+  z-index: 4;
+}
+.kanban-col.stage-drop-left::before  { left: -6px; }
+.kanban-col.stage-drop-right::after  { right: -6px; }
 .kanban-title {
   font-size: 12px; font-weight: 600; color: var(--text); letter-spacing: -0.005em;
   flex: 1; min-width: 0;

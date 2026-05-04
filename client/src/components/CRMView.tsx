@@ -628,6 +628,7 @@ function KanbanFieldsMenu({
  *  reassignment of contacts in that stage to the next remaining one). */
 function KanbanColumnHeader({
   stage, count, isFirst, isOnly, onRename, onCycleColor, onDelete,
+  onDragStart, onDragEnd,
 }: {
   stage: StageDef;
   count: number;
@@ -636,6 +637,9 @@ function KanbanColumnHeader({
   onRename: (label: string) => void;
   onCycleColor: () => void;
   onDelete: () => void;
+  /** Drag handlers for stage-reorder (the head bar is the handle). */
+  onDragStart: (e: React.DragEvent) => void;
+  onDragEnd: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(stage.label);
@@ -651,11 +655,20 @@ function KanbanColumnHeader({
   };
 
   return (
-    <div className="kanban-head">
+    <div
+      className="kanban-head"
+      // Grab the header to drag-reorder the whole stage. Buttons / inputs
+      // inside don't fire dragstart, so rename + delete + color cycle
+      // still work.
+      draggable={!editing}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+    >
       <button
         className="kanban-bar kanban-bar-btn"
         title="Cycle color"
         onClick={onCycleColor}
+        draggable={false}
       />
       {editing ? (
         <input
@@ -673,7 +686,7 @@ function KanbanColumnHeader({
         <span
           className="kanban-title"
           onDoubleClick={() => setEditing(true)}
-          title="Double-click to rename"
+          title="Drag to reorder · Double-click to rename"
         >
           {stage.label}
         </span>
@@ -684,6 +697,7 @@ function KanbanColumnHeader({
           className="kanban-del"
           title="Delete stage"
           onClick={onDelete}
+          draggable={false}
         >
           <IconClose size={11} />
         </button>
@@ -716,6 +730,26 @@ function KanbanBoard({
   const [newName, setNewName] = useState("");
   const newRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (adding) setTimeout(() => newRef.current?.focus(), 0); }, [adding]);
+
+  // Stage drag-reorder. Uses a separate MIME type so the existing
+  // contact-card drag (text/plain = contact id) doesn't collide with
+  // stage drag (text/x-stage-id). Drop-edge is left/right of the column.
+  const [draggingStageId, setDraggingStageId] = useState<string | null>(null);
+  const [stageDropTarget, setStageDropTarget] = useState<{ id: string; edge: "left" | "right" } | null>(null);
+
+  const reorderStages = (sourceId: string, targetId: string, edge: "left" | "right") => {
+    if (sourceId === targetId) return;
+    const next = list.slice();
+    const sourceIdx = next.findIndex((s) => s.id === sourceId);
+    if (sourceIdx < 0) return;
+    const [moved] = next.splice(sourceIdx, 1);
+    if (!moved) return;
+    let insertAt = next.findIndex((s) => s.id === targetId);
+    if (edge === "right") insertAt += 1;
+    if (insertAt < 0) insertAt = next.length;
+    next.splice(insertAt, 0, moved);
+    onStagesChange(next);
+  };
 
   const list = stages.length > 0 ? stages : DEFAULT_STAGES;
   const validIds = new Set(list.map((s) => s.id));
@@ -761,12 +795,24 @@ function KanbanBoard({
       {list.map((stage) => {
         const items = contacts.filter((p) => p.stage === stage.id);
         const isOver = overStage === stage.id && draggingId != null;
+        const stageDropEdge = stageDropTarget?.id === stage.id ? stageDropTarget.edge : null;
         return (
           <div
             key={stage.id}
-            className={`kanban-col${isOver ? " drag-over" : ""}`}
+            className={`kanban-col${isOver ? " drag-over" : ""}${stageDropEdge ? ` stage-drop-${stageDropEdge}` : ""}`}
             style={{ "--stage-tint": stage.tint, "--stage-color": stage.color } as React.CSSProperties}
             onDragOver={(e) => {
+              // Two drag flavours can land here: a contact-card drag (text/plain)
+              // and a stage-reorder drag (text/x-stage-id). Stage drag wins —
+              // it sets stageDropTarget; card drag highlights the column.
+              if (draggingStageId && draggingStageId !== stage.id) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                const edge = e.clientX < rect.left + rect.width / 2 ? "left" : "right";
+                setStageDropTarget((cur) => (cur?.id === stage.id && cur.edge === edge ? cur : { id: stage.id, edge }));
+                return;
+              }
               if (!draggingId) return;
               e.preventDefault();
               e.dataTransfer.dropEffect = "move";
@@ -775,6 +821,12 @@ function KanbanBoard({
             onDragLeave={() => { if (overStage === stage.id) setOverStage(null); }}
             onDrop={(e) => {
               e.preventDefault();
+              if (draggingStageId) {
+                if (stageDropTarget) reorderStages(draggingStageId, stageDropTarget.id, stageDropTarget.edge);
+                setDraggingStageId(null);
+                setStageDropTarget(null);
+                return;
+              }
               const id = e.dataTransfer.getData("text/plain") || draggingId;
               setOverStage(null);
               setDraggingId(null);
@@ -792,6 +844,12 @@ function KanbanBoard({
               onRename={(label) => renameStage(stage.id, label)}
               onCycleColor={() => cycleStageColor(stage.id)}
               onDelete={() => deleteStage(stage.id)}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/x-stage-id", stage.id);
+                setDraggingStageId(stage.id);
+              }}
+              onDragEnd={() => { setDraggingStageId(null); setStageDropTarget(null); }}
             />
             <div className="kanban-list">
               {items.map((p) => (
