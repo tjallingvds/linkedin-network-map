@@ -3517,6 +3517,12 @@ export function CRMView({
           </div>
         </div>
         <div className="crm-tools">
+          {classifyingSkill && (
+            <span className="crm-progress-pill" role="status" aria-live="polite">
+              <span className="crm-spinner" aria-hidden="true" />
+              Classifying skill…
+            </span>
+          )}
           <ActionsMenu>
             {(close) => (
               <>
