@@ -11,10 +11,14 @@ import { sql, type Kysely } from "kysely";
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function up(db: Kysely<any>): Promise<void> {
+  // crm_contacts.id is UUID (the existing schema) — the FK column has to
+  // match. The attachment id stays TEXT because the client mints it as
+  // a short slug ("att_xyz") so callers can reference it locally before
+  // the upload round-trips.
   await sql`
     CREATE TABLE IF NOT EXISTS crm_attachments (
       id TEXT PRIMARY KEY,
-      contact_id TEXT NOT NULL REFERENCES crm_contacts(id) ON DELETE CASCADE,
+      contact_id UUID NOT NULL REFERENCES crm_contacts(id) ON DELETE CASCADE,
       filename TEXT NOT NULL,
       mime TEXT NOT NULL,
       size INTEGER NOT NULL,

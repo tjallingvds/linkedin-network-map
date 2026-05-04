@@ -1131,7 +1131,7 @@ router.post(
       await sql`
         CREATE TABLE IF NOT EXISTS crm_attachments (
           id TEXT PRIMARY KEY,
-          contact_id TEXT NOT NULL REFERENCES crm_contacts(id) ON DELETE CASCADE,
+          contact_id UUID NOT NULL REFERENCES crm_contacts(id) ON DELETE CASCADE,
           filename TEXT NOT NULL,
           mime TEXT NOT NULL,
           size INTEGER NOT NULL,
