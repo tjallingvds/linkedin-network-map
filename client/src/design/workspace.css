@@ -5,11 +5,6 @@
   --shell: rgba(255, 253, 250, 0.78);
   --panel: rgba(255, 255, 255, 0.62);
   --panel-2: rgba(255, 255, 255, 0.42);
-  /* Fully opaque variants — used on sticky cells / overlays where the
-     translucent design-system colours would let underlying content
-     bleed through. */
-  --shell-solid: rgb(248, 245, 240);
-  --panel-2-solid: rgb(238, 232, 222);
   --hairline: rgba(20, 14, 40, 0.08);
   --hairline-strong: rgba(20, 14, 40, 0.14);
   --text: #1a1530;
@@ -35,8 +30,6 @@
   --shell: rgba(8, 6, 14, 0.78);
   --panel: rgba(18, 14, 28, 0.72);
   --panel-2: rgba(28, 22, 42, 0.55);
-  --shell-solid: rgb(8, 6, 14);
-  --panel-2-solid: rgb(28, 22, 42);
   --hairline: rgba(255, 255, 255, 0.07);
   --hairline-strong: rgba(255, 255, 255, 0.14);
   --text: #ece8f5;
@@ -316,7 +309,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   z-index: 221;
   display: flex; flex-direction: column;
   border-radius: 16px;
-  background: var(--shell-solid);
+  /* Same effective tone as the rest of the workspace, but opaque so
+     the table behind doesn't bleed through. */
+  background:
+    linear-gradient(var(--shell), var(--shell)),
+    var(--bg-0);
   border: 1px solid var(--hairline-strong);
   box-shadow: 0 30px 80px rgba(0,0,0,0.25), 0 8px 24px rgba(0,0,0,0.1);
   animation: app-modal-fade 160ms ease-out;
@@ -2277,20 +2274,27 @@ button:focus-visible { outline-offset: 3px; }
     left: 0;
     z-index: 2;
   }
-  /* Header sticky-cell — fully opaque so headers to the right don't
-     bleed through during horizontal scroll. */
+  /* Sticky cells need an opaque backdrop so other cells can't scroll
+     through them. Re-paint the same translucent layer over the
+     wallpaper so the effective colour is identical to a regular cell —
+     no visible difference, just no transparency. */
   .tbl-row.tbl-head > .tbl-cell:nth-child(1) {
-    background: var(--panel-2-solid);
+    background:
+      linear-gradient(var(--panel-2), var(--panel-2)),
+      var(--bg-0);
     z-index: 3;
   }
-  /* Body sticky-cell — fully opaque so body content to the right
-     doesn't bleed through. The translucent --shell var paints over a
-     wallpaper so other cells were ghosting through; --shell-solid
-     drops the alpha entirely. */
   .tbl-row:not(.tbl-head) > .tbl-cell:nth-child(1) {
-    background: var(--shell-solid);
+    background:
+      linear-gradient(var(--shell), var(--shell)),
+      var(--bg-0);
   }
+  /* Hover state stays in the same effective tone as a non-sticky
+     hovered cell — accent-soft over shell over the wallpaper. */
   .tbl-row:not(.tbl-head):hover > .tbl-cell:nth-child(1) {
-    background: var(--panel-2-solid);
+    background:
+      linear-gradient(var(--accent-soft), var(--accent-soft)),
+      linear-gradient(var(--shell), var(--shell)),
+      var(--bg-0);
   }
 }
