@@ -147,30 +147,24 @@ function rowHeightKey(boardId: string) { return `crm.rowheight.v1.${boardId}`; }
 function legacyColsKey(boardId: string) { return `crm.cols.v1.${boardId}`; }
 function legacyCustomColsKey(boardId: string) { return `crm.customcols.v1.${boardId}`; }
 
-/** Fields the user can opt into showing on each kanban card. Order matters. */
-const KANBAN_FIELD_OPTIONS = [
-  { id: "title",        label: "Title" },
-  { id: "company",      label: "Company" },
-  { id: "email",        label: "Email" },
-  { id: "phone",        label: "Phone" },
-  { id: "linkedin",     label: "LinkedIn" },
-  { id: "temp",         label: "Temp" },
-  { id: "nextStep",     label: "Next step" },
-  { id: "source",       label: "Source" },
-  { id: "messageNotes", label: "Personalize" },
-  { id: "notes",        label: "Notes" },
-] as const;
-const KANBAN_DEFAULT = ["title", "company"];
+/** Kanban card fields are derived from the board's column schema —
+ *  whatever the user has on their table is what the picker offers. By
+ *  default new boards show no fields on the card (just the name); the
+ *  user opts each column in via the Card fields menu. */
+const KANBAN_DEFAULT: string[] = [];
 
-function loadKanbanFields(boardId: string, customColIds: string[]): string[] {
-  const allIds = [...KANBAN_FIELD_OPTIONS.map((f) => f.id), ...customColIds];
+function loadKanbanFields(boardId: string): string[] {
   if (!boardId) return KANBAN_DEFAULT;
   try {
     const raw = localStorage.getItem(kanbanFieldsKey(boardId));
     if (!raw) return KANBAN_DEFAULT;
     const arr = JSON.parse(raw) as unknown;
     if (!Array.isArray(arr)) return KANBAN_DEFAULT;
-    return (arr as string[]).filter((id) => allIds.includes(id));
+    // Don't filter against valid column ids here — the schema may not be
+    // loaded yet when this runs. The renderer / picker filter at use
+    // time so a saved id pointing at a column that no longer exists is
+    // simply ignored, not deleted.
+    return (arr as string[]).filter((id) => typeof id === "string");
   } catch { return KANBAN_DEFAULT; }
 }
 function saveKanbanFields(boardId: string, ids: string[]) {
@@ -373,7 +367,7 @@ function rowsToContacts(rows: string[][]): CrmImportRow[] {
 // ========== Pieces ==========
 
 function KanbanCard({
-  p, idx, onOpen, onDelete, onDragStart, onDragEnd, dragging, fields, customCols,
+  p, idx, onOpen, onDelete, onDragStart, onDragEnd, dragging, fields, columns,
 }: {
   p: CrmContact;
   idx: number;
@@ -384,37 +378,52 @@ function KanbanCard({
   dragging: boolean;
   /** Ordered field ids the user wants shown on the card. "name" is implicit. */
   fields: string[];
-  customCols: CustomColumn[];
+  /** The board's full column schema — the card derives BOTH which fields
+   *  exist AND how to render them from this. No hardcoded built-in list. */
+  columns: CrmColumnDef[];
 }) {
   const modal = useModal();
-  const customById = Object.fromEntries(customCols.map((c) => [c.id, c]));
+  const colById = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
+
+  /** Read the cell value for this contact + column. Built-in columns
+   *  back real contact fields; everything else lives in customFields. */
+  const readValue = (col: CrmColumnDef): string | null => {
+    if (col.builtin) {
+      switch (col.id) {
+        case "title":        return p.title ?? null;
+        case "company":      return p.company ?? null;
+        case "email":        return p.email ?? null;
+        case "phone":        return p.phone ?? null;
+        case "linkedin":     return p.linkedin ?? null;
+        case "temp":         return p.temp ?? null;
+        case "nextStep":     return p.nextStep ?? null;
+        case "source":       return p.source ?? null;
+        case "messageNotes": return p.messageNotes ?? null;
+        case "notes":        return p.notes ?? null;
+        case "sent":         return p.sent != null ? String(p.sent) : null;
+        case "opens":        return p.opens != null ? String(p.opens) : null;
+        case "replies":      return p.replies != null ? String(p.replies) : null;
+        default:             return null;
+      }
+    }
+    return (p.customFields ?? {})[col.id] ?? null;
+  };
 
   const renderField = (id: string): React.ReactNode => {
-    const custom = customById[id];
-    const raw: string | null | undefined =
-      id === "title" ? p.title :
-      id === "company" ? p.company :
-      id === "email" ? p.email :
-      id === "phone" ? p.phone :
-      id === "linkedin" ? p.linkedin :
-      id === "temp" ? p.temp :
-      id === "nextStep" ? p.nextStep :
-      id === "source" ? p.source :
-      id === "messageNotes" ? p.messageNotes ?? null :
-      id === "notes" ? p.notes :
-      custom ? (p.customFields ?? {})[id] ?? null :
-      null;
+    const col = colById.get(id);
+    if (!col) return null;
+    const raw = readValue(col);
     if (!raw) return null;
 
     // Dropdown columns (e.g. an "Assignee" picker) render their value as
     // a coloured chip on the card so it actually looks like an
     // assignment / status, not just plain text.
-    if (custom?.type === "dropdown") {
-      const opt = (custom.options ?? []).find((o) => o.value === raw);
+    if (col.type === "dropdown") {
+      const opt = (col.options ?? []).find((o) => o.value === raw);
       const color = opt?.color ?? "oklch(0.7 0.04 280)";
       return (
         <div key={id} className="kc-field">
-          <span className="kc-field-label">{custom.label}:</span>
+          <span className="kc-field-label">{col.label}:</span>
           <span
             className="tbl-stage"
             style={{ "--stage-color": color, "--stage-tint": tintFor(color) } as React.CSSProperties}
@@ -425,9 +434,23 @@ function KanbanCard({
       );
     }
 
+    // Page-type cells aren't useful as text on a card — just signal that
+    // a page exists with a small chip.
+    if (col.type === "page") {
+      const docs = p.documents ?? [];
+      const doc = docs.find((d) => d.id === raw);
+      if (!doc) return null;
+      return (
+        <div key={id} className="kc-field">
+          <span className="kc-field-label">{col.label}:</span>
+          <span className="page-chip">{doc.title || "Untitled"}</span>
+        </div>
+      );
+    }
+
     return (
       <div key={id} className="kc-field">
-        {custom && <span className="kc-field-label">{custom.label}:</span>}
+        <span className="kc-field-label">{col.label}:</span>
         <span className="kc-field-value">{raw}</span>
       </div>
     );
@@ -516,22 +539,31 @@ function ActionsMenu({
 /** Dropdown menu that toggles which fields show on kanban cards (per
  *  board, persisted to localStorage). */
 function KanbanFieldsMenu({
-  boardId, value, onChange, customCols,
+  boardId, value, onChange, columns,
 }: {
   boardId: string;
   value: string[];
   onChange: (next: string[]) => void;
-  customCols: CustomColumn[];
+  /** The board's full column schema — drives the picker so card-field
+   *  options exactly match what the user has on their table. */
+  columns: CrmColumnDef[];
 }) {
   const [open, setOpen] = useState(false);
+  // Person, Stage and the row-select column never appear on cards
+  // (Person == card title, Stage == kanban column, _select is gone).
+  // Hidden columns also drop out — the kanban shouldn't surface fields
+  // the user has chosen to hide on the table.
+  const cardOptions = columns.filter(
+    (c) => !c.hidden && c.id !== "person" && c.id !== "stage" && c.id !== "_select",
+  );
   const toggle = (id: string) => {
     const next = value.includes(id) ? value.filter((x) => x !== id) : [...value, id];
     onChange(next);
     saveKanbanFields(boardId, next);
   };
   const reset = () => {
-    onChange(KANBAN_DEFAULT);
-    saveKanbanFields(boardId, KANBAN_DEFAULT);
+    onChange([]);
+    saveKanbanFields(boardId, []);
   };
   return (
     <div style={{ position: "relative" }}>
@@ -542,33 +574,28 @@ function KanbanFieldsMenu({
         <>
           <div className="board-menu-bg" onClick={() => setOpen(false)} />
           <div className="board-menu" style={{ minWidth: 220, right: 0, left: "auto" }}>
-            <div className="bm-label">Built-in</div>
-            {KANBAN_FIELD_OPTIONS.map((f) => {
-              const on = value.includes(f.id);
+            <div className="bm-label">Show on cards</div>
+            {cardOptions.length === 0 ? (
+              <div style={{ padding: "8px 10px", fontSize: 11.5, color: "var(--text-mute)" }}>
+                Add columns to your table — they'll appear here.
+              </div>
+            ) : cardOptions.map((c) => {
+              const on = value.includes(c.id);
               return (
-                <button key={f.id} className="bm-item" onClick={() => toggle(f.id)}>
+                <button key={c.id} className="bm-item" onClick={() => toggle(c.id)}>
                   <ColCheckbox on={on} />
-                  <span style={{ flex: 1, textAlign: "left" }}>{f.label}</span>
+                  <span style={{ flex: 1, textAlign: "left" }}>{c.label}</span>
                 </button>
               );
             })}
-            {customCols.length > 0 && <>
-              <div className="bm-sep" />
-              <div className="bm-label">Your columns</div>
-              {customCols.map((c) => {
-                const on = value.includes(c.id);
-                return (
-                  <button key={c.id} className="bm-item" onClick={() => toggle(c.id)}>
-                    <ColCheckbox on={on} />
-                    <span style={{ flex: 1, textAlign: "left" }}>{c.label}</span>
-                  </button>
-                );
-              })}
-            </>}
-            <div className="bm-sep" />
-            <button className="bm-item" onClick={reset}>
-              <IconArrowR size={13} /><span>Reset to defaults</span>
-            </button>
+            {value.length > 0 && (
+              <>
+                <div className="bm-sep" />
+                <button className="bm-item" onClick={reset}>
+                  <IconArrowR size={13} /><span>Hide all</span>
+                </button>
+              </>
+            )}
           </div>
         </>
       )}
@@ -646,7 +673,7 @@ function KanbanColumnHeader({
 }
 
 function KanbanBoard({
-  contacts, onOpen, onMoveStage, onDelete, fields, customCols, stages,
+  contacts, onOpen, onMoveStage, onDelete, fields, columns, stages,
   onStagesChange, onReassign,
 }: {
   contacts: CrmContact[];
@@ -654,7 +681,9 @@ function KanbanBoard({
   onMoveStage: (contactId: string, stage: CrmStage) => void;
   onDelete: (id: string) => void;
   fields: string[];
-  customCols: CustomColumn[];
+  /** Full board column schema — passed through to each card so the
+   *  fields rendered match the table exactly. */
+  columns: CrmColumnDef[];
   stages: StageDef[];
   onStagesChange: (next: StageDef[]) => void;
   /** Called when a stage is deleted so contacts in it can be moved. */
@@ -756,7 +785,7 @@ function KanbanBoard({
                   onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
                   dragging={draggingId === p.id}
                   fields={fields}
-                  customCols={customCols}
+                  columns={columns}
                 />
               ))}
               {items.length === 0 && (
@@ -790,7 +819,7 @@ function KanbanBoard({
                 onDragEnd={() => { setDraggingId(null); setOverStage(null); }}
                 dragging={draggingId === p.id}
                 fields={fields}
-                customCols={customCols}
+                columns={columns}
               />
             ))}
           </div>
@@ -2885,7 +2914,7 @@ export function CRMView({
   useEffect(() => {
     if (!activeId) return;
     setRowHeight(loadRowHeightCached(activeId));
-    setKanbanFields(loadKanbanFields(activeId, []));
+    setKanbanFields(loadKanbanFields(activeId));
     setStages(loadStages(activeId));
   }, [activeId]);
 
@@ -3301,7 +3330,7 @@ export function CRMView({
                     boardId={activeId}
                     value={kanbanFields}
                     onChange={setKanbanFields}
-                    customCols={customCols}
+                    columns={columns}
                   />
                 )}
                 {/* Direct actions — close Actions before (or alongside) their
@@ -3349,7 +3378,7 @@ export function CRMView({
           onMoveStage={(id, stage) => patchContact(id, { stage })}
           onDelete={deleteContact}
           fields={kanbanFields}
-          customCols={customCols}
+          columns={columns}
           stages={stages}
           onStagesChange={persistStages}
           onReassign={reassignStage}
