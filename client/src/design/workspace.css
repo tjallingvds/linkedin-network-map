@@ -5,6 +5,11 @@
   --shell: rgba(255, 253, 250, 0.78);
   --panel: rgba(255, 255, 255, 0.62);
   --panel-2: rgba(255, 255, 255, 0.42);
+  /* Fully opaque variants — used on sticky cells / overlays where the
+     translucent design-system colours would let underlying content
+     bleed through. */
+  --shell-solid: rgb(248, 245, 240);
+  --panel-2-solid: rgb(238, 232, 222);
   --hairline: rgba(20, 14, 40, 0.08);
   --hairline-strong: rgba(20, 14, 40, 0.14);
   --text: #1a1530;
@@ -30,6 +35,8 @@
   --shell: rgba(8, 6, 14, 0.78);
   --panel: rgba(18, 14, 28, 0.72);
   --panel-2: rgba(28, 22, 42, 0.55);
+  --shell-solid: rgb(8, 6, 14);
+  --panel-2-solid: rgb(28, 22, 42);
   --hairline: rgba(255, 255, 255, 0.07);
   --hairline-strong: rgba(255, 255, 255, 0.14);
   --text: #ece8f5;
@@ -134,7 +141,17 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
    body. Properties are driven by the user's column schema, not hardcoded.
    Proportions tuned for a ~520px-wide panel — not a full-screen page. */
 .drawer-body-page { padding: 22px 26px 32px; gap: 18px; }
-.profile-avatar-lg { width: 44px; height: 44px; font-size: 16px; flex: 0 0 44px; }
+/* Belt-and-suspenders: explicit width AND height, hard flex-basis,
+   aspect-ratio fallback if anything tries to stretch it. */
+.profile-avatar-lg {
+  width: 44px; height: 44px;
+  min-width: 44px; min-height: 44px;
+  max-width: 44px; max-height: 44px;
+  flex: 0 0 44px;
+  aspect-ratio: 1 / 1;
+  font-size: 16px;
+  align-self: flex-start;
+}
 .drawer-body-page .profile-name { font-size: 20px; line-height: 1.2; font-weight: 600; }
 .drawer-body-page .profile-name .ed-cell,
 .drawer-body-page .profile-name .ed-input { font: inherit; font-weight: 600; }
@@ -216,11 +233,15 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   color: var(--text-mute); font-weight: 500;
 }
 .drawer-page-notes {
-  width: 100%; min-height: 140px; padding: 8px 0;
+  width: 100%; min-height: 80px; padding: 8px 0;
   border: 0; background: transparent; color: var(--text);
   font-size: 13.5px; line-height: 1.55; font-family: inherit;
   resize: vertical;
 }
+/* Empty notes shouldn't take a giant rectangle — only puff up once
+   the user starts typing or focuses the field. */
+.drawer-page-notes:focus,
+.drawer-page-notes:not(:placeholder-shown) { min-height: 160px; }
 .drawer-page-notes:focus,
 .drawer-page-notes:focus-visible {
   outline: none;
@@ -277,6 +298,56 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   resize: none;
 }
 .page-body::placeholder { color: var(--text-mute); }
+
+/* Fullscreen page editor overlay — backdrop + a centered card that
+   takes most of the canvas. Notion-style: huge title, big body, no
+   chrome around the writing surface. */
+.page-overlay-bg {
+  position: fixed; inset: 0;
+  background: rgba(20, 14, 40, 0.45);
+  z-index: 220;
+  animation: fade-in 160ms ease;
+}
+.page-overlay {
+  position: fixed;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(880px, calc(100vw - 48px));
+  height: min(86vh, 920px);
+  z-index: 221;
+  display: flex; flex-direction: column;
+  border-radius: 16px;
+  background: var(--shell-solid);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: 0 30px 80px rgba(0,0,0,0.25), 0 8px 24px rgba(0,0,0,0.1);
+  animation: app-modal-fade 160ms ease-out;
+  overflow: hidden;
+}
+.page-overlay-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; border-bottom: 1px solid var(--hairline);
+  flex: 0 0 auto;
+}
+.page-overlay-body {
+  flex: 1; min-height: 0;
+  padding: 28px 56px 40px;
+  display: flex; flex-direction: column; gap: 16px;
+  overflow: auto;
+}
+.page-overlay-body .page-title {
+  font-size: 32px; font-weight: 600; line-height: 1.15;
+  border: 0; outline: none; background: transparent; color: var(--text);
+  font-family: inherit;
+  padding: 0;
+}
+.page-overlay-body .page-title::placeholder { color: var(--text-mute); }
+.page-overlay-body .page-body {
+  flex: 1; width: 100%;
+  border: 0; outline: none; background: transparent; color: var(--text);
+  font-size: 15px; line-height: 1.65; font-family: inherit;
+  resize: none;
+  padding: 0;
+}
+.page-overlay-body .page-body::placeholder { color: var(--text-mute); }
 
 /* Page-type cell — chip with a doc icon + title when linked, faint
    "+ Open page" affordance when empty. Click anywhere in the cell to
@@ -1254,16 +1325,36 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .kc-name { font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.2; margin-bottom: 2px; }
 .kc-co { font-size: 11.5px; color: var(--text-dim); margin-top: 1px; line-height: 1.2; }
 .kc-role { font-size: 11.5px; color: var(--text-mute); line-height: 1.3; }
-/* User-configurable kanban fields — simple label:value rows. */
+/* User-configurable kanban fields — label on its own line above the
+   value, like a Notion card property. Each row gets a tiny label and
+   the value styled per type. */
 .kc-field {
-  font-size: 11.5px; color: var(--text-dim); line-height: 1.35;
-  margin-top: 2px;
+  display: flex; flex-direction: column; gap: 1px;
+  margin-top: 6px;
+  min-width: 0;
+}
+.kc-field-label {
+  font-size: 9.5px; font-weight: 500;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-mute);
+}
+.kc-field-value {
+  font-size: 12px; color: var(--text);
+  line-height: 1.35;
+  word-break: break-word;
+  overflow: hidden;
+}
+.kc-field-multi {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
-  word-break: break-word;
+  white-space: pre-wrap;
 }
-.kc-field-label { color: var(--text-mute); margin-right: 4px; font-weight: 500; }
-.kc-field-value { color: var(--text-dim); }
+.kc-link {
+  color: var(--accent); text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: inline-block; max-width: 100%;
+}
+.kc-link:hover { text-decoration: underline; }
 .kc-stats {
   display: flex; align-items: center; gap: 10px;
   font-size: 11px; font-family: 'Geist Mono', monospace;
@@ -2163,20 +2254,20 @@ button:focus-visible { outline-offset: 3px; }
     left: 0;
     z-index: 2;
   }
-  /* Header sticky-cell — sits above body cells (z 3) AND above the
-     sticky-top of the header strip (z 2). Solid panel-2 so headers to
-     the right don't ghost through. */
+  /* Header sticky-cell — fully opaque so headers to the right don't
+     bleed through during horizontal scroll. */
   .tbl-row.tbl-head > .tbl-cell:nth-child(1) {
-    background: var(--panel-2);
+    background: var(--panel-2-solid);
     z-index: 3;
   }
-  /* Body sticky-cell — solid shell so body cells to the right don't
-     show through. Hover lifts both the cell-bg AND the row-bg the
-     same amount so the sticky cell never falls out of step. */
+  /* Body sticky-cell — fully opaque so body content to the right
+     doesn't bleed through. The translucent --shell var paints over a
+     wallpaper so other cells were ghosting through; --shell-solid
+     drops the alpha entirely. */
   .tbl-row:not(.tbl-head) > .tbl-cell:nth-child(1) {
-    background: var(--shell);
+    background: var(--shell-solid);
   }
   .tbl-row:not(.tbl-head):hover > .tbl-cell:nth-child(1) {
-    background: var(--accent-soft);
+    background: var(--panel-2-solid);
   }
 }

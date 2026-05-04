@@ -415,59 +415,65 @@ function KanbanCard({
     const raw = readValue(col);
     if (!raw) return null;
 
-    // Dropdown columns (e.g. an "Assignee" picker) render their value as
-    // a coloured chip on the card so it actually looks like an
-    // assignment / status, not just plain text.
-    if (col.type === "dropdown") {
-      const opt = (col.options ?? []).find((o) => o.value === raw);
-      const color = opt?.color ?? "oklch(0.7 0.04 280)";
-      return (
-        <div key={id} className="kc-field">
-          <span className="kc-field-label">{col.label}:</span>
-          <span
-            className="tbl-stage"
-            style={{ "--stage-color": color, "--stage-tint": tintFor(color) } as React.CSSProperties}
-          >
-            {raw}
-          </span>
-        </div>
-      );
-    }
-
-    // File-type cells show the filename as a chip; click on the card
-    // already opens the drawer where the user can interact with it.
-    if (col.type === "file") {
-      try {
-        const meta = JSON.parse(raw) as CrmAttachmentMeta;
-        return (
-          <div key={id} className="kc-field">
-            <span className="kc-field-label">{col.label}:</span>
-            <span className="page-chip">{meta.filename}</span>
-          </div>
-        );
-      } catch { return null; }
-    }
-
-    // Page-type cells aren't useful as text on a card — just signal that
-    // a page exists with a small chip.
-    if (col.type === "page") {
-      const docs = p.documents ?? [];
-      const doc = docs.find((d) => d.id === raw);
-      if (!doc) return null;
-      return (
-        <div key={id} className="kc-field">
-          <span className="kc-field-label">{col.label}:</span>
-          <span className="page-chip">{doc.title || "Untitled"}</span>
-        </div>
-      );
-    }
-
-    return (
+    const wrap = (value: React.ReactNode) => (
       <div key={id} className="kc-field">
-        <span className="kc-field-label">{col.label}:</span>
-        <span className="kc-field-value">{raw}</span>
+        <span className="kc-field-label">{col.label}</span>
+        <span className="kc-field-value">{value}</span>
       </div>
     );
+
+    switch (col.type) {
+      case "dropdown": {
+        const opt = (col.options ?? []).find((o) => o.value === raw);
+        const color = opt?.color ?? "oklch(0.7 0.04 280)";
+        return wrap(
+          <span className="tbl-stage" style={{ "--stage-color": color, "--stage-tint": tintFor(color) } as React.CSSProperties}>
+            {raw}
+          </span>,
+        );
+      }
+      case "file": {
+        try {
+          const meta = JSON.parse(raw) as CrmAttachmentMeta;
+          return wrap(<span className="page-chip">{meta.filename}</span>);
+        } catch { return null; }
+      }
+      case "page": {
+        const docs = p.documents ?? [];
+        const doc = docs.find((d) => d.id === raw);
+        if (!doc) return null;
+        return wrap(<span className="page-chip">{doc.title || "Untitled"}</span>);
+      }
+      case "email":
+        return wrap(<a href={`mailto:${raw}`} className="kc-link" onClick={(e) => e.stopPropagation()}>{raw}</a>);
+      case "phone":
+        return wrap(<a href={`tel:${raw.replace(/\s+/g, "")}`} className="kc-link" onClick={(e) => e.stopPropagation()}>{raw}</a>);
+      case "link": {
+        const display = raw.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
+        const href = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+        return wrap(
+          <a href={href} target="_blank" rel="noopener noreferrer" className="kc-link" onClick={(e) => e.stopPropagation()}>
+            {display}
+          </a>,
+        );
+      }
+      case "date": {
+        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+        return wrap(m ? `${m[3]}/${m[2]}/${m[1]}` : raw);
+      }
+      case "checkbox": {
+        const on = raw === "true" || raw === "1" || raw === "yes";
+        return wrap(<span style={{ color: on ? "var(--accent)" : "var(--text-mute)" }}>{on ? "✓ Yes" : "—"}</span>);
+      }
+      case "number":
+        return wrap(<span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11 }}>{raw}</span>);
+      case "longtext": {
+        // Truncate to 2 lines on the card to keep the layout tidy.
+        return wrap(<span className="kc-field-multi">{raw}</span>);
+      }
+      default:
+        return wrap(raw);
+    }
   };
 
   return (
@@ -2639,54 +2645,76 @@ function DrawerAddField({ onAdd }: { onAdd: (col: CrmColumnDef) => void }) {
 /** Focused page editor — replaces the drawer body when a page is open.
  *  Title input on top, full-height body textarea below. Saves go through
  *  the parent drawer's onPatch via the onChange callback. */
-function PageEditorView({
-  page, onChange, onBack, onDelete,
+/** Full-screen Notion-style page editor. Sits above everything with a
+ *  backdrop, click outside or press Esc to close. Title input on top,
+ *  body textarea fills the rest of the canvas. */
+function PageOverlayEditor({
+  contactName, page, onChange, onClose, onDelete,
 }: {
+  contactName: string;
   page: { id: string; title: string; body: string; updatedAt: string };
   onChange: (patch: { title?: string; body?: string }) => void;
-  onBack: () => void;
+  onClose: () => void;
   onDelete: () => void;
 }) {
   const modal = useModal();
+  // Esc closes — same affordance as a modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
-    <div className="drawer-body drawer-body-page page-editor">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <button className="pill-btn" onClick={onBack}>
-          <IconArrowR size={11} style={{ transform: "rotate(180deg)" }} />Back
-        </button>
-        <button
-          className="pill-btn"
-          style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
-          onClick={async () => {
-            const ok = await modal.confirm({
-              title: `Delete "${page.title || "Untitled"}"?`,
-              confirmLabel: "Delete page",
-              destructive: true,
-            });
-            if (ok) onDelete();
-          }}
-        >
-          <IconClose size={11} />Delete
-        </button>
+    <>
+      <div className="page-overlay-bg" onClick={onClose} />
+      <div className="page-overlay" role="dialog" aria-modal="true">
+        <div className="page-overlay-head">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            <button className="icon-btn" onClick={onClose} title="Close">
+              <IconClose size={15} />
+            </button>
+            <span style={{ fontSize: 12, color: "var(--text-mute)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {contactName} · Page
+            </span>
+          </div>
+          <button
+            className="pill-btn"
+            style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
+            onClick={async () => {
+              const ok = await modal.confirm({
+                title: `Delete "${page.title || "Untitled"}"?`,
+                confirmLabel: "Delete page",
+                destructive: true,
+              });
+              if (ok) onDelete();
+            }}
+          >
+            <IconClose size={11} />Delete
+          </button>
+        </div>
+        <div className="page-overlay-body">
+          <input
+            className="page-title"
+            defaultValue={page.title}
+            placeholder="Untitled"
+            autoFocus={!page.title}
+            onBlur={(e) => { if (e.target.value !== page.title) onChange({ title: e.target.value }); }}
+          />
+          <textarea
+            className="page-body"
+            defaultValue={page.body}
+            placeholder="Type anything — Shift+Enter for newline. Markdown links work."
+            onBlur={(e) => { if (e.target.value !== page.body) onChange({ body: e.target.value }); }}
+          />
+        </div>
       </div>
-      <input
-        className="page-title"
-        defaultValue={page.title}
-        placeholder="Untitled"
-        onBlur={(e) => { if (e.target.value !== page.title) onChange({ title: e.target.value }); }}
-      />
-      <textarea
-        className="page-body"
-        defaultValue={page.body}
-        placeholder="Type anything — Shift+Enter for newline. Markdown links work in the brief."
-        onBlur={(e) => { if (e.target.value !== page.body) onChange({ body: e.target.value }); }}
-      />
-    </div>
+    </>
   );
 }
 
 export function CRMDrawer({
-  contact, idx, onClose, onPatch, onDelete, columns = [], stages = DEFAULT_STAGES, onColumnsChange, initialOpenPageId,
+  contact, idx, onClose, onPatch, onDelete, columns = [], stages = DEFAULT_STAGES, onColumnsChange, onOpenPage,
 }: {
   contact: CrmContact;
   idx: number;
@@ -2698,40 +2726,13 @@ export function CRMDrawer({
   stages?: StageDef[];
   /** Persist a schema change (used by the inline "+ Add field" button). */
   onColumnsChange?: (next: CrmColumnDef[]) => void;
-  /** When the user clicks a Page-type cell in the table, the parent
-   *  passes the doc id so the drawer mounts directly into the editor. */
-  initialOpenPageId?: string | null;
+  /** Hand a page open request up to the parent so it opens in the
+   *  fullscreen overlay rather than swapping the drawer body. */
+  onOpenPage?: (contactId: string, docId: string) => void;
 }) {
   const modal = useModal();
   const stageList = stages.length > 0 ? stages : DEFAULT_STAGES;
-
-  // When a page is open the drawer body swaps to the editor view.
-  const [openPageId, setOpenPageId] = useState<string | null>(initialOpenPageId ?? null);
-  // Honour later changes to initialOpenPageId without forcing a remount —
-  // useful when the user clicks a different page cell while the drawer
-  // is already open for the same contact.
-  useEffect(() => { if (initialOpenPageId) setOpenPageId(initialOpenPageId); }, [initialOpenPageId]);
   const documents = contact.documents ?? [];
-  const openPage = openPageId ? documents.find((d) => d.id === openPageId) : null;
-
-  const saveDocs = (next: typeof documents) => onPatch(contact.id, { documents: next });
-
-  const addPage = () => {
-    const id = `doc_${Math.random().toString(36).slice(2, 10)}`;
-    const now = new Date().toISOString();
-    const next = [...documents, { id, title: "Untitled", body: "", updatedAt: now }];
-    saveDocs(next);
-    setOpenPageId(id);
-  };
-
-  const updatePage = (id: string, patch: Partial<{ title: string; body: string }>) => {
-    saveDocs(documents.map((d) => (d.id === id ? { ...d, ...patch, updatedAt: new Date().toISOString() } : d)));
-  };
-
-  const deletePage = (id: string) => {
-    saveDocs(documents.filter((d) => d.id !== id));
-    setOpenPageId(null);
-  };
 
   const advanceStage = () => {
     const i = stageList.findIndex((s) => s.id === contact.stage);
@@ -2769,13 +2770,13 @@ export function CRMDrawer({
             <PageCellEditor
               value={val}
               documents={docs}
-              onOpenExisting={(docId) => setOpenPageId(docId)}
+              onOpenExisting={(docId) => onOpenPage?.(contact.id, docId)}
               onCreateLinked={() => {
                 const id = `doc_${Math.random().toString(36).slice(2, 10)}`;
                 const now = new Date().toISOString();
                 const nextDocs = [...docs, { id, title: "Untitled", body: "", updatedAt: now }];
                 onPatch(contact.id, { documents: nextDocs, customFields: { [col.id]: id } });
-                setOpenPageId(id);
+                onOpenPage?.(contact.id, id);
               }}
             />
           );
@@ -2834,14 +2835,6 @@ export function CRMDrawer({
             )}
           </div>
         </div>
-        {openPage ? (
-          <PageEditorView
-            page={openPage}
-            onChange={(patch) => updatePage(openPage.id, patch)}
-            onBack={() => setOpenPageId(null)}
-            onDelete={() => deletePage(openPage.id)}
-          />
-        ) : (
         <div className="drawer-body drawer-body-page">
           <div className="profile-hero">
             <div className="profile-avatar profile-avatar-lg" style={{ background: avatarGrad(idx) }}>{initials(contact.name)}</div>
@@ -2906,35 +2899,7 @@ export function CRMDrawer({
             }}
           />
 
-          {/* Pages — long-form attached docs. Click one to open the
-              focused editor. New pages spawn untitled and open
-              immediately so the user lands in the editor. */}
-          <div className="drawer-pages">
-            <div className="dp-section-label" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <span>Pages</span>
-              <button className="pill-btn" onClick={addPage} title="New page">
-                <IconNewChat size={11} />New page
-              </button>
-            </div>
-            {documents.length === 0 ? (
-              <div style={{ fontSize: 12, color: "var(--text-mute)", padding: "8px 0" }}>
-                No pages yet — create one to write a brief, meeting notes, or anything else.
-              </div>
-            ) : (
-              <div className="page-list">
-                {documents.map((d) => (
-                  <button key={d.id} className="page-row" onClick={() => setOpenPageId(d.id)}>
-                    <span className="page-row-title">{d.title || "Untitled"}</span>
-                    <span className="page-row-snippet">
-                      {d.body.slice(0, 80) || <em style={{ color: "var(--text-mute)" }}>Empty</em>}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
-        )}
         <div className="drawer-foot">
           {onDelete && (
             <button
@@ -2991,13 +2956,16 @@ export function CRMView({
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [openContact, setOpenContact] = useState<CrmContact | null>(null);
-  // When the user clicks a Page-type cell in the table, we open the
-  // contact's drawer AND focus the specific page in the editor view.
-  const [drawerInitialPageId, setDrawerInitialPageId] = useState<string | null>(null);
-  const openPage = (contact: CrmContact, docId: string) => {
-    setOpenContact(contact);
-    setDrawerInitialPageId(docId);
+  // Page-type cells open in a fullscreen overlay editor — the drawer
+  // doesn't swap. Tracks { contactId, docId } so we can resolve the
+  // doc + contact name at render time even after a SSE refetch
+  // changes object identity.
+  const [editingPage, setEditingPage] = useState<{ contactId: string; docId: string } | null>(null);
+  const openPage = (contactOrId: CrmContact | string, docId: string) => {
+    const id = typeof contactOrId === "string" ? contactOrId : contactOrId.id;
+    setEditingPage({ contactId: id, docId });
   };
+  const closePage = () => setEditingPage(null);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
   const [backgrounding, setBackgrounding] = useState(false);
@@ -3550,11 +3518,11 @@ export function CRMView({
         <CRMDrawer
           contact={openContact}
           idx={contacts.findIndex((c) => c.id === openContact.id)}
-          onClose={() => { setOpenContact(null); setDrawerInitialPageId(null); }}
+          onClose={() => setOpenContact(null)}
           columns={columns}
           onColumnsChange={saveColumns}
           stages={stages}
-          initialOpenPageId={drawerInitialPageId}
+          onOpenPage={(contactId, docId) => openPage(contactId, docId)}
           onPatch={(id, patch) => {
             patchContact(id, patch);
             setOpenContact((c) => {
@@ -3569,6 +3537,30 @@ export function CRMView({
           onDelete={deleteContact}
         />
       )}
+
+      {editingPage && (() => {
+        const c = contacts.find((x) => x.id === editingPage.contactId);
+        const doc = c?.documents?.find((d) => d.id === editingPage.docId);
+        if (!c || !doc) return null;
+        return (
+          <PageOverlayEditor
+            contactName={c.name}
+            page={doc}
+            onChange={(patch) => {
+              const nextDocs = (c.documents ?? []).map((d) => (
+                d.id === doc.id ? { ...d, ...patch, updatedAt: new Date().toISOString() } : d
+              ));
+              patchContact(c.id, { documents: nextDocs });
+            }}
+            onClose={closePage}
+            onDelete={() => {
+              const nextDocs = (c.documents ?? []).filter((d) => d.id !== doc.id);
+              patchContact(c.id, { documents: nextDocs });
+              closePage();
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
