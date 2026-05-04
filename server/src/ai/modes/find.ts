@@ -28,6 +28,7 @@ import { env } from "../../env.js";
 import { aiJson } from "../json.js";
 import { tavilySearch, type TavilyResult, isTavilyQuotaError, isTavilyAuthError } from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
+import { looksLikeCrmRead, runCrmRead } from "./crm-read.js";
 import { looksLikeDecisionMakerMap, runDecisionMakers } from "./decision-makers.js";
 import { looksLikePersonBackground, runPersonBackground } from "./person-background.js";
 import { looksLikeSiteScrape, runSiteScraper } from "./site-scraper.js";
@@ -104,6 +105,20 @@ export async function runFind(
     .map((m) => m.content)
     .join("\n");
   const fullBrief = priorUserText ? `${priorUserText}\n${userInput}` : userInput;
+
+  // ── CRM-read fast path ──────────────────────────────────────────────────
+  // "what's in my Banks board?" / "list the technical people in my CRM" /
+  // "summarise my outreach pipeline". Pulls structured data straight from
+  // the user's own boards — no Tavily, no web inference. Runs FIRST so a
+  // possessive reference ("my CRM") doesn't get hijacked by site-scrape
+  // (URL detection), person-background ("what do you know"), or the
+  // generic find pipeline (which would try to web-search the board name).
+  if (looksLikeCrmRead(fullBrief)) {
+    const cr = await runCrmRead({ provider, brief: fullBrief, userId, userKeys });
+    if (cr) return cr;
+    // Fall through if parsing failed — better to attempt the generic
+    // pipeline than return an unhelpful "couldn't parse" message.
+  }
 
   // ── Site-scraper fast path ──────────────────────────────────────────────
   // "scrape acme.com" / "crawl https://… and tell me everything" — fetch
