@@ -538,6 +538,49 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
     return res.status(200).json({ ...toCamelContact(full), duplicate: true });
   }
 
+  // Route the form values (title/company/email/phone/linkedin) into both
+  // the legacy DB fields AND any user-defined custom columns that map to
+  // the same field. Without this, a user whose board uses CUSTOM columns
+  // for Title/Company/Email/LinkedIn (very common — the user names their
+  // own columns) sees only the Name appear in the row, because the cells
+  // they're looking at read from custom_fields[id], not from the legacy
+  // DB columns. Mirrors the routing done by /enrich (commit b00e46c).
+  const boardRow = await db
+    .selectFrom("crm_boards")
+    .select("columns")
+    .where("id", "=", board.id)
+    .executeTakeFirst();
+  type Col = { id: string; builtin?: boolean; label?: string; type?: string };
+  const columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
+  const findCustomCol = (type: string, labelHints: string[]): string | null => {
+    const customs = columns.filter((c) => !c.builtin);
+    const byType = customs.find((c) => c.type === type);
+    if (byType) return byType.id;
+    const lc = labelHints.map((h) => h.toLowerCase());
+    const byLabel = customs.find((c) => lc.includes((c.label ?? "").toLowerCase()));
+    return byLabel?.id ?? null;
+  };
+  const targets = {
+    email:    findCustomCol("email", ["email"]),
+    phone:    findCustomCol("phone", ["phone", "mobile"]),
+    linkedin: findCustomCol("link",  ["linkedin"]),
+    title:    findCustomCol("text",  ["title", "role", "position"]),
+    company:  findCustomCol("text",  ["company", "organization", "org"]),
+  };
+  const customMerge: Record<string, string> = { ...((p.customFields ?? {}) as Record<string, string>) };
+  const writeIfMapped = (val: string | null | undefined, colId: string | null) => {
+    const v = (val ?? "").trim();
+    if (!v || !colId) return;
+    // Don't clobber a value the client explicitly set in customFields.
+    if (customMerge[colId] && customMerge[colId].trim().length > 0) return;
+    customMerge[colId] = v;
+  };
+  writeIfMapped(p.email,    targets.email);
+  writeIfMapped(p.phone,    targets.phone);
+  writeIfMapped(p.linkedin, targets.linkedin);
+  writeIfMapped(p.title,    targets.title);
+  writeIfMapped(p.company,  targets.company);
+
   const row = await db
     .insertInto("crm_contacts")
     .values({
@@ -560,7 +603,7 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
       notes: p.notes ?? null,
       message_notes: p.messageNotes ?? null,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      custom_fields: (p.customFields ?? {}) as any,
+      custom_fields: customMerge as any,
     })
     .returningAll()
     .executeTakeFirstOrThrow();
