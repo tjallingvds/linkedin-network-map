@@ -1190,6 +1190,46 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .crm-tools { display: flex; gap: 6px; align-items: center; }
 
+/* CRM toolbar search — sits next to the view toggle. Matches the toggle's
+   pill aesthetic so they feel like a single control group. Filters across
+   built-in fields (name, title, company, email, linkedin, background) AND
+   every custom-field value, applied in CRMView before passing contacts to
+   the kanban/table view. */
+.crm-search {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 10px;
+  height: 30px;
+  background: var(--panel-2);
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  color: var(--text-dim);
+  transition: border-color 160ms, background 160ms;
+}
+.crm-search:focus-within {
+  border-color: var(--line);
+  background: var(--shell);
+  color: var(--text);
+}
+.crm-search input {
+  border: 0; outline: 0; background: transparent;
+  font-size: 12px; color: var(--text); font-weight: 500;
+  padding: 0; min-width: 180px;
+}
+.crm-search input::placeholder { color: var(--text-dim); }
+.crm-search input::-webkit-search-cancel-button { display: none; }
+.crm-search-clear {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px;
+  border: 0; background: transparent; padding: 0; margin-right: -2px;
+  border-radius: 4px; color: var(--text-dim);
+  cursor: pointer;
+}
+.crm-search-clear:hover { background: var(--panel); color: var(--text); }
+.crm-search-count {
+  font-size: 11px; color: var(--text-dim); font-weight: 500;
+  white-space: nowrap;
+}
+
 /* Inline progress pill for long-running CRM bulk actions (classify-skill,
    etc.). The Actions menu closes immediately on click, hiding the button's
    "Classifying…" label — without this pill the user has no signal that the

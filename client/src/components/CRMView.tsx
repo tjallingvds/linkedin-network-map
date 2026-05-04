@@ -15,7 +15,7 @@ import { useModal } from "./Modal";
 import { initials, avatarGrad } from "../design/mockProspects";
 import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
-  IconSend, IconMail, IconSparkle, IconLinkedIn, IconUsers,
+  IconSend, IconMail, IconSparkle, IconLinkedIn, IconUsers, IconSearch,
 } from "../design/icons";
 import { ExternalCleanupModal } from "./ExternalCleanupModal";
 
@@ -3048,6 +3048,7 @@ export function CRMView({
   const [enriching, setEnriching] = useState(false);
   const [backgrounding, setBackgrounding] = useState(false);
   const [classifyingSkill, setClassifyingSkill] = useState(false);
+  const [search, setSearch] = useState("");
   const [columns, setColumns] = useState<CrmColumnDef[]>(defaultColumns);
   const [rowHeight, setRowHeight] = useState<CrmRowHeight>(DEFAULT_ROW_HEIGHT);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
@@ -3056,6 +3057,25 @@ export function CRMView({
   // refactored to consume the full schema (KanbanCard, CRMDrawer, etc).
   const customCols = useMemo(() => customColsFromSchema(columns), [columns]);
   const visibleCols = useMemo(() => visibleColIds(columns), [columns]);
+
+  // Toolbar search — filters across name, title, company, email, linkedin, AND
+  // every custom-field cell value. Case-insensitive substring match. Both the
+  // table and kanban views consume the filtered list, so the search reflects
+  // the same result set across views without per-view duplication.
+  const filteredContacts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return contacts;
+    return contacts.filter((c) => {
+      const haystack = [
+        c.name, c.title, c.company, c.email, c.linkedin, c.background,
+        ...Object.values((c.customFields ?? {}) as Record<string, string>),
+      ]
+        .filter((v): v is string => typeof v === "string" && v.length > 0)
+        .join(" \n ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [contacts, search]);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -3515,6 +3535,31 @@ export function CRMView({
               <IconSheet size={12} />Table
             </button>
           </div>
+          <label className="crm-search">
+            <IconSearch size={12} />
+            <input
+              type="search"
+              placeholder="Search contacts…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label="Search contacts"
+            />
+            {search && (
+              <button
+                type="button"
+                className="crm-search-clear"
+                onClick={() => setSearch("")}
+                aria-label="Clear search"
+              >
+                <IconClose size={11} />
+              </button>
+            )}
+          </label>
+          {search && (
+            <span className="crm-search-count" aria-live="polite">
+              {filteredContacts.length} of {contacts.length}
+            </span>
+          )}
         </div>
         <div className="crm-tools">
           {classifyingSkill && (
@@ -3594,7 +3639,7 @@ export function CRMView({
 
       {viewMode === "kanban" ? (
         <KanbanBoard
-          contacts={contacts}
+          contacts={filteredContacts}
           onOpen={setOpenContact}
           onMoveStage={(id, stage) => patchContact(id, { stage })}
           onDelete={deleteContact}
@@ -3606,7 +3651,7 @@ export function CRMView({
         />
       ) : (
         <TableView
-          contacts={contacts}
+          contacts={filteredContacts}
           onOpen={setOpenContact}
           onPatch={patchContact}
           columns={columns}
