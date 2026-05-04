@@ -13,6 +13,7 @@
  *   DELETE /api/crm/contacts/:id
  */
 import { Router, type Response } from "express";
+import multer from "multer";
 import { z } from "zod";
 import { sql } from "kysely";
 import { db } from "../db/index.js";
@@ -264,7 +265,8 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
     label: z.string().max(60),
     type: z.enum([
       "text", "longtext", "number", "dropdown", "email", "phone",
-      "link", "date", "checkbox", "page", "stage", "temp", "person", "select",
+      "link", "date", "checkbox", "page", "file",
+      "stage", "temp", "person", "select",
     ]),
     width: z.string().max(30).optional(),
     hidden: z.boolean().optional(),
@@ -1094,6 +1096,114 @@ router.post("/cleanup-from-external", async (req: AuthedRequest, res) => {
     boardsAffected: boardsHit.size,
     scanned: contacts.length,
   });
+});
+
+// ---- Attachments (PDFs and similar) ----
+//
+// Uploads stream into memory through multer, then land in BYTEA on
+// crm_attachments. 25MB cap matches the express.json limit elsewhere
+// so a misconfigured browser request can't exhaust the worker.
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
+
+async function ensureContactAccess(req: AuthedRequest, contactId: string) {
+  const row = await db
+    .selectFrom("crm_contacts")
+    .select(["id", "board_id"])
+    .where("id", "=", contactId)
+    .executeTakeFirst();
+  if (!row) return null;
+  const access = await ensureBoard(req.user!.id, row.board_id);
+  if (!access) return null;
+  return row;
+}
+
+router.post(
+  "/contacts/:id/attachments",
+  upload.single("file"),
+  async (req: AuthedRequest, res) => {
+    // Self-heal so an environment that missed the migration doesn't 500
+    // on the first upload.
+    try {
+      await sql`
+        CREATE TABLE IF NOT EXISTS crm_attachments (
+          id TEXT PRIMARY KEY,
+          contact_id TEXT NOT NULL REFERENCES crm_contacts(id) ON DELETE CASCADE,
+          filename TEXT NOT NULL,
+          mime TEXT NOT NULL,
+          size INTEGER NOT NULL,
+          data BYTEA NOT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+      `.execute(db);
+    } catch { /* already exists */ }
+
+    const contact = await ensureContactAccess(req, req.params.id);
+    if (!contact) return res.status(404).json({ error: "not_found" });
+    const file = (req as unknown as { file?: Express.Multer.File }).file;
+    if (!file) return res.status(400).json({ error: "no_file" });
+
+    const id = `att_${Math.random().toString(36).slice(2, 12)}`;
+    await db
+      .insertInto("crm_attachments")
+      .values({
+        id,
+        contact_id: contact.id,
+        filename: file.originalname || "untitled",
+        mime: file.mimetype || "application/octet-stream",
+        size: file.size,
+        data: file.buffer,
+      })
+      .execute();
+
+    notifyBoard(contact.board_id, "contact");
+    res.status(201).json({
+      id,
+      filename: file.originalname || "untitled",
+      mime: file.mimetype || "application/octet-stream",
+      size: file.size,
+    });
+  },
+);
+
+router.get("/attachments/:id", async (req: AuthedRequest, res) => {
+  const row = await db
+    .selectFrom("crm_attachments")
+    .selectAll()
+    .where("id", "=", req.params.id)
+    .executeTakeFirst();
+  if (!row) return res.status(404).json({ error: "not_found" });
+  // Auth — only users with access to the contact's board can fetch.
+  const access = await ensureContactAccess(req, row.contact_id);
+  if (!access) return res.status(404).json({ error: "not_found" });
+
+  const buf = row.data instanceof Buffer ? row.data : Buffer.from(row.data as Uint8Array);
+  res.setHeader("Content-Type", row.mime);
+  res.setHeader("Content-Length", String(row.size));
+  // inline disposition so PDFs preview in-tab; downloads still work via
+  // the browser's "save as" affordance on the previewer.
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="${row.filename.replace(/"/g, "")}"`,
+  );
+  res.end(buf);
+});
+
+router.delete("/attachments/:id", async (req: AuthedRequest, res) => {
+  const row = await db
+    .selectFrom("crm_attachments")
+    .select(["id", "contact_id"])
+    .where("id", "=", req.params.id)
+    .executeTakeFirst();
+  if (!row) return res.status(404).json({ error: "not_found" });
+  const access = await ensureContactAccess(req, row.contact_id);
+  if (!access) return res.status(404).json({ error: "not_found" });
+
+  await db.deleteFrom("crm_attachments").where("id", "=", req.params.id).execute();
+  res.status(204).end();
 });
 
 export default router;

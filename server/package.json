@@ -17,6 +17,7 @@
     "@app/shared": "*",
     "@auth/core": "^0.37.0",
     "@auth/express": "^0.7.0",
+    "@types/multer": "^2.1.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
@@ -26,6 +27,7 @@
     "helmet": "^8.0.0",
     "kysely": "^0.27.4",
     "morgan": "^1.10.0",
+    "multer": "^2.1.1",
     "pg": "^8.13.0",
     "stripe": "^17.0.0",
     "zod": "^3.23.8"

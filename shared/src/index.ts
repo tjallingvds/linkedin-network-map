@@ -149,6 +149,16 @@ export interface CrmDocument {
   updatedAt: string;
 }
 
+/** Lightweight handle to an uploaded file — what File-type cells store
+ *  (JSON-stringified) so the UI can render filename + size without
+ *  fetching the bytes until the user clicks. */
+export interface CrmAttachmentMeta {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+}
+
 export interface CrmBoard {
   id: string;
   name: string;
@@ -196,6 +206,10 @@ export type CrmColumnType =
    *  stores the document id; the document body lives on the contact's
    *  `documents` JSONB array. */
   | "page"
+  /** Each cell stores an uploaded file (PDF / image / anything). The
+   *  cell value is JSON.stringify({id, filename, mime, size}) — bytes
+   *  are streamed via /api/crm/attachments/:id. */
+  | "file"
   | "stage"
   | "temp"
   | "person"

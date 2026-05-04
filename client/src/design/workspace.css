@@ -299,6 +299,41 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .tbl-row .tbl-cell .page-cell:hover .page-empty { color: var(--accent); }
 
+/* File-type cell — chip with icon + filename + size when filled, faint
+   "+ Upload file" affordance when empty. The hover-X on the chip lets
+   the user detach without going to the drawer. */
+.file-cell { cursor: pointer; }
+.file-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 6px 3px 9px; border-radius: 6px;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--hairline);
+  font-size: 11.5px; font-weight: 500;
+  max-width: 100%;
+}
+.file-chip-title {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.file-chip-size {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10.5px; color: var(--text-mute); flex: 0 0 auto;
+}
+.file-chip-x {
+  width: 16px; height: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  color: var(--text-mute);
+  background: transparent; border: 0;
+  opacity: 0; transition: opacity 100ms, background 100ms, color 100ms;
+}
+.file-chip:hover .file-chip-x { opacity: 1; }
+.file-chip-x:hover { background: var(--hairline); color: var(--danger, oklch(0.55 0.2 25)); }
+.file-empty {
+  font-size: 11.5px; color: var(--text-mute); font-style: italic;
+}
+.tbl-row .tbl-cell .file-cell:hover .file-empty { color: var(--accent); }
+
 /* Prospect card quick-access icons (LinkedIn / email). */
 .pc-quick { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
 .pc-quick-btn {

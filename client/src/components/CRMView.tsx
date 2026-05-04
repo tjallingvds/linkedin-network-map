@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CrmBoard, CrmContact, CrmImportRow, CrmStage, CrmTemp,
-  CrmColumnDef, CrmColumnType, CrmRowHeight, CrmDropdownOption, CrmDocument,
+  CrmColumnDef, CrmColumnType, CrmRowHeight, CrmDropdownOption, CrmDocument, CrmAttachmentMeta,
 } from "@app/shared";
 import { api } from "../lib/api";
 import { useModal } from "./Modal";
@@ -432,6 +432,20 @@ function KanbanCard({
           </span>
         </div>
       );
+    }
+
+    // File-type cells show the filename as a chip; click on the card
+    // already opens the drawer where the user can interact with it.
+    if (col.type === "file") {
+      try {
+        const meta = JSON.parse(raw) as CrmAttachmentMeta;
+        return (
+          <div key={id} className="kc-field">
+            <span className="kc-field-label">{col.label}:</span>
+            <span className="page-chip">{meta.filename}</span>
+          </div>
+        );
+      } catch { return null; }
     }
 
     // Page-type cells aren't useful as text on a card — just signal that
@@ -1021,6 +1035,7 @@ const TYPE_LABELS: Record<CrmColumnType, string> = {
   date: "Date",
   checkbox: "Checkbox",
   page: "Page",
+  file: "File",
   stage: "Stage",
   temp: "Temp",
   person: "Person",
@@ -1031,7 +1046,7 @@ const TYPE_LABELS: Record<CrmColumnType, string> = {
  *  Built-in types like "stage", "temp", "person", "select" are excluded — those
  *  are reserved for built-in columns and have specialized rendering. */
 const USER_PICKABLE_TYPES: CrmColumnType[] = [
-  "text", "longtext", "number", "dropdown", "email", "phone", "link", "date", "checkbox", "page",
+  "text", "longtext", "number", "dropdown", "email", "phone", "link", "date", "checkbox", "page", "file",
 ];
 
 const DROPDOWN_PALETTE = [
@@ -1171,6 +1186,105 @@ function PageCellEditor({
       )}
     </span>
   );
+}
+
+/** File-column cell. The cell value is JSON-stringified
+ *  CrmAttachmentMeta — { id, filename, mime, size }. Click an empty
+ *  cell to upload, click a filled chip to open the file in a new tab,
+ *  hover the chip to reveal an X that detaches the file. */
+function FileCellEditor({
+  value, contactId, onSave,
+}: {
+  value: string | null | undefined;
+  contactId: string;
+  onSave: (v: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  let meta: CrmAttachmentMeta | null = null;
+  if (value) {
+    try { meta = JSON.parse(value) as CrmAttachmentMeta; }
+    catch { meta = null; }
+  }
+
+  const upload = async (file: File) => {
+    setBusy(true); setError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/crm/contacts/${contactId}/attachments`, {
+        method: "POST", body: fd, credentials: "include",
+      });
+      if (!res.ok) throw new Error(`upload failed: ${res.status}`);
+      const json = (await res.json()) as CrmAttachmentMeta;
+      onSave(JSON.stringify(json));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const detach = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!meta) return;
+    onSave("");
+    // Best-effort delete on the server — non-fatal if it 404s.
+    fetch(`/api/crm/attachments/${meta.id}`, { method: "DELETE", credentials: "include" }).catch(() => undefined);
+  };
+
+  const onClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (meta) {
+      window.open(`/api/crm/attachments/${meta.id}`, "_blank", "noopener,noreferrer");
+      return;
+    }
+    inputRef.current?.click();
+  };
+
+  const sizeLabel = meta ? formatFileSize(meta.size) : "";
+
+  return (
+    <span className="ed-cell file-cell" onClick={onClick} title={meta ? meta.filename : "Upload a file"}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="application/pdf,image/*,.doc,.docx,.txt,.md,.csv,.xlsx"
+        style={{ display: "none" }}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.currentTarget.value = ""; }}
+      />
+      {busy ? (
+        <span className="file-empty">Uploading…</span>
+      ) : meta ? (
+        <span className="file-chip">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ flex: "0 0 11px" }}>
+            <path d="M4 2h6l3 3v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" />
+            <path d="M10 2v3h3" />
+          </svg>
+          <span className="file-chip-title">{meta.filename}</span>
+          <span className="file-chip-size">{sizeLabel}</span>
+          <button className="file-chip-x" onClick={detach} title="Remove file">
+            <IconClose size={9} />
+          </button>
+        </span>
+      ) : error ? (
+        <span className="file-empty" style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}>
+          Upload failed — click to retry
+        </span>
+      ) : (
+        <span className="file-empty">+ Upload file</span>
+      )}
+    </span>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function CheckboxCellEditor({
@@ -1705,6 +1819,7 @@ function ColumnTypeWizard({
         pickedType === "checkbox" ? "80px" :
         pickedType === "number" ? "90px" :
         pickedType === "page" ? "180px" :
+        pickedType === "file" ? "200px" :
         "200px",
       options: pickedType === "dropdown" ? [] : undefined,
     });
@@ -1961,6 +2076,7 @@ function TableView({
             />
           );
         }
+        case "file":     return <FileCellEditor value={val} contactId={p.id} onSave={setVal} />;
         case "text":
         default:         return <EditableCell value={val} onSave={setVal} />;
       }
@@ -2664,6 +2780,7 @@ export function CRMDrawer({
             />
           );
         }
+        case "file":     return <FileCellEditor value={val} contactId={contact.id} onSave={setVal} />;
         default:         return <EditableCell value={val} onSave={setVal} />;
       }
     }

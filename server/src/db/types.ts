@@ -12,6 +12,7 @@ export interface Database {
   crm_boards: CrmBoardsTable;
   crm_board_members: CrmBoardMembersTable;
   crm_contacts: CrmContactsTable;
+  crm_attachments: CrmAttachmentsTable;
   usage_events: UsageEventsTable;
   credit_purchases: CreditPurchasesTable;
   message_log: MessageLogTable;
@@ -192,5 +193,17 @@ export interface MessageLogTable {
   message_date: string | null;
   subject: string | null;
   content_snippet: string | null;
+  created_at: Generated<Timestamp>;
+}
+
+export interface CrmAttachmentsTable {
+  /** Caller-supplied id (so the client can reference it before round-trip). */
+  id: string;
+  contact_id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  /** PDF bytes etc — Buffer in Node, transferred as BYTEA. */
+  data: Buffer;
   created_at: Generated<Timestamp>;
 }
