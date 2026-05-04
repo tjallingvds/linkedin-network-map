@@ -54,6 +54,15 @@ interface ParsedBrief {
   excludeFirms: string[];
   excludeTitles: string[];
   excludeSeniority: string[];
+  /** Positive seniority floor — free-text descriptor like "Managing Director
+   *  or above", "Partner-level", "C-suite only". Set when the brief specifies
+   *  a minimum seniority ("MD+", "MD or above", "VP and up", "C-suite only").
+   *  Drives query bias, extractor floor rule, and the seniority gate. Kept
+   *  as free text (not an enum) so the LLM does the semantic compare against
+   *  candidate titles — different firms ladder differently and a hardcoded
+   *  enum would mis-classify roles like "Partner" (= MD-equivalent at a PE
+   *  firm but ≠ MD at a Big-4). */
+  seniorityFloor: string | null;
   geography: string[];
   context: string;
   /** Named role archetypes from the brief, each a short paragraph describing
@@ -226,10 +235,16 @@ export async function runFind(
   // themselves rather than seeing a useless "Found 0".
   const allRejectedByArchetype: Candidate[] = [];
   const rejectedSeen = new Set<string>();
+  // Same pattern as rejectedByArchetype: accumulate seniority-gate rejects
+  // across rounds (deduped by name) so the diagnostic can call them out
+  // and so we can fall back to surfacing them when the gate killed the
+  // entire pool.
+  const allRejectedBySeniority: Candidate[] = [];
+  const rejectedSenioritySeen = new Set<string>();
   const seenNames = new Set<string>();
   const funnelTotals: FunnelStats = {
     extracted: 0, afterClean: 0, afterBriefFilter: 0,
-    afterConfidence: 0, afterArchetypeGate: 0, excludedAsAlreadyShown: 0,
+    afterConfidence: 0, afterSeniorityGate: 0, afterArchetypeGate: 0, excludedAsAlreadyShown: 0,
   };
   // Pre-seed with names already shown earlier in this chat so cross-turn
   // dedup works. Without this, turn 3 ("find everyone at JPM/Barclays/…")
@@ -258,7 +273,7 @@ export async function runFind(
           allPeople.map((p) => p.name).join(", ")
         }${alreadyShownNames.length ? "; Also already shown earlier: " + alreadyShownNames.slice(0, 40).join(", ") : ""}. Do NOT return these again.)`;
 
-    const { people: roundPeople, funnel: roundFunnel, rejectedByArchetype } = await handleDiscovery({
+    const { people: roundPeople, funnel: roundFunnel, rejectedByArchetype, rejectedBySeniority } = await handleDiscovery({
       provider,
       query: roundQuery,
       targetCount: remaining,
@@ -275,6 +290,12 @@ export async function runFind(
       rejectedSeen.add(key);
       allRejectedByArchetype.push(r);
     }
+    for (const r of rejectedBySeniority) {
+      const key = (r.name || "").toLowerCase().trim();
+      if (!key || rejectedSenioritySeen.has(key)) continue;
+      rejectedSenioritySeen.add(key);
+      allRejectedBySeniority.push(r);
+    }
     // Aggregate across rounds so the empty-result diagnostic can point at
     // which stage actually nuked the pool (extraction / brief filter /
     // archetype gate). Without this, "0 results" gives the user no
@@ -284,6 +305,7 @@ export async function runFind(
     funnelTotals.afterClean += roundFunnel.afterClean;
     funnelTotals.afterBriefFilter += roundFunnel.afterBriefFilter;
     funnelTotals.afterConfidence += roundFunnel.afterConfidence;
+    funnelTotals.afterSeniorityGate += roundFunnel.afterSeniorityGate;
     funnelTotals.afterArchetypeGate += roundFunnel.afterArchetypeGate;
 
     if (roundPeople.length === 0) break;
@@ -398,8 +420,12 @@ function composeFindSummary(
       const ex = (parsed?.excludeTitles ?? []).slice(0, 3).join(", ");
       parts.push(`${briefDrop} dropped by exclude-titles${ex ? `: ${ex}` : ""}/firm filter`);
     }
-    const archetypeDrop = f.afterConfidence - f.afterArchetypeGate;
-    if (archetypeDrop > 0 && archetypeDrop >= f.afterConfidence / 2) {
+    const seniorityDrop = f.afterConfidence - f.afterSeniorityGate;
+    if (seniorityDrop > 0 && seniorityDrop >= f.afterConfidence / 2 && parsed?.seniorityFloor) {
+      parts.push(`${seniorityDrop} below seniority floor "${parsed.seniorityFloor}"`);
+    }
+    const archetypeDrop = f.afterSeniorityGate - f.afterArchetypeGate;
+    if (archetypeDrop > 0 && archetypeDrop >= f.afterSeniorityGate / 2) {
       parts.push(`${archetypeDrop} rejected by archetype gate`);
     }
     const detail = parts.length ? ` — ${parts.join(", ")}` : "";
@@ -420,13 +446,16 @@ function composeFindSummary(
     const exMsg = ex.length ? ` (exclude-titles: ${ex.slice(0, 3).join(", ")})` : "";
     return `Found 0 — extracted ${f.afterClean} candidates but the brief filter dropped them all${exMsg}. The exclude-titles or target-firm constraints are too tight for the snippets the web returned. Try relaxing the title constraint.`;
   }
-  if (f.afterArchetypeGate === 0 && f.afterConfidence > 0) {
-    return `Found 0 — extracted ${f.afterConfidence} candidates that fit the firm/title filter, but the archetype gate rejected them all as not matching the role you described. Either the snippets didn't have enough role context, or your archetype is too narrow (e.g. a single seniority level when the role exists at several levels at these firms). Try relaxing the seniority or scope constraint and retry.`;
+  if (f.afterSeniorityGate === 0 && f.afterConfidence > 0 && parsed?.seniorityFloor) {
+    return `Found 0 — extracted ${f.afterConfidence} candidates that fit the firm/title filter, but the seniority gate dropped them all as below "${parsed.seniorityFloor}". The web snippets are returning more junior people than the floor allows. Either lower the floor (e.g. "Director or above" instead of "MD or above") or broaden the firm list — niche firms often don't have many at-or-above-MD profiles indexed by Tavily.`;
+  }
+  if (f.afterArchetypeGate === 0 && f.afterSeniorityGate > 0) {
+    return `Found 0 — extracted ${f.afterSeniorityGate} candidates that cleared the seniority floor, but the archetype gate rejected them all as not matching the role you described. Either the snippets didn't have enough role context, or your archetype is too narrow (e.g. a single division when the role exists across several at these firms). Try relaxing the scope constraint and retry.`;
   }
   if (f.afterConfidence === 0 && f.afterBriefFilter > 0) {
     return `Found 0 — ${f.afterBriefFilter} candidates passed the firm/title filter but none scored above low-confidence. Web snippets weren't specific enough; try adding a sector or location to the brief.`;
   }
-  return `Found 0 — extracted ${f.extracted}, lost most through filters (clean ${f.afterClean} → brief ${f.afterBriefFilter} → confidence ${f.afterConfidence} → archetype ${f.afterArchetypeGate}). Relax one constraint at a time and retry.`;
+  return `Found 0 — extracted ${f.extracted}, lost most through filters (clean ${f.afterClean} → brief ${f.afterBriefFilter} → confidence ${f.afterConfidence} → seniority ${f.afterSeniorityGate} → archetype ${f.afterArchetypeGate}). Relax one constraint at a time and retry.`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -450,6 +479,7 @@ async function parseBrief(
   "excludeFirms": ["<exact company name to exclude>", ...],
   "excludeTitles": ["<title pattern to exclude>", ...],
   "excludeSeniority": ["<level to exclude>", ...],
+  "seniorityFloor": "<one-line description of the minimum seniority bar, or null>",
   "geography": ["<region/country>", ...],
   "context": "2-4 sentence summary of what KIND of person qualifies — role semantics, not just titles",
   "archetypes": ["<role archetype as named in brief>", ...],
@@ -463,6 +493,8 @@ Rules:
 - titles = SHORT searchable keywords (≤4 words each), not verbose verbatim titles.
 - archetypes: if the brief numbers or names role categories (e.g. "1. <archetype name>", "Archetype 2: <archetype name>"), capture each as a separate entry WITH its disambiguation rules and exclusions.
 - antiPatterns: capture every "exclude X where Y" or "avoid Z" clause the brief lists, in the brief's own wording.
+- seniorityFloor: set this WHENEVER the brief states a minimum seniority bar — even casually. Trigger phrases include: "MD or above", "MD+", "MD and up", "Director-level or higher", "Partner level", "C-suite only", "VP and above", "Head-of and up", "senior leadership", "executives only", "decision-makers", "no juniors", "no analysts/associates", "top brass". Write the floor as one short phrase that names the minimum acceptable level AND makes "or above" explicit, e.g. "Managing Director or above", "Partner-level or above", "C-suite (CXO/Chief) only", "Head of <function> or above". If no minimum bar is stated, return null. Do NOT invent a floor that the brief didn't ask for.
+- excludeSeniority is for EXCLUSIONS only ("not VPs", "no Directors") — not for floors. When a floor is set, leave excludeSeniority empty unless the brief separately calls out a level to exclude. The seniorityFloor field drives a downstream semantic gate that handles "or above" semantics correctly across firm-specific title ladders.
 - employmentIntent: set to "past" when the brief clearly asks for people who USED TO work at the target firms and are no longer there. Trigger phrases: "ex-", "former", "formerly at", "used to work at", "previously at", "have left", "alumni of", "recent leavers from", "departed X". Default to "current" otherwise.
 - pastFirms: when employmentIntent = "past", move the target firms to pastFirms AND leave "firms" EMPTY (so current-employer filters pass through). The extractor will then filter on past experience. When employmentIntent = "current", leave pastFirms empty.
 - Include all variant spellings of an excluded firm if the brief gives them (e.g. an abbreviation alongside the full name).
@@ -479,6 +511,9 @@ Return ONLY the JSON object.`,
       excludeFirms: parsed.excludeFirms ?? [],
       excludeTitles: parsed.excludeTitles ?? [],
       excludeSeniority: parsed.excludeSeniority ?? [],
+      seniorityFloor: typeof parsed.seniorityFloor === "string" && parsed.seniorityFloor.trim()
+        ? parsed.seniorityFloor.trim()
+        : null,
       geography: parsed.geography ?? [],
       context: parsed.context ?? "",
       archetypes: Array.isArray(parsed.archetypes) ? parsed.archetypes.filter((a): a is string => typeof a === "string") : [],
@@ -501,9 +536,24 @@ function buildExtractCtx(parsed: ParsedBrief | null): string {
   if (!parsed) return "";
   const hasCurrentTargets = parsed.firms.length > 0;
   const hasPastTargets = parsed.employmentIntent === "past" && parsed.pastFirms.length > 0;
-  if (!hasCurrentTargets && !hasPastTargets) return "";
+  const hasFloor = !!parsed.seniorityFloor;
+  // Build context whenever ANY structured filter is set — including a bare
+  // seniority floor with no firms (e.g. "find me C-suite execs in fintech").
+  // Without this, a brief that specifies a floor but no target firms would
+  // skip the extractor's seniority rule entirely.
+  if (!hasCurrentTargets && !hasPastTargets && !hasFloor) return "";
   let ctx = "";
   if (parsed.context) ctx += `LOOKING FOR: ${parsed.context}\n`;
+  if (hasFloor) {
+    ctx += `\nSENIORITY FLOOR — minimum acceptable seniority: ${parsed.seniorityFloor}\n` +
+      `  • Reject any candidate whose title is clearly BELOW this bar.\n` +
+      `  • Different firms ladder differently — judge semantically, not by keyword. Examples (firm-dependent):\n` +
+      `      - "Partner" at a PE/consulting/law firm ≈ MD-equivalent. ACCEPT for an "MD or above" floor.\n` +
+      `      - "EVP" at a US bank can sit ABOVE MD; at a European bank it often sits BELOW. Use evidence.\n` +
+      `      - "Head of <function>" can be MD-level or VP-level — accept only when evidence implies the bar.\n` +
+      `  • If genuinely ambiguous (bare "Director" / "VP" with no scope context), KEEP the candidate — the seniority gate downstream will adjudicate. Do not pre-filter on ambiguity.\n` +
+      `  • Hard rejects for an "MD/Partner/C-suite" floor: anything titled Analyst, Associate, Senior Associate, Manager, Senior Manager, Assistant VP, Intern, Trainee, Apprentice, or any "Junior X" / "Graduate X".\n`;
+  }
   if (hasPastTargets) {
     ctx += `PAST EMPLOYER TARGETS (match on PRIOR experience, NOT current employer): ${parsed.pastFirms.join(", ")}\n`;
     ctx += `INTENT: find people who USED TO work at one of these firms AND have since LEFT. The candidate's CURRENT company must NOT be one of these firms. Their LinkedIn Experience must list one of these firms in a prior role.\n`;
@@ -539,6 +589,12 @@ interface FunnelStats {
   afterClean: number;
   afterBriefFilter: number;
   afterConfidence: number;
+  /** Survivors of the seniority gate. Equal to afterConfidence when no
+   *  seniority floor was set (gate skipped). When a floor IS set, the gap
+   *  between afterConfidence and afterSeniorityGate is the diagnostic for
+   *  "the brief asked for MD+ but Tavily kept returning VPs" — it tells
+   *  the user the floor IS being enforced and how aggressively. */
+  afterSeniorityGate: number;
   afterArchetypeGate: number;
   /** Count of candidates that survived all filters but were dropped at
    *  intake because their name was already in alreadyShownNames — i.e.
@@ -556,6 +612,10 @@ interface HandleDiscoveryResult {
    *  classified as null. Carried out so the caller can fall back to
    *  surfacing them when the gate rejected the entire pool. */
   rejectedByArchetype: Candidate[];
+  /** Candidates the seniority gate dropped as below-floor. Tracked
+   *  separately from rejectedByArchetype so the diagnostic can name the
+   *  right cause ("found 12 but all were below the MD floor"). */
+  rejectedBySeniority: Candidate[];
 }
 
 async function handleDiscovery(args: {
@@ -571,7 +631,7 @@ async function handleDiscovery(args: {
 
   const funnel: FunnelStats = {
     extracted: 0, afterClean: 0, afterBriefFilter: 0,
-    afterConfidence: 0, afterArchetypeGate: 0, excludedAsAlreadyShown: 0,
+    afterConfidence: 0, afterSeniorityGate: 0, afterArchetypeGate: 0, excludedAsAlreadyShown: 0,
   };
 
   const raw = await parallelDiscovery({
@@ -585,7 +645,7 @@ async function handleDiscovery(args: {
   });
   funnel.extracted = raw.length;
 
-  if (raw.length === 0) return { people: [], funnel, rejectedByArchetype: [] };
+  if (raw.length === 0) return { people: [], funnel, rejectedByArchetype: [], rejectedBySeniority: [] };
 
   // Legacy _filterDiscoveryResults
   let people = raw;
@@ -600,6 +660,26 @@ async function handleDiscovery(args: {
   funnel.afterConfidence = people.length;
   const confOrder: Record<string, number> = { high: 0, medium: 1 };
   people.sort((a, b) => (confOrder[a.confidence] ?? 1) - (confOrder[b.confidence] ?? 1));
+
+  // Seniority gate — semantic classifier for the seniorityFloor. Runs ONLY
+  // when the brief specified a floor (most briefs don't, so this is free for
+  // them). Catches the "MD or above" → VP/EVP leakage that the extractor's
+  // soft floor rule lets through. Done as a dedicated LLM pass (not folded
+  // into the archetype gate) because:
+  //   1. Most briefs have a floor without archetypes — folding would skip
+  //      this for those briefs.
+  //   2. Reasoning about seniority ladders is mechanically different from
+  //      reasoning about role semantics — combining the two prompts hurt
+  //      classification accuracy in earlier iterations of the archetype gate.
+  let rejectedBySeniority: Candidate[] = [];
+  if (parsed?.seniorityFloor && people.length > 0) {
+    const before = people.length;
+    const gated = await gateBySeniority({ provider, parsed, candidates: people, userId, userKeys });
+    people = gated.kept;
+    rejectedBySeniority = gated.rejected;
+    console.log(`[find] seniority gate (floor="${parsed.seniorityFloor}"): ${before} → ${people.length} (kept) / ${rejectedBySeniority.length} (rejected)`);
+  }
+  funnel.afterSeniorityGate = people.length;
 
   // Archetype gate — dedicated semantic classifier. Only runs when the
   // brief listed archetypes or anti-patterns (so simple "find me COOs at
@@ -617,7 +697,111 @@ async function handleDiscovery(args: {
   }
   funnel.afterArchetypeGate = people.length;
 
-  return { people, funnel, rejectedByArchetype };
+  return { people, funnel, rejectedByArchetype, rejectedBySeniority };
+}
+
+/** Semantic seniority gate. Given a free-text seniority floor (e.g.
+ *  "Managing Director or above") and a batch of candidates, classify each
+ *  as above_floor / below_floor / ambiguous. Drops below_floor; keeps the
+ *  other two. The LLM does the per-firm semantic compare so we don't need
+ *  a hardcoded title ladder — "Partner" at a PE firm clears MD; "Senior
+ *  Manager" at Big-4 doesn't. Batched into groups of 25 per LLM call. */
+async function gateBySeniority(args: {
+  provider: AiProvider;
+  parsed: ParsedBrief;
+  candidates: Candidate[];
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<{ kept: Candidate[]; rejected: Candidate[] }> {
+  const { provider, parsed, candidates, userId, userKeys } = args;
+  const floor = parsed.seniorityFloor;
+  if (!floor) return { kept: candidates, rejected: [] };
+  const BATCH = 25;
+  const batches: Candidate[][] = [];
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    batches.push(candidates.slice(i, i + BATCH));
+  }
+  const results = await Promise.all(
+    batches.map(async (batch) => {
+      const roster = batch.map((c, idx) => ({
+        id: idx,
+        name: c.name,
+        title: c.title,
+        company: c.company,
+        evidence: c.evidence ?? "",
+      }));
+      try {
+        const out = await aiJson<{ verdicts: Array<{ id: number; verdict: "above_floor" | "below_floor" | "ambiguous"; reason: string }> }>(
+          provider,
+          `You classify each candidate against a SENIORITY FLOOR from a prospecting brief. The floor is the MINIMUM acceptable seniority — candidates BELOW the floor must be rejected.
+
+SENIORITY FLOOR: "${floor}"
+
+HOW TO DECIDE — semantic, per-firm, not a hardcoded title ladder.
+- Read the candidate's title + company + evidence. Reason about where THAT title sits in THAT firm's ladder, not in a generic ladder.
+- Title ladders are firm-specific. The same word means different things at different firms:
+    • "Partner" — at McKinsey/BCG/Bain, PE firms (KKR/Blackstone), and law firms = MD-equivalent or above. CLEARS an "MD or above" floor. At an ad agency or small startup it can be junior.
+    • "Managing Director" — at investment banks (GS, MS, JPM) sits at MD level. At a small consulting boutique it can be the firm's owner (above MD). At some European firms "Director" is the equivalent of US "Managing Director" — judge by firm context.
+    • "Director" — at most large US firms = below MD. At European firms it can BE the MD-equivalent ("Director" at UBS Switzerland, Deutsche Bank, Roland Berger). When in doubt → ambiguous.
+    • "VP" — at investment banks = below MD (analyst → associate → VP → MD). At Big Tech (Google/Meta/Amazon) "VP" can be senior leadership above MD-equivalent.
+    • "EVP" / "SVP" — at US banks usually above MD; at European banks often below. Use evidence.
+    • "Head of <function>" — could be anywhere. Default to ambiguous unless evidence implies seniority (e.g. "leads the global function", "reports to the CEO" → above_floor).
+    • C-suite ("Chief X Officer", "CEO", "Chair", "President", "Founder") clears almost any floor short of an enum like "C-suite only at FAANG-tier".
+
+CLASSIFICATION RULES
+- "above_floor": Title clearly meets or exceeds the floor for this firm. The candidate's role is at least as senior as what the brief asked for.
+- "below_floor": Title is unambiguously below the floor for this firm. Examples for an "MD or above" floor: Analyst, Associate, Senior Associate, Manager, Senior Manager, Assistant VP, Vice President at an IB, Director (US large-firm context with no further seniority signal), Principal at most firms, Lead, Specialist, Consultant.
+- "ambiguous": Title genuinely could go either way at this firm. Examples: bare "Director" at a non-IB firm, "Head of <function>" with no scope evidence, "Partner" at an unknown firm type. Keep ambiguous candidates — better a false positive than missing real MDs.
+
+REASON FIELD
+- Cite the title and the floor and one phrase about firm context. Examples:
+    "Title 'Vice President, Equity Sales' at Goldman Sachs sits below MD on the IB ladder — below_floor"
+    "Title 'Partner' at KKR is MD-equivalent at a PE firm — above_floor"
+    "Title 'Director' at UBS is ambiguous — could be MD-equivalent (European bank) or sub-MD"
+
+Return {"verdicts": [{"id": 0, "verdict": "above_floor", "reason": "..."}, ...]} — one entry per candidate.`,
+          JSON.stringify(roster, null, 2),
+          { maxTokens: 2500, userId, userKeys },
+        );
+        const verdicts = Array.isArray(out.verdicts) ? out.verdicts : [];
+        const kept: Candidate[] = [];
+        const rejected: Candidate[] = [];
+        batch.forEach((c, idx) => {
+          const v = verdicts.find((x) => x.id === idx);
+          if (!v) {
+            // No verdict returned — fail-open, keep the candidate. Better
+            // to surface a maybe-too-junior person than to silently drop
+            // a real match because the LLM dropped a row.
+            kept.push(c);
+            return;
+          }
+          if (v.verdict === "below_floor") {
+            const reason = v.reason?.trim() || `Title appears below the "${floor}" bar`;
+            const seniorityEvidence = `Below seniority floor: ${reason}`;
+            const combined = c.evidence ? `${seniorityEvidence} — ${c.evidence}` : seniorityEvidence;
+            rejected.push({ ...c, evidence: combined });
+            return;
+          }
+          // above_floor or ambiguous → keep. Don't decorate evidence on
+          // pass-through; only the rejection path needs it for the
+          // diagnostic.
+          kept.push(c);
+        });
+        return { kept, rejected };
+      } catch (e) {
+        console.warn("[find] seniority gate batch failed — keeping candidates:", (e as Error).message);
+        // Fail-open on transient errors. The extractor's soft floor rule
+        // already weeds out the most obvious below-floor titles, so
+        // dropping the gate entirely doesn't make things worse than
+        // pre-fix behaviour.
+        return { kept: batch, rejected: [] as Candidate[] };
+      }
+    }),
+  );
+  return {
+    kept: results.flatMap((r) => r.kept),
+    rejected: results.flatMap((r) => r.rejected),
+  };
 }
 
 /** Semantic archetype gate. Given the brief's archetype definitions and
@@ -843,13 +1027,21 @@ async function parallelDiscovery(args: {
   // the brief's breadth.
   const archetypeCount = parsed?.archetypes.length ?? 0;
   const firmCount = (parsed?.firms.length ?? 0) + (parsed?.pastFirms.length ?? 0);
+  // When a seniority floor is set, every query becomes narrower (only at-or-
+  // above title synonyms) and Tavily hits per query drop. Bump the floor on
+  // numQueries by ~50% so total candidate volume stays in the same ballpark
+  // as a no-floor brief — otherwise "MD or above" briefs return 5-10 hits
+  // when the user asked for 50.
+  const floorMultiplier = parsed?.seniorityFloor ? 1.5 : 1;
   const numQueries = Math.min(
-    40,
-    Math.max(
-      Math.ceil(targetCount / 5),
-      archetypeCount * 3,   // 3 queries per distinct archetype
-      Math.ceil(firmCount / 3), // 1 query per ~3 firms (OR-grouped)
-      8,
+    50,
+    Math.ceil(
+      Math.max(
+        Math.ceil(targetCount / 5),
+        archetypeCount * 3,   // 3 queries per distinct archetype
+        Math.ceil(firmCount / 3), // 1 query per ~3 firms (OR-grouped)
+        8,
+      ) * floorMultiplier,
     ),
   );
 
@@ -865,6 +1057,15 @@ QUERY FORMAT — every query MUST name at least one specific company from the br
   BAD:  Two queries that name the same firm + same title in different word order (wasted calls).
 
 Use the EXACT firm names from the brief. Do NOT substitute well-known firms from the same industry that the brief did not list.
+
+SENIORITY FLOOR — if the filters mention "SENIORITY FLOOR" (minimum bar like "Managing Director or above"), bias every query toward at-or-above titles. The floor is a hard signal: spending a query on a title below it is wasted budget because downstream gates will drop those candidates.
+  - Replace generic role keywords with the at-or-above synonym set for the stated floor. Examples:
+      • "MD or above" → use "MD" OR "Managing Director" OR "Partner" OR "Head of" OR "Global Head" OR "Chief" OR "President" OR "Founder" OR "CEO" OR "Chair". DO NOT use "VP", "SVP", "EVP", "Director", "Principal", "Lead" — those are below the floor for most firms.
+      • "Partner-level or above" → use "Partner" OR "Senior Partner" OR "Managing Partner" OR "Equity Partner" OR "Chief". Skip Associate/Director/Counsel.
+      • "C-suite only" → use "Chief" OR "CEO" OR "CTO" OR "CFO" OR "COO" OR "CRO" OR "CIO" OR "CDO" OR "Chair" OR "President". Skip Head/MD/VP/Director.
+      • "VP and above" → use "VP" OR "Vice President" OR "SVP" OR "EVP" OR "Managing Director" OR "MD" OR "Partner" OR "Chief" OR "Head of". Skip Director/Manager/Associate.
+  - When the brief lists specific role keywords AND a floor, combine them: "(Managing Director OR Partner OR Head of) AI/ML <Firm>" — never bare "AI Director <Firm>" if Director is below the floor.
+  - Ambiguous-by-firm titles like "Partner" (MD-equivalent at a PE firm), "Head of X" (could be MD or VP) are FAIR GAME — the seniority gate adjudicates downstream. Just don't query keywords that are unambiguously below the floor.
 
 PAST-EMPLOYER INTENT — if the filters mention "PAST EMPLOYER TARGETS" (people who have LEFT the firm), craft different queries:
   GOOD pattern: "ex-<Firm1> OR ex-<Firm2> OR ex-<Firm3> <role keyword>"
@@ -1075,6 +1276,7 @@ ${extractionHint ? extractionHint + "\n" : ""}DEFAULT BEHAVIOR — be PERMISSIVE
 WHEN TO BE STRICTER — only when the brief explicitly tells you to.
 - ROLE ARCHETYPES (if listed in the structured filters above): a candidate must SEMANTICALLY match one of the archetypes, not just keyword-match. If the brief lists no archetypes, this rule does NOT apply — fall back to title+firm matching only.
 - ANTI-PATTERNS (if listed): reject candidates that match an anti-pattern, even if their title looks right. If the brief lists no anti-patterns, do NOT invent any.
+- SENIORITY FLOOR (if listed): drop any candidate whose title is UNAMBIGUOUSLY below the stated bar. Do the comparison semantically per-firm — "Partner" at a PE firm clears an "MD or above" floor; "Senior Manager" at a Big-4 does not. When the candidate's title alone is ambiguous (bare "Director" with no further scope), KEEP them — a downstream gate will adjudicate. Do NOT pre-filter on ambiguity.
 - Title scope nuance: composite titles like "Head of <X> <Y>" can sometimes mean either (a) <Y> applied internally for <X>, or (b) <Y> services delivered to <X> as a client. Only consider this distinction when the brief's anti-patterns explicitly exclude one variant. Otherwise, accept the title at face value.
 - When archetypes ARE listed and a candidate is genuinely ambiguous against them, prefer to REJECT — empty is better than wrong. This rule does NOT apply to flat firm+title briefs without archetypes.
 
