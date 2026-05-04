@@ -742,6 +742,39 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
   const board = await ensureBoard(req.user!.id, req.params.boardId);
   if (!board) return res.status(404).json({ error: "board_not_found" });
 
+  // Pull the board's column schema so we can route Apollo's hits into
+  // whatever the user has named their Email / Phone / etc. columns.
+  // Without this, enrichment writes to the legacy DB fields and the
+  // values disappear into rows that the user never surfaces.
+  const boardRow = await db
+    .selectFrom("crm_boards")
+    .select("columns")
+    .where("id", "=", req.params.boardId)
+    .executeTakeFirst();
+  type Col = { id: string; builtin?: boolean; label?: string; type?: string };
+  const columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
+
+  /** Pick the user's custom column for an enrichment field. We prefer a
+   *  type match (a "email"-typed column for Apollo's email hit), then
+   *  fall back to a label match (case-insensitive) if no typed column
+   *  exists. Returns the column id to write under customFields, or
+   *  null if there's no suitable target. */
+  const findCustomCol = (type: string, labelHints: string[]): string | null => {
+    const customs = columns.filter((c) => !c.builtin);
+    const byType = customs.find((c) => c.type === type);
+    if (byType) return byType.id;
+    const lc = labelHints.map((h) => h.toLowerCase());
+    const byLabel = customs.find((c) => lc.includes((c.label ?? "").toLowerCase()));
+    return byLabel?.id ?? null;
+  };
+  const targets = {
+    email:    findCustomCol("email", ["email"]),
+    phone:    findCustomCol("phone", ["phone", "mobile"]),
+    linkedin: findCustomCol("link",  ["linkedin"]),
+    title:    findCustomCol("text",  ["title", "role", "position"]),
+    company:  findCustomCol("text",  ["company", "organization", "org"]),
+  };
+
   const rows = await db
     .selectFrom("crm_contacts")
     .selectAll()
@@ -752,10 +785,24 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
   let skipped = 0;
   let alreadyHad = 0;
 
+  // Returns the cell value the user actually sees for an enrichment
+  // field — preferring the custom column if one is mapped, falling
+  // back to the legacy DB field. Used to skip rows that are already
+  // filled regardless of which surface holds the value.
+  const readCell = (r: typeof rows[number], legacy: string | null | undefined, customId: string | null) => {
+    if (customId) {
+      const cf = (r.custom_fields ?? {}) as Record<string, string>;
+      return cf[customId] ?? "";
+    }
+    return legacy ?? "";
+  };
+
   for (const r of rows) {
-    // Don't burn an Apollo call on anyone who already has an email —
-    // that's the field this enrichment is here to fill.
-    if (r.email && r.email.trim().length > 0) {
+    // Don't burn an Apollo call on anyone whose email is already filled
+    // — whether that's in the legacy field or in the user's custom
+    // Email column.
+    const existingEmail = readCell(r, r.email, targets.email);
+    if (existingEmail && existingEmail.trim().length > 0) {
       alreadyHad++;
       continue;
     }
@@ -768,8 +815,10 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     } else {
       params.name = r.name;
     }
-    if (r.company) params.organizationName = r.company;
-    if (r.linkedin) params.linkedinUrl = r.linkedin;
+    const existingCompany = readCell(r, r.company, targets.company);
+    if (existingCompany) params.organizationName = existingCompany;
+    const existingLinkedin = readCell(r, r.linkedin, targets.linkedin);
+    if (existingLinkedin) params.linkedinUrl = existingLinkedin;
 
     let person = null;
     try {
@@ -779,22 +828,49 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     }
     if (!person) { skipped++; continue; }
 
-    const patch: Record<string, unknown> = { updated_at: new Date() };
-    if (!r.email && person.email) patch.email = person.email;
-    if (!r.phone) {
-      const phone = person.phone_numbers?.[0]?.sanitized_number ?? person.phone_numbers?.[0]?.raw_number;
-      if (phone) patch.phone = phone;
-    }
-    if (!r.linkedin && person.linkedin_url) patch.linkedin = person.linkedin_url;
-    if (!r.title && person.title) patch.title = person.title;
-    if (!r.company && person.organization?.name) patch.company = person.organization.name;
+    // Build two patches: legacy DB-field updates (for backward compat
+    // with the contact drawer's mailto/LinkedIn pills + CSV export)
+    // AND a custom_fields patch that lands the value in whatever
+    // user-named columns the board has. Either way the enriched data
+    // ends up where the user will actually see it.
+    const legacyPatch: Record<string, unknown> = { updated_at: new Date() };
+    const customMerge: Record<string, string> = {};
+    const fieldsTouched: string[] = [];
 
-    if (Object.keys(patch).length > 1) {
-      await db.updateTable("crm_contacts").set(patch).where("id", "=", r.id).execute();
-      enriched++;
-    } else {
-      skipped++;
+    const tryWrite = (
+      legacyKey: "email" | "phone" | "linkedin" | "title" | "company",
+      legacyVal: string | null | undefined,
+      apolloVal: string | null | undefined,
+      customId: string | null,
+    ) => {
+      const value = (apolloVal ?? "").trim();
+      if (!value) return;
+      const existing = readCell(r, legacyVal, customId);
+      if (existing && existing.trim().length > 0) return;
+      // Always also fill the legacy field if it's empty — keeps the
+      // mailto/LinkedIn drawer pills and the CSV export working.
+      if (!legacyVal || !legacyVal.trim()) legacyPatch[legacyKey] = value;
+      if (customId) customMerge[customId] = value;
+      fieldsTouched.push(legacyKey);
+    };
+
+    tryWrite("email",    r.email,    person.email, targets.email);
+    const phoneApollo = person.phone_numbers?.[0]?.sanitized_number ?? person.phone_numbers?.[0]?.raw_number;
+    tryWrite("phone",    r.phone,    phoneApollo, targets.phone);
+    tryWrite("linkedin", r.linkedin, person.linkedin_url, targets.linkedin);
+    tryWrite("title",    r.title,    person.title, targets.title);
+    tryWrite("company",  r.company,  person.organization?.name, targets.company);
+
+    if (fieldsTouched.length === 0) { skipped++; continue; }
+
+    if (Object.keys(customMerge).length > 0) {
+      const current = (r.custom_fields ?? {}) as Record<string, string>;
+      const merged = { ...current, ...customMerge };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      legacyPatch.custom_fields = merged as any;
     }
+    await db.updateTable("crm_contacts").set(legacyPatch).where("id", "=", r.id).execute();
+    enriched++;
   }
 
   if (enriched > 0) notifyBoard(req.params.boardId, "contact");
