@@ -1774,10 +1774,13 @@ function TableView({
     window.addEventListener("pointerup", onUp);
   };
 
+  // Trailing 1fr column absorbs whatever wrap-width is left over so the
+  // header strip + row backgrounds extend across the full canvas instead
+  // of cutting off at the last user column.
   const gridTemplate = visibleCols.map((c) => {
     if (liveWidth && liveWidth.id === c.id) return `${liveWidth.px}px`;
     return c.width ?? "200px";
-  }).join(" ") + " 36px";
+  }).join(" ") + " 36px 1fr";
 
   // Row-height drag — same pattern as the column-width handle. Drag any
   // body row's bottom edge OR the header's bottom edge to set the
@@ -1927,6 +1930,9 @@ function TableView({
           <div className="tbl-cell hdr">
             <AddColumnButton onAdd={addCol} />
           </div>
+          {/* Trailing spacer cell consumes 1fr of leftover wrap width so
+              the header strip extends across the full canvas. */}
+          <div className="tbl-cell hdr tbl-tail" />
           {/* Row-height drag handle — sits on the header's bottom edge,
               spans the full row width, drag down/up to set the
               board-wide row height. */}
@@ -1945,6 +1951,7 @@ function TableView({
               </div>
             ))}
             <div className="tbl-cell" />
+            <div className="tbl-cell tbl-tail" />
           </div>
         ))}
         {contacts.length === 0 && (

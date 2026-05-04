@@ -1246,11 +1246,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .tbl-wrap::-webkit-scrollbar { height: 8px; width: 8px; }
 .tbl-wrap::-webkit-scrollbar-thumb { background: rgba(20,14,40,0.12); border-radius: 4px; }
-/* The grid sizes to its declared column widths — period. No min-width
-   forcing it to stretch and no fr units anywhere by default, so the
-   table stays the same size when the sidebar collapses (the wrap just
-   gets more empty space on its right). */
-.tbl { width: max-content; }
+/* The grid is at least the sum of its declared column widths AND at
+   least the wrap width — so on viewports wider than the columns, the
+   trailing 1fr spacer (added inline by TableView) absorbs the slack and
+   the header strip / row backgrounds extend across the full canvas. */
+.tbl { width: max-content; min-width: 100%; }
 .tbl-row {
   display: grid;
   /* grid-template-columns is set inline by TableView so columns can be
@@ -1284,6 +1284,9 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .tbl-row > .tbl-cell:last-child { border-right: 0; }
 .tbl-row.tbl-head > .tbl-cell { border-right: 1px solid var(--hairline-strong); }
 .tbl-row.tbl-head > .tbl-cell:last-child { border-right: 0; }
+/* Tail cell — fills the leftover wrap width, draws no divider so the
+   row reads as continuous beyond the user's last column. */
+.tbl-row > .tbl-cell.tbl-tail { border-right: 0; }
 .tbl-cell.c-name { color: var(--text); }
 .tbl-cell.c-num { font-family: 'Geist Mono', monospace; justify-content: center; }
 .tbl-stage {
