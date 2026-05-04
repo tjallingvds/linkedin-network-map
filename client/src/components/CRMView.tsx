@@ -3047,6 +3047,7 @@ export function CRMView({
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
   const [backgrounding, setBackgrounding] = useState(false);
+  const [classifyingSkill, setClassifyingSkill] = useState(false);
   const [columns, setColumns] = useState<CrmColumnDef[]>(defaultColumns);
   const [rowHeight, setRowHeight] = useState<CrmRowHeight>(DEFAULT_ROW_HEIGHT);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
@@ -3458,6 +3459,47 @@ export function CRMView({
     }
   };
 
+  /** "Classify skill" — for every contact whose Skill cell is empty, search
+   *  LinkedIn via Tavily and ask the LLM to pick the closest dropdown value
+   *  (typically Technical / Non technical) based on past roles + posts. The
+   *  server reads the actual options off the Skill column so the user can
+   *  rename them and the classifier follows. */
+  const skillCol = useMemo(
+    () => columns.find((c) => !c.builtin && c.type === "dropdown" && (c.label ?? "").trim().toLowerCase() === "skill"),
+    [columns],
+  );
+  const classifySkill = async () => {
+    if (!activeId || classifyingSkill) return;
+    if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
+    if (!skillCol) {
+      onFlash("Add a dropdown column called \"Skill\" first (e.g. Technical / Non technical).");
+      return;
+    }
+    const needSkill = contacts.filter((c) => {
+      const cf = (c.customFields ?? {}) as Record<string, string>;
+      return !((cf[skillCol.id] ?? "").trim());
+    }).length;
+    if (needSkill === 0) { onFlash("Every contact already has a Skill value — nothing to classify."); return; }
+    setClassifyingSkill(true);
+    try {
+      const r = await api.post<{ classified: number; skipped: number; alreadyHad?: number; total: number }>(
+        `/api/crm/boards/${activeId}/classify-skill`,
+      );
+      const fresh = await api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`);
+      setContacts(fresh.contacts);
+      const had = r.alreadyHad ?? 0;
+      onFlash(
+        `Classified ${r.classified}` +
+        (r.skipped ? ` · ${r.skipped} too thin to call` : "") +
+        (had ? ` · ${had} already had one` : ""),
+      );
+    } catch (e) {
+      onFlash(`Classify skill failed: ${(e as Error).message}`);
+    } finally {
+      setClassifyingSkill(false);
+    }
+  };
+
   if (loading) return <div style={{ padding: 24, color: "var(--text-dim)" }}>Loading CRM…</div>;
   if (!active) return <div style={{ padding: 24, color: "var(--text-dim)" }}>No boards yet.</div>;
 
@@ -3515,6 +3557,16 @@ export function CRMView({
                 >
                   <IconSparkle size={12} />{backgrounding ? "Researching…" : "Find backgrounds"}
                 </button>
+                {skillCol && (
+                  <button
+                    className="pill-btn"
+                    disabled={classifyingSkill}
+                    onClick={() => { close(); classifySkill(); }}
+                    title={`Auto-fill the "${skillCol.label ?? "Skill"}" column by reading each contact's LinkedIn (technical roles, posts, articles).`}
+                  >
+                    <IconSparkle size={12} />{classifyingSkill ? "Classifying…" : "Classify skill"}
+                  </button>
+                )}
                 <button className="pill-btn" onClick={() => { close(); setImportOpen(true); }}>
                   <IconUpload size={12} />Import CSV
                 </button>

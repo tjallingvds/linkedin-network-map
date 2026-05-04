@@ -973,6 +973,210 @@ router.post("/boards/:boardId/background", async (req: AuthedRequest, res) => {
   res.json({ filled, skipped, alreadyHad, total: rows.length });
 });
 
+/**
+ * Auto-classify the board's "Skill" dropdown column. For every contact whose
+ * Skill cell is empty, run a Tavily LinkedIn lookup and ask the LLM to pick
+ * the closest option from the column's own dropdown values (typically
+ * "Technical" / "Non technical"). Reads option labels off the column so the
+ * user can rename them and the classifier follows.
+ *
+ * Why dedicated to the Skill column:
+ *   - Generic "auto-classify any dropdown" needs a per-column prompt the user
+ *     would have to author. Out of scope for v1.
+ *   - The technical/non-technical decision is a recurring sales workflow —
+ *     ranking who to send to engineering vs. who to keep in BD outreach.
+ *
+ * Concurrency: 5 contacts at a time (vs. sequential in /enrich + /background).
+ * 200 contacts go from ~5min sequential to ~30s. Tavily and most LLM providers
+ * tolerate this comfortably for normal CRM sizes.
+ */
+router.post("/boards/:boardId/classify-skill", async (req: AuthedRequest, res) => {
+  const userKeys = extractUserKeys(req);
+  const tavilyKey = userKeys?.tavily ?? env.TAVILY_API_KEY;
+  if (!tavilyKey) {
+    return res.status(501).json({
+      error: "tavily_not_configured",
+      message: "Tavily key missing — add it in Settings → API keys to enable skill classification.",
+    });
+  }
+  const provider = availableProviders(userKeys)[0];
+  if (!provider) {
+    return res.status(501).json({
+      error: "llm_not_configured",
+      message: "No LLM provider configured — add an OpenAI / Anthropic / DeepSeek key in Settings.",
+    });
+  }
+  const board = await ensureBoard(req.user!.id, req.params.boardId);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+
+  // Find the Skill column: a dropdown column whose label is "skill" (case-
+  // insensitive). Read its actual options so the classifier writes back the
+  // user's exact strings, including capitalisation. If options change over
+  // time, the prompt follows automatically — no hardcoded vocabulary.
+  const boardRow = await db
+    .selectFrom("crm_boards")
+    .select("columns")
+    .where("id", "=", req.params.boardId)
+    .executeTakeFirst();
+  type Col = { id: string; builtin?: boolean; label?: string; type?: string; options?: Array<{ value: string }> };
+  const columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
+  const skillCol = columns.find(
+    (c) => !c.builtin && c.type === "dropdown" && (c.label ?? "").trim().toLowerCase() === "skill",
+  );
+  if (!skillCol) {
+    return res.status(400).json({
+      error: "skill_column_missing",
+      message: "Add a dropdown column called \"Skill\" with the values you want (e.g. Technical / Non technical) before running this.",
+    });
+  }
+  const options = (skillCol.options ?? [])
+    .map((o) => (o.value ?? "").trim())
+    .filter((v) => v.length > 0);
+  if (options.length < 2) {
+    return res.status(400).json({
+      error: "skill_options_missing",
+      message: "The Skill column needs at least two dropdown options before it can be auto-classified.",
+    });
+  }
+
+  const rows = await db
+    .selectFrom("crm_contacts")
+    .selectAll()
+    .where("board_id", "=", req.params.boardId)
+    .execute();
+
+  let classified = 0;
+  let skipped = 0;
+  let alreadyHad = 0;
+
+  // Concurrency limiter — 5 in flight at once. Each task does up to one
+  // Tavily call + one LLM call, so 5 in parallel is well under typical
+  // provider rate limits and keeps a 200-contact run on the order of 30s.
+  const CONCURRENCY = 5;
+  let cursor = 0;
+  const totals = { classified: 0, skipped: 0, alreadyHad: 0 };
+
+  const processOne = async (r: typeof rows[number]): Promise<void> => {
+    const cf = (r.custom_fields ?? {}) as Record<string, string>;
+    const existing = (cf[skillCol.id] ?? "").trim();
+    if (existing.length > 0) { totals.alreadyHad++; return; }
+
+    // Anchor the search on linkedin.com so we get profile-shaped snippets
+    // (headlines, posts, articles) rather than press-release noise. If the
+    // contact has a saved LinkedIn URL we use it verbatim; otherwise we
+    // search by name + company.
+    const linkedin = (r.linkedin ?? "").trim();
+    const company = (r.company ?? "").trim();
+    const queryParts = linkedin
+      ? [linkedin]
+      : [r.name, company].filter(Boolean);
+    const q = queryParts.join(" ");
+    let results: Awaited<ReturnType<typeof tavilySearch>> = [];
+    try {
+      results = await tavilySearch(q, {
+        depth: "advanced",
+        maxResults: 6,
+        includeDomains: ["linkedin.com"],
+        userId: req.user!.id,
+        userKeys,
+      });
+      // If the LinkedIn-only pass returned nothing (rare names, fresh
+      // profiles, or LinkedIn-blocked snippets), fall back to open web.
+      if (results.length === 0) {
+        results = await tavilySearch(`${q} engineer OR developer OR scientist OR technical`, {
+          depth: "advanced",
+          maxResults: 6,
+          userId: req.user!.id,
+          userKeys,
+        });
+      }
+    } catch (err) {
+      console.warn(`[classify-skill] tavily failed for ${r.name}:`, (err as Error).message);
+    }
+    if (results.length === 0) { totals.skipped++; return; }
+
+    const context = results
+      .map((x) => `[${x.title}](${x.url})\n${(x.content ?? "").slice(0, 1500)}`)
+      .join("\n\n---\n\n");
+
+    let pick: string | null = null;
+    try {
+      const out = await aiJson<{ label: string | null; reason: string }>(
+        provider,
+        `You classify a person against a fixed dropdown of skill labels for a CRM column.
+
+Allowed labels (pick EXACTLY ONE, copying it verbatim — case and spacing matter): ${options.map((o) => `"${o}"`).join(", ")}
+
+Decide based on the search snippets below. Look for:
+  - Current OR past technical roles (engineer, ML/AI, data scientist, research scientist, software developer, CTO, technical co-founder, tech lead, devops, security engineer, quant, etc.).
+  - Technical posts or articles they authored (code, papers, technical talks, deep-dives, open source).
+  - Technical degrees (CS, EE, physics, applied math) — secondary signal, only when corroborated by role or output.
+
+Treat as NON-technical (or whatever the non-technical option is) when the evidence shows:
+  - Sales, BD, marketing, partnerships, account management, ops, recruiting, finance, legal, HR, design, PR, creative roles — even at tech companies.
+  - Founder/CEO with no technical-role history and no technical authorship — they're business-side.
+  - Investor, advisor, board member — non-technical unless evidence shows hands-on technical work.
+
+If the snippets are too thin or contradictory to call confidently, return label: null. We'd rather leave the cell blank than mis-classify.
+
+Return ONLY {"label": "<one of the allowed labels, or null>", "reason": "<one short sentence citing the evidence>"}.`,
+        `Person: ${r.name}${r.title ? ", " + r.title : ""}${company ? " @ " + company : ""}\n\nSnippets:\n${context}`,
+        { maxTokens: 300, userId: req.user!.id, userKeys },
+      );
+      const raw = (out.label ?? "").trim();
+      if (raw) {
+        // Normalize against the column's options — case-insensitive match
+        // back to the exact stored string. Prevents the LLM from coining
+        // "technical " (trailing space) or "Technical." that the dropdown
+        // wouldn't render.
+        const exact = options.find((o) => o === raw);
+        const ci = exact ?? options.find((o) => o.toLowerCase() === raw.toLowerCase()) ?? null;
+        if (ci) pick = ci;
+      }
+    } catch (err) {
+      console.warn(`[classify-skill] aiJson failed for ${r.name}:`, (err as Error).message);
+    }
+
+    if (!pick) { totals.skipped++; return; }
+
+    try {
+      const merged = { ...cf, [skillCol.id]: pick };
+      const writeResult = await db
+        .updateTable("crm_contacts")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .set({ custom_fields: merged as any, updated_at: new Date() as any })
+        .where("id", "=", r.id)
+        .execute();
+      const rowsAffected = Number(writeResult[0]?.numUpdatedRows ?? 0);
+      if (rowsAffected === 0) {
+        console.warn(`[classify-skill] 0 rows updated for ${r.name} — write skipped`);
+        totals.skipped++;
+        return;
+      }
+      totals.classified++;
+    } catch (err) {
+      console.error(`[classify-skill] DB write failed for ${r.name}:`, (err as Error).message);
+      totals.skipped++;
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(CONCURRENCY, rows.length) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= rows.length) return;
+      await processOne(rows[i]!);
+    }
+  });
+  await Promise.all(workers);
+
+  classified = totals.classified;
+  skipped = totals.skipped;
+  alreadyHad = totals.alreadyHad;
+
+  if (classified > 0) notifyBoard(req.params.boardId, "contact");
+  res.json({ classified, skipped, alreadyHad, total: rows.length });
+});
+
 router.delete("/contacts/:id", async (req: AuthedRequest, res) => {
   // Two-way collab: any board member can delete, not just the row's creator.
   const existing = await db
