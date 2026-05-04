@@ -37,6 +37,30 @@ interface ParsedTarget {
  *  type "everyting" / "finde out" / "whatever you can". */
 export function looksLikePersonBackground(s: string): boolean {
   const hay = s.toLowerCase();
+
+  // Length cap — person-background queries are short ("background on Jane
+  // Doe at Acme"). Long structured prospecting briefs that mention research/
+  // talks/posts as qualification signals MUST NOT hit this branch — the
+  // dispatcher would otherwise pull one famous person from the firm list and
+  // return a single-person markdown blob instead of a list of prospect cards.
+  // 800 chars is generous: a wide person-background query like "what do you
+  // know about X — recent posts, talks, papers, anything weird and specific"
+  // is well under 200 chars.
+  if (s.length > 800) return false;
+
+  // Negative signals — the brief is structured prospecting, not a person
+  // lookup. Any one of these is conclusive: the user is asking for a list,
+  // not a profile. Catches briefs that happen to mention "research" (as a
+  // job title) or "posts/talks" (as qualification signals).
+  const isProspectingBrief =
+    /\b(?:tier\s*\d|sub[-\s]?segment|volume\s+target|qualification\s+signals?|disqualification|target\s+(?:firms?|titles?|companies?))\b/.test(hay) ||
+    /\b(?:find|generate|surface|return|give\s+me)\s+(?:\d{1,3}|a\s+list|leads?|prospects?|people)\b/.test(hay) ||
+    /\b(?:explicitly\s+exclude|do\s+not\s+include|avoid\s+these|skip\s+these)\b/.test(hay) ||
+    // Numbered or bullet-listed firm rosters — a person-background query
+    // never enumerates 10+ companies.
+    /\b(?:firms?|companies?|targets?)\s*(?:non-exhaustive|include\s+any|examples?)\b/.test(hay);
+  if (isProspectingBrief) return false;
+
   // Keyword-style triggers — any one of these + a name triggers the branch.
   const deepDiveIntent =
     // "background" / "deep dive" / "research" — direct.
