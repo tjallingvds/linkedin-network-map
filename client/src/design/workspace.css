@@ -881,7 +881,15 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .send:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Thread */
-.thread { display: flex; flex-direction: column; gap: 16px; padding: 4px 0 12px; }
+/* Chat thread is capped + centred to the same width as the composer
+   below, so the message column reads as a focused conversation lane
+   rather than a banner stretched across the whole canvas. */
+.thread {
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 4px 0 12px;
+  width: 100%; max-width: 760px;
+  margin: 0 auto;
+}
 .user-msg {
   align-self: flex-end; max-width: 70%;
   padding: 10px 14px; border-radius: 14px 14px 4px 14px;

@@ -1632,6 +1632,7 @@ function HeaderCell({
   onResizeStart: (colId: string, startX: number, startWidthPx: number) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  const modal = useModal();
   const [draft, setDraft] = useState(col.label);
   const [menuOpen, setMenuOpen] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
@@ -1767,7 +1768,16 @@ function HeaderCell({
                   <button
                     className="bm-item"
                     style={{ color: "var(--danger, oklch(0.55 0.2 25))" }}
-                    onClick={() => { onDelete(); setMenuOpen(false); }}
+                    onClick={async () => {
+                      setMenuOpen(false);
+                      const ok = await modal.confirm({
+                        title: `Delete the "${col.label}" column?`,
+                        message: `This removes the column from the table AND clears its value on every contact on this board. This can't be undone.`,
+                        confirmLabel: "Delete column",
+                        destructive: true,
+                      });
+                      if (ok) onDelete();
+                    }}
                   >
                     <IconClose size={11} /><span>Delete column</span>
                   </button>
@@ -2920,8 +2930,16 @@ export function CRMDrawer({
                 {onColumnsChange && (
                   <button
                     className="dp-del"
-                    title={`Delete "${c.label}" field`}
-                    onClick={() => onColumnsChange(columns.filter((x) => x.id !== c.id))}
+                    title={`Delete the "${c.label}" field for every contact`}
+                    onClick={async () => {
+                      const ok = await modal.confirm({
+                        title: `Delete the "${c.label}" field?`,
+                        message: `This removes the column from the table AND clears its value on every contact on this board. This can't be undone.`,
+                        confirmLabel: "Delete field",
+                        destructive: true,
+                      });
+                      if (ok) onColumnsChange(columns.filter((x) => x.id !== c.id));
+                    }}
                   >
                     <IconClose size={11} />
                   </button>
