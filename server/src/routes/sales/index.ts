@@ -469,18 +469,29 @@ const chatSchema = z.object({
     .optional(),
 });
 
+/** Hard cap on how many message rows the chat LLM sees inline. Token cost is
+ *  ~80 tokens per row at 100-char snippets, so 12k rows ≈ 1M tokens worst
+ *  case. Claude / GPT-4-class models handle this comfortably; user has opted
+ *  in to "spend whatever it takes". Beyond this we stratified-sample. */
+const CHAT_ROW_BUDGET = 12000;
+
 router.post("/chat", async (req: AuthedRequest, res) => {
   const parsed = chatSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "invalid_body", issues: parsed.error.issues });
 
   const userKeys = extractUserKeys(req);
-  const provider: AiProvider = availableProviders(userKeys)[0] ?? ("openai" as AiProvider);
+  // Prefer Anthropic when available — large context window keeps full row
+  // dumps cheap; fall back to whatever the user has configured.
+  const order: AiProvider[] = ["anthropic", "openai", "deepseek"];
+  const available = availableProviders(userKeys);
+  const provider: AiProvider =
+    order.find((p) => available.includes(p)) ?? available[0] ?? ("openai" as AiProvider);
 
-  // Build the dataset the LLM reasons over. Aggregated counts only — never
-  // raw message bodies, both for prompt size and privacy.
   const userId = req.user!.id;
 
-  const summary = await db
+  // Pull every message + the counterpart's connection metadata (seniority,
+  // position, company, name) so the LLM can filter on any of these.
+  const rowsRaw = await db
     .selectFrom("sales_analysis_messages as m")
     .leftJoin("sales_analysis_connections as c", (join) =>
       join
@@ -490,68 +501,85 @@ router.post("/chat", async (req: AuthedRequest, res) => {
     .leftJoin("sales_analysis_uploads as u", "u.id", "m.upload_id")
     .select([
       "u.team_member_name as teamMember",
+      "m.counterpart_name as counterpart",
       "m.direction",
       "m.message_type as messageType",
       sql<string>`coalesce(c.seniority, 'unknown')`.as("seniority"),
       "c.position",
       "c.company",
-      "m.counterpart_name_normalized as counterpart",
+      "m.message_date as messageDate",
+      "m.subject",
+      "m.content_snippet as snippet",
+      "m.conversation_id as conversationId",
     ])
     .where("m.user_id", "=", userId)
-    .limit(20000)
+    .orderBy("m.message_ts", "desc")
+    .limit(CHAT_ROW_BUDGET)
     .execute();
 
-  // Build aggregates the model can reason over without seeing raw rows.
-  const total = summary.length;
-  const sent = summary.filter((r) => r.direction === "sent").length;
-  const received = summary.filter((r) => r.direction === "received").length;
+  // Compact each row to keep prompt size predictable. We keep the full
+  // subject / position / company / counterpart so the LLM can filter and
+  // cite specifics; snippet is trimmed since the substance is usually in
+  // the first sentence.
+  const rows = rowsRaw.map((r) => ({
+    teamMember: r.teamMember ?? "—",
+    counterpart: r.counterpart,
+    direction: r.direction,
+    type: r.messageType ?? "unknown",
+    seniority: r.seniority ?? "unknown",
+    position: r.position ?? null,
+    company: r.company ?? null,
+    date: r.messageDate ?? null,
+    subject: r.subject ?? null,
+    snippet: (r.snippet ?? "").slice(0, 200) || null,
+    convId: r.conversationId ?? null,
+  }));
 
-  const byTeam: Record<string, { sent: number; received: number; coldSent: number; replies: number; counterparts: Set<string>; responded: Set<string> }> = {};
-  const bySeniority: Record<string, { sent: number; counterparts: Set<string>; responded: Set<string> }> = {};
-  const byType: Record<string, number> = {};
-
-  // First pass — figure out who responded (per upload).
-  // Build a set of (upload_id, counterpart) where direction=received.
+  // Pre-compute aggregates so simple totals don't require the LLM to
+  // count rows. The LLM gets BOTH — aggregates for fast lookups, rows
+  // for any filtered or detailed question.
   const responders = new Set<string>();
-  for (const r of summary) {
-    if (r.direction === "received") responders.add(`${r.teamMember ?? ""}|${r.counterpart}`);
+  for (const r of rows) {
+    if (r.direction === "received") responders.add(`${r.teamMember}|${r.counterpart}`);
   }
+  type Bucket = { sent: number; received: number; coldSent: number; counterparts: Set<string>; responded: Set<string> };
+  const fresh = (): Bucket => ({ sent: 0, received: 0, coldSent: 0, counterparts: new Set(), responded: new Set() });
+  const byTeam = new Map<string, Bucket>();
+  const bySen = new Map<string, Bucket>();
+  const byType = new Map<string, number>();
 
-  for (const r of summary) {
-    const tm = r.teamMember ?? "—";
-    byTeam[tm] ??= { sent: 0, received: 0, coldSent: 0, replies: 0, counterparts: new Set(), responded: new Set() };
+  for (const r of rows) {
+    const tm = r.teamMember;
+    if (!byTeam.has(tm)) byTeam.set(tm, fresh());
+    if (!bySen.has(r.seniority)) bySen.set(r.seniority, fresh());
+    const T = byTeam.get(tm)!;
+    const S = bySen.get(r.seniority)!;
     if (r.direction === "sent") {
-      byTeam[tm].sent += 1;
-      byTeam[tm].counterparts.add(r.counterpart);
-      if (responders.has(`${tm}|${r.counterpart}`)) byTeam[tm].responded.add(r.counterpart);
-      if (r.messageType === "cold") byTeam[tm].coldSent += 1;
+      T.sent += 1; T.counterparts.add(r.counterpart);
+      S.sent += 1; S.counterparts.add(r.counterpart);
+      if (r.type === "cold") T.coldSent += 1;
+      const k = `${tm}|${r.counterpart}`;
+      if (responders.has(k)) { T.responded.add(r.counterpart); S.responded.add(r.counterpart); }
     } else {
-      byTeam[tm].received += 1;
+      T.received += 1; S.received += 1;
     }
-
-    if (r.direction === "sent") {
-      const sen = r.seniority ?? "unknown";
-      bySeniority[sen] ??= { sent: 0, counterparts: new Set(), responded: new Set() };
-      bySeniority[sen].sent += 1;
-      bySeniority[sen].counterparts.add(r.counterpart);
-      if (responders.has(`${tm}|${r.counterpart}`)) bySeniority[sen].responded.add(r.counterpart);
-    }
-    const t = r.messageType ?? "unknown";
-    byType[t] = (byType[t] ?? 0) + 1;
+    byType.set(r.type, (byType.get(r.type) ?? 0) + 1);
   }
 
-  const dataset = {
-    totals: { messages: total, sent, received },
-    byTeamMember: Object.entries(byTeam).map(([name, v]) => ({
+  const aggregates = {
+    totals: {
+      rowsInDataset: rows.length,
+      sent: rows.filter((r) => r.direction === "sent").length,
+      received: rows.filter((r) => r.direction === "received").length,
+    },
+    byTeamMember: Array.from(byTeam.entries()).map(([name, v]) => ({
       teamMember: name,
-      sent: v.sent,
-      received: v.received,
-      coldSent: v.coldSent,
+      sent: v.sent, received: v.received, coldSent: v.coldSent,
       uniqueCounterparts: v.counterparts.size,
       uniqueResponded: v.responded.size,
       responseRate: v.counterparts.size > 0 ? +(v.responded.size / v.counterparts.size).toFixed(3) : 0,
     })),
-    bySeniority: Object.entries(bySeniority).map(([bucket, v]) => ({
+    bySeniority: Array.from(bySen.entries()).map(([bucket, v]) => ({
       seniority: bucket,
       label: SENIORITY_LABEL[bucket as SeniorityBucket] ?? bucket,
       sent: v.sent,
@@ -559,32 +587,48 @@ router.post("/chat", async (req: AuthedRequest, res) => {
       uniqueResponded: v.responded.size,
       responseRate: v.counterparts.size > 0 ? +(v.responded.size / v.counterparts.size).toFixed(3) : 0,
     })),
-    byMessageType: Object.entries(byType).map(([type, count]) => ({ type, count })),
+    byMessageType: Array.from(byType.entries()).map(([type, count]) => ({ type, count })),
   };
 
-  const SYSTEM = `You are a sales analytics assistant. The user has uploaded LinkedIn connection and message data for one or more sales team members. You will be given a structured DATASET (already aggregated) and a QUESTION. Your job is to give a concise data-driven answer and, when a chart would help, propose a chart spec.
+  const SYSTEM = `You are a sales analytics analyst. The user has uploaded LinkedIn connection + message data for one or more sales team members. You will be given:
+
+  AGGREGATES — pre-computed totals and breakdowns by team member, seniority, message type.
+  ROWS — every message in the dataset, joined with the counterpart's seniority / position / company. You can filter, group, and count over ROWS to answer ANY question the AGGREGATES don't cover.
+
+Use ROWS for:
+- Filtered questions ("response rate for messages mentioning 'pricing'", "directors at AI companies", "Sarah's cold messages to founders").
+- Sub-bucket breakdowns the aggregates don't cover.
+- Counting unique people, not just message rows. Group by counterpart name.
+- Pulling example messages to illustrate a point.
+
+Use AGGREGATES for:
+- Top-line totals, response rates, and seniority/team-member breakdowns.
 
 Rules:
-- Never invent numbers. Only cite values that appear in DATASET.
-- If the dataset is empty, say so plainly.
-- Be concrete: name the team member, the seniority bucket, the percentage.
-- Prefer % response rate over raw sent counts when judging "what works best".
-- Keep the answer under 120 words.
+- Never invent numbers. Compute from the data given.
+- A "response" means: that counterpart appears with direction='received' for the same teamMember at any point. Don't require time ordering — replies often pre-date the sent message in scraped exports.
+- Response rate = (unique counterparts who replied) / (unique counterparts messaged). Use unique-people, never raw row counts.
+- "Cold" / "follow_up" / "reply" are pre-computed in the 'type' field — trust them.
+- Be specific and direct. Cite numbers, names, percentages.
+- When the user asks for a chart, return one. When the user asks an open question, only return a chart if it adds clarity.
 
-Output strictly this JSON shape:
+Output strictly this JSON:
 {
-  "answer": "<plain text response, no markdown headers>",
+  "answer": "<plain prose, no markdown headers, can be multi-paragraph>",
   "chart": null | {
     "kind": "bar" | "pie" | "line" | "number",
     "title": "<short title>",
-    "metric": "<short label of what is plotted>",
+    "metric": "<what is plotted, short>",
     "data": [{ "label": "<x>", "value": <number> }]
   },
-  "suggestedTitle": "<short title for pinning this analysis, max 60 chars>"
+  "suggestedTitle": "<short label if pinned, ≤60 chars>"
 }`;
 
-  const USER = `DATASET:
-${JSON.stringify(dataset, null, 2)}
+  const USER = `AGGREGATES:
+${JSON.stringify(aggregates)}
+
+ROWS (${rows.length}):
+${JSON.stringify(rows)}
 
 PRIOR TURNS (most recent last):
 ${(parsed.data.history ?? []).map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n") || "(none)"}
@@ -602,7 +646,7 @@ ${parsed.data.question}`;
         data: { label: string; value: number }[];
       };
       suggestedTitle: string;
-    }>(provider, SYSTEM, USER, { maxTokens: 1200, userId, userKeys });
+    }>(provider, SYSTEM, USER, { maxTokens: 4000, userId, userKeys });
     res.json(result);
   } catch (e) {
     if (isLlmAuthError(e)) return res.status(401).json({ error: "llm_auth", message: (e as Error).message });

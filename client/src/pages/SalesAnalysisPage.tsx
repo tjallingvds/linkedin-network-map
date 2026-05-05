@@ -15,7 +15,7 @@ import {
   type ParsedMessages,
 } from "../lib/linkedinCsv";
 
-// ---------- types matching the server ----------
+// ---------- types ----------
 
 interface UploadRow {
   id: string;
@@ -24,27 +24,6 @@ interface UploadRow {
   connections_count: number;
   messages_count: number;
   created_at: string;
-}
-
-interface Analytics {
-  totals: {
-    uploads: number; connections: number; messages: number;
-    sent: number; received: number;
-    cold: number; followUp: number; reply: number;
-    uniqueCounterparts: number;
-  };
-  responseRate: { overall: number; cold: number; followUp: number };
-  byTeamMember: {
-    uploadId: string; teamMember: string;
-    sent: number; received: number; cold: number; followUp: number;
-    responseRate: number;
-  }[];
-  bySeniority: {
-    bucket: string; label: string;
-    sent: number; replies: number; responseRate: number;
-  }[];
-  byMessageType: { type: string; count: number }[];
-  byMonth: { month: string; sent: number; received: number }[];
 }
 
 interface ChartSpec {
@@ -70,14 +49,6 @@ interface PinnedRow {
   created_at: string;
 }
 
-const TYPE_LABEL: Record<string, string> = {
-  cold: "Cold outreach",
-  follow_up: "Follow-up",
-  reply: "Reply",
-  received: "Received",
-  unknown: "Other",
-};
-
 const PIE_COLORS = ["#5e8b7e", "#a7c4bc", "#dfeeea", "#f5b8a3", "#c9a8d4", "#e6c89a"];
 
 // ---------- main page ----------
@@ -85,20 +56,17 @@ const PIE_COLORS = ["#5e8b7e", "#a7c4bc", "#dfeeea", "#f5b8a3", "#c9a8d4", "#e6c
 export function SalesAnalysisPage() {
   const navigate = useNavigate();
   const [uploads, setUploads] = useState<UploadRow[]>([]);
-  const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [pinned, setPinned] = useState<PinnedRow[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
 
   const refreshAll = async () => {
     try {
-      const [u, a, p] = await Promise.all([
+      const [u, p] = await Promise.all([
         api.get<{ uploads: UploadRow[] }>("/api/sales/uploads"),
-        api.get<Analytics>("/api/sales/analytics"),
         api.get<{ pinned: PinnedRow[] }>("/api/sales/pinned"),
       ]);
       setUploads(u.uploads);
-      setAnalytics(a);
       setPinned(p.pinned);
     } catch (e) {
       setFlash(`Load failed: ${(e as Error).message}`);
@@ -172,10 +140,8 @@ export function SalesAnalysisPage() {
             onDelete={deleteUpload}
           />
 
-          {analytics && analytics.totals.uploads > 0 ? (
+          {uploads.length > 0 ? (
             <>
-              <StatGrid analytics={analytics} />
-              <ChartsSection analytics={analytics} />
               <PinnedSection pinned={pinned} onUnpin={unpin} />
               <ChatSection onPin={pinChart} />
             </>
@@ -237,125 +203,6 @@ function UploadsSection({
         </div>
       )}
     </section>
-  );
-}
-
-// ---------- stat grid ----------
-
-function fmt(n: number): string { return n.toLocaleString(); }
-function pct(n: number): string { return `${(n * 100).toFixed(1)}%`; }
-
-function StatGrid({ analytics }: { analytics: Analytics }) {
-  const { totals, responseRate } = analytics;
-  return (
-    <section className="sa-grid">
-      <Card label="Messages sent" value={fmt(totals.sent)} hint={`${fmt(totals.received)} received`} />
-      <Card label="Unique counterparts" value={fmt(totals.uniqueCounterparts)} hint={`across ${totals.uploads} team member${totals.uploads === 1 ? "" : "s"}`} />
-      <Card label="Response rate" value={pct(responseRate.overall)} hint={`cold ${pct(responseRate.cold)} · follow-up ${pct(responseRate.followUp)}`} accent />
-      <Card label="Connections imported" value={fmt(totals.connections)} hint={`${fmt(totals.cold)} cold msgs · ${fmt(totals.followUp)} follow-ups`} />
-    </section>
-  );
-}
-
-function Card({ label, value, hint, accent }: { label: string; value: string; hint?: string; accent?: boolean }) {
-  return (
-    <div className="sa-card">
-      <div className="sa-card-label">{label}</div>
-      <div className="sa-card-value" style={accent ? { color: "var(--accent)" } : undefined}>{value}</div>
-      {hint && <div className="sa-card-hint">{hint}</div>}
-    </div>
-  );
-}
-
-// ---------- charts ----------
-
-function ChartsSection({ analytics }: { analytics: Analytics }) {
-  const teamData = analytics.byTeamMember.map((t) => ({
-    name: t.teamMember,
-    sent: t.sent,
-    responseRate: +(t.responseRate * 100).toFixed(1),
-  }));
-
-  const seniorityData = analytics.bySeniority
-    .filter((s) => s.sent > 0)
-    .map((s) => ({
-      name: s.label,
-      sent: s.sent,
-      responseRate: +(s.responseRate * 100).toFixed(1),
-    }));
-
-  const typeData = analytics.byMessageType
-    .filter((t) => t.type !== "received" && t.type !== "unknown")
-    .map((t) => ({ name: TYPE_LABEL[t.type] ?? t.type, value: t.count }));
-
-  const monthData = analytics.byMonth.map((m) => ({
-    month: m.month,
-    sent: m.sent,
-    received: m.received,
-  }));
-
-  return (
-    <section className="sa-charts">
-      <ChartPanel title="Response rate by team member" subtitle="% of unique counterparts who replied">
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={teamData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(20,14,40,0.06)" />
-            <XAxis dataKey="name" tick={{ fontSize: 11, fill: "var(--text-dim)" }} />
-            <YAxis tick={{ fontSize: 11, fill: "var(--text-dim)" }} unit="%" />
-            <Tooltip />
-            <Bar dataKey="responseRate" fill="#5e8b7e" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </ChartPanel>
-
-      <ChartPanel title="Response rate by seniority" subtitle="grouped from LinkedIn position strings">
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={seniorityData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(20,14,40,0.06)" />
-            <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--text-dim)" }} angle={-25} textAnchor="end" height={70} />
-            <YAxis tick={{ fontSize: 11, fill: "var(--text-dim)" }} unit="%" />
-            <Tooltip />
-            <Bar dataKey="responseRate" fill="#a7c4bc" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </ChartPanel>
-
-      <ChartPanel title="Message mix" subtitle="cold vs follow-up vs reply">
-        <ResponsiveContainer width="100%" height={260}>
-          <PieChart>
-            <Pie data={typeData} dataKey="value" nameKey="name" outerRadius={80}>
-              {typeData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-            </Pie>
-            <Tooltip />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
-          </PieChart>
-        </ResponsiveContainer>
-      </ChartPanel>
-
-      <ChartPanel title="Activity over time" subtitle="messages per month">
-        <ResponsiveContainer width="100%" height={260}>
-          <LineChart data={monthData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(20,14,40,0.06)" />
-            <XAxis dataKey="month" tick={{ fontSize: 10, fill: "var(--text-dim)" }} />
-            <YAxis tick={{ fontSize: 11, fill: "var(--text-dim)" }} />
-            <Tooltip />
-            <Legend wrapperStyle={{ fontSize: 11 }} />
-            <Line type="monotone" dataKey="sent" stroke="#5e8b7e" strokeWidth={2} dot={false} />
-            <Line type="monotone" dataKey="received" stroke="#c9a8d4" strokeWidth={2} dot={false} />
-          </LineChart>
-        </ResponsiveContainer>
-      </ChartPanel>
-    </section>
-  );
-}
-
-function ChartPanel({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
-  return (
-    <div className="sa-chart-panel">
-      <div className="sa-chart-title">{title}</div>
-      {subtitle && <div className="sa-chart-sub">{subtitle}</div>}
-      <div className="sa-chart-body">{children}</div>
-    </div>
   );
 }
 
