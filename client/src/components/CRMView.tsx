@@ -3536,13 +3536,32 @@ export function CRMView({
   const classifyCountry = async () => {
     if (!activeId || classifyingCountry) return;
     if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
-    if (!countryCol) {
-      onFlash("Add a Text or Dropdown column called \"Country\" first.");
-      return;
+
+    // No Country column on this board — offer to create one inline rather
+    // than dead-ending the user. Same shape as classify-skill's missing-
+    // column behavior, but auto-creates the column on confirm.
+    let col = countryCol;
+    if (!col) {
+      const ok = window.confirm(
+        "This board has no \"Country\" column.\n\n" +
+        "Add a Text column called \"Country\" now and run the classifier?",
+      );
+      if (!ok) return;
+      const newCol: CrmColumnDef = {
+        id: makeCustomColId("Country"),
+        builtin: false,
+        label: "Country",
+        type: "text",
+        width: "180px",
+      };
+      const next = [...columns, newCol];
+      await saveColumns(next);
+      col = newCol;
     }
+
     const needCountry = contacts.filter((c) => {
       const cf = (c.customFields ?? {}) as Record<string, string>;
-      return !((cf[countryCol.id] ?? "").trim());
+      return !((cf[col!.id] ?? "").trim());
     }).length;
     if (needCountry === 0) { onFlash("Every contact already has a Country value — nothing to classify."); return; }
     setClassifyingCountry(true);
@@ -3701,16 +3720,18 @@ export function CRMView({
                     <IconSparkle size={12} />{classifyingSkill ? "Classifying…" : "Classify skill"}
                   </button>
                 )}
-                {countryCol && (
-                  <button
-                    className="pill-btn"
-                    disabled={classifyingCountry}
-                    onClick={() => { close(); classifyCountry(); }}
-                    title={`Auto-fill the "${countryCol.label ?? "Country"}" column by reading each contact's LinkedIn location.`}
-                  >
-                    <IconSparkle size={12} />{classifyingCountry ? "Classifying…" : "Classify country"}
-                  </button>
-                )}
+                <button
+                  className="pill-btn"
+                  disabled={classifyingCountry}
+                  onClick={() => { close(); classifyCountry(); }}
+                  title={
+                    countryCol
+                      ? `Auto-fill the "${countryCol.label ?? "Country"}" column by reading each contact's LinkedIn location.`
+                      : "Adds a Country column to this board and fills it from each contact's LinkedIn location."
+                  }
+                >
+                  <IconSparkle size={12} />{classifyingCountry ? "Classifying…" : "Classify country"}
+                </button>
                 <button className="pill-btn" onClick={() => { close(); setImportOpen(true); }}>
                   <IconUpload size={12} />Import CSV
                 </button>
