@@ -127,33 +127,36 @@ export function SalesAnalysisPage() {
 
         {flash && <div className="sa-flash">{flash}</div>}
 
-        <div className="sa-content">
-          <div className="sa-header">
-            <div className="sa-eyebrow">Sales analysis</div>
-            <h1 className="sa-title">Pipeline insights</h1>
-            <div className="sa-sub">
-              Upload a Connections.csv + messages.csv pair for each sales team member.
-              Each pair stays grouped to its uploader.
-            </div>
+        {uploads.length > 0 ? (
+          <div className="sa-fullchat">
+            <TeamStrip
+              uploads={uploads}
+              onAdd={() => setShowUpload(true)}
+              onDelete={deleteUpload}
+            />
+            <PinnedSection pinned={pinned} onUnpin={unpin} />
+            <ChatSection onPin={pinChart} />
           </div>
-
-          <UploadsSection
-            uploads={uploads}
-            onUploadClick={() => setShowUpload(true)}
-            onDelete={deleteUpload}
-          />
-
-          {uploads.length > 0 ? (
-            <>
-              <PinnedSection pinned={pinned} onUnpin={unpin} />
-              <ChatSection onPin={pinChart} />
-            </>
-          ) : (
+        ) : (
+          <div className="sa-content">
+            <div className="sa-header">
+              <div className="sa-eyebrow">Sales analysis</div>
+              <h1 className="sa-title">Pipeline insights</h1>
+              <div className="sa-sub">
+                Upload a Connections.csv + messages.csv pair for each sales team member.
+                Each pair stays grouped to its uploader.
+              </div>
+            </div>
+            <UploadsSection
+              uploads={uploads}
+              onUploadClick={() => setShowUpload(true)}
+              onDelete={deleteUpload}
+            />
             <div className="sa-placeholder">
               Upload a team member's data to start analyzing.
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {showUpload && (
           <UploadModal
@@ -170,7 +173,42 @@ export function SalesAnalysisPage() {
   );
 }
 
-// ---------- uploads section ----------
+// ---------- slim team strip (chat-dominant layout) ----------
+
+function TeamStrip({
+  uploads, onAdd, onDelete,
+}: {
+  uploads: UploadRow[];
+  onAdd: () => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="sa-topbar">
+      <div className="sa-topbar-left">
+        <div className="sa-topbar-eyebrow">Sales analysis</div>
+        <div className="sa-topbar-chips">
+          {uploads.map((u) => (
+            <span key={u.id} className="sa-team-chip" title={`${u.connections_count.toLocaleString()} connections · ${u.messages_count.toLocaleString()} messages`}>
+              {u.team_member_name}
+              <button
+                className="sa-team-chip-x"
+                onClick={() => onDelete(u.id)}
+                aria-label={`Remove ${u.team_member_name}`}
+              >
+                <IconClose size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      </div>
+      <button className="sa-team-add" onClick={onAdd}>
+        <IconUpload size={11} />Add team member
+      </button>
+    </div>
+  );
+}
+
+// ---------- uploads section (empty-state only) ----------
 
 function UploadsSection({
   uploads, onUploadClick, onDelete,
