@@ -611,6 +611,15 @@ Use ROWS for:
 
 Use AGGREGATES for top-line totals and quick breakdowns.
 
+INTERPRETING "MESSAGE TYPE" / "WHAT WORKS BEST":
+The 'type' field on a row only carries one signal: cold vs follow_up vs reply. That is rarely what the user means when they ask "what message type works best", "what variant", "which cold message works", or similar. They almost always mean the CONTENT of the messages — different templates / wordings / personalization levels. So when the user asks "what message type works for X":
+1. Filter ROWS to the right scope (e.g. cold first messages to bank people in the last month).
+2. Cluster the SUBJECTS + SNIPPETS by similarity. Treat near-duplicate phrasings (only name/company swapped) as one template cluster. Treat highly personalized one-offs as their own cluster or call them out individually.
+3. Compute response rate per cluster × seniority bucket. Show the cluster's distinctive opener (first 8–12 words) so the user can identify it.
+4. Use the 'type' field only as a filter ("among cold messages, which template…") — never as the answer to "which message type works".
+
+If the user asks specifically about cold/follow_up/reply, use the type field directly. If they say "which cold message" / "which template" / "which variant" / "what wording", cluster by content as above.
+
 Rules:
 - Compute from the data. Never invent numbers.
 - A "response" = that counterpart appears with direction='received' for the same teamMember at any point. Don't require time ordering.
@@ -670,7 +679,7 @@ ${parsed.data.question}`;
         data: { label: string; value: number }[];
       };
       suggestedTitle: string;
-    }>(provider, SYSTEM, USER, { maxTokens: 4000, userId, userKeys });
+    }>(provider, SYSTEM, USER, { maxTokens: 16000, userId, userKeys });
     const charts = result.charts ?? (result.chart ? [result.chart] : []);
     res.json({
       answer: result.answer ?? "",

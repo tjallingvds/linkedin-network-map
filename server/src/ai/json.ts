@@ -190,7 +190,57 @@ function parseJson<T>(raw: string): T {
     return JSON.parse(cleaned) as T;
   } catch {
     const m = cleaned.match(/[[{][\s\S]*[\]}]/);
-    if (m) return JSON.parse(m[0]) as T;
+    if (m) {
+      try { return JSON.parse(m[0]) as T; } catch { /* fall through to recovery */ }
+    }
+    // Recovery for truncated output: when the model hits maxTokens mid-string,
+    // we get something like '{"answer":"...long text', missing closing punctuation.
+    // Walk the prefix forward, terminate the open string at the last whole word,
+    // then append the missing closing brackets/braces in the right order.
+    const recovered = recoverTruncatedJson(cleaned);
+    if (recovered != null) {
+      try { return JSON.parse(recovered) as T; } catch { /* couldn't salvage */ }
+    }
     throw new Error(`AI returned non-JSON: ${cleaned.slice(0, 200)}`);
   }
+}
+
+/** Best-effort recovery of a JSON value that was cut off mid-output.
+ *  Tracks the brace/bracket stack and the open-string state, then closes
+ *  whatever was left dangling. Returns null if the input doesn't look like
+ *  JSON at all. */
+function recoverTruncatedJson(s: string): string | null {
+  // Find the start of the JSON value.
+  const start = s.search(/[[{]/);
+  if (start === -1) return null;
+  let i = start;
+  const stack: string[] = []; // entries are "}" or "]"
+  let inString = false;
+  let escape = false;
+  for (; i < s.length; i++) {
+    const c = s[i]!;
+    if (inString) {
+      if (escape) { escape = false; continue; }
+      if (c === "\\") { escape = true; continue; }
+      if (c === '"') { inString = false; continue; }
+      continue;
+    }
+    if (c === '"') { inString = true; continue; }
+    if (c === "{") stack.push("}");
+    else if (c === "[") stack.push("]");
+    else if (c === "}" || c === "]") stack.pop();
+  }
+  let trimmed = s.slice(start);
+  if (inString) {
+    // Close the dangling string. Trim any trailing backslash that would
+    // otherwise escape the closing quote we're about to add.
+    if (trimmed.endsWith("\\")) trimmed = trimmed.slice(0, -1);
+    trimmed += '"';
+  }
+  // A trailing comma (e.g. inside an array we never finished) is not legal —
+  // strip it before closing the structure.
+  trimmed = trimmed.replace(/,\s*$/, "");
+  // Append closers in reverse stack order.
+  while (stack.length) trimmed += stack.pop();
+  return trimmed;
 }
