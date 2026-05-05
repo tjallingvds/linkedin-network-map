@@ -2396,8 +2396,8 @@ button:focus-visible { outline-offset: 3px; }
 .sa-back:active { transform: translateY(1px); }
 
 .sa-content {
-  width: 100%; max-width: 1400px; margin: 0 auto;
-  padding: 88px 32px 48px;
+  width: 100%; margin: 0 auto;
+  padding: 88px 48px 48px;
   display: flex; flex-direction: column; gap: 28px;
 }
 .sa-eyebrow {
@@ -2597,7 +2597,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-thread {
   display: flex; flex-direction: column; gap: 16px;
   padding: 4px 0 12px;
-  width: 100%; max-width: 1000px; margin: 0 auto;
+  width: 100%; margin: 0 auto;
 }
 .sa-composer-wrap {
   /* Same shape as the main chat composer-wrap, but no horizontal padding —
@@ -2606,6 +2606,9 @@ button:focus-visible { outline-offset: 3px; }
   position: sticky; bottom: 0; z-index: 5;
   background: linear-gradient(to bottom, transparent, var(--bg-0) 24px);
 }
+/* Override the main-chat composer cap (880px) inside the sales analysis
+ * page — the user wants the input to fill the full content width. */
+.sa-composer-wrap .composer { max-width: none; }
 
 /* Sales chat overrides the default ai-summary 880px cap — analyses contain
  * wide breakdown tables that need room. */
