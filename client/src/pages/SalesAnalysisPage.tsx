@@ -329,6 +329,45 @@ function RenderSpec({ spec }: { spec: ChartSpec }) {
 
 // ---------- chat section ----------
 
+/** Split an assistant-turn markdown answer on inline chart markers. The
+ *  model is told to insert `[[CHART:N]]` on its own line where the Nth
+ *  chart should render. We walk the text, emit the text-before as a `md`
+ *  segment, then a `chart` segment for the marker, and continue. Unknown
+ *  indices (out of range) are kept as plain text so the user notices. */
+type AnswerSegment = { kind: "md"; text: string } | { kind: "chart"; idx: number };
+function splitAnswerByChartMarkers(text: string, chartCount: number): AnswerSegment[] {
+  if (!text) return [];
+  const re = /\[\[CHART:(\d+)\]\]/g;
+  const out: AnswerSegment[] = [];
+  let last = 0;
+  for (let m = re.exec(text); m; m = re.exec(text)) {
+    const idx = Number(m[1]);
+    if (idx >= 0 && idx < chartCount) {
+      out.push({ kind: "md", text: text.slice(last, m.index) });
+      out.push({ kind: "chart", idx });
+      last = m.index + m[0].length;
+    }
+  }
+  out.push({ kind: "md", text: text.slice(last) });
+  return out;
+}
+
+function InlineChart({ chart, onPin }: { chart: ChartSpec; onPin: () => void }) {
+  return (
+    <div className="sa-inline-chart">
+      <div className="sa-inline-chart-head">
+        <div>
+          <div className="sa-chart-title">{chart.title}</div>
+          {chart.metric && <div className="sa-chart-sub">{chart.metric}</div>}
+        </div>
+        <button className="pill-btn" onClick={onPin}>Pin</button>
+      </div>
+      <div className="sa-chart-body"><RenderSpec spec={chart} /></div>
+    </div>
+  );
+}
+
+
 function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, title: string) => void }) {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
@@ -385,30 +424,47 @@ function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, tit
           {turns.map((t, i) => {
             if (t.role === "user") return <div key={i} className="user-msg">{t.content ?? ""}</div>;
             const text = t.content ?? "";
+            const charts = t.charts ?? [];
+            const userQuestion = turns[i - 1]?.content ?? "";
+            const segments = splitAnswerByChartMarkers(text, charts.length);
+            const usedCharts = new Set<number>();
             return (
               <div key={i} className="ai-block">
                 <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
-                <div
-                  className="ai-summary sa-md"
-                  dangerouslySetInnerHTML={{ __html: text ? (marked.parse(text) as string) : "" }}
-                />
-                {(t.charts ?? []).map((chart, ci) => (
-                  <div key={ci} className="sa-inline-chart">
-                    <div className="sa-inline-chart-head">
-                      <div>
-                        <div className="sa-chart-title">{chart.title}</div>
-                        {chart.metric && <div className="sa-chart-sub">{chart.metric}</div>}
-                      </div>
-                      <button
-                        className="pill-btn"
-                        onClick={() => onPin(chart, turns[i - 1]?.content ?? "", t.suggestedTitle ?? chart.title)}
-                      >
-                        Pin
-                      </button>
-                    </div>
-                    <div className="sa-chart-body"><RenderSpec spec={chart} /></div>
-                  </div>
-                ))}
+                {segments.map((seg, si) => {
+                  if (seg.kind === "md") {
+                    if (!seg.text) return null;
+                    return (
+                      <div
+                        key={si}
+                        className="ai-summary sa-md"
+                        dangerouslySetInnerHTML={{ __html: marked.parse(seg.text) as string }}
+                      />
+                    );
+                  }
+                  // chart marker
+                  const chart = charts[seg.idx];
+                  if (!chart) return null;
+                  usedCharts.add(seg.idx);
+                  return (
+                    <InlineChart
+                      key={si}
+                      chart={chart}
+                      onPin={() => onPin(chart, userQuestion, t.suggestedTitle ?? chart.title)}
+                    />
+                  );
+                })}
+                {/* Any chart the model produced but didn't tag with a marker
+                 * still renders at the end so it isn't lost. */}
+                {charts.map((chart, ci) =>
+                  usedCharts.has(ci) ? null : (
+                    <InlineChart
+                      key={`tail-${ci}`}
+                      chart={chart}
+                      onPin={() => onPin(chart, userQuestion, t.suggestedTitle ?? chart.title)}
+                    />
+                  ),
+                )}
               </div>
             );
           })}

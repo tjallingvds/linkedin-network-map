@@ -521,11 +521,11 @@ router.post("/chat", async (req: AuthedRequest, res) => {
   // subject / position / company / counterpart so the LLM can filter and
   // cite specifics; snippet is trimmed since the substance is usually in
   // the first sentence.
-  const rows = rowsRaw.map((r) => ({
+  const rowsBase = rowsRaw.map((r) => ({
     teamMember: r.teamMember ?? "—",
     counterpart: r.counterpart,
     direction: r.direction,
-    type: r.messageType ?? "unknown",
+    type: r.messageType ?? "unknown", // per-conversation type from ingest
     seniority: r.seniority ?? "unknown",
     position: r.position ?? null,
     company: r.company ?? null,
@@ -534,6 +534,49 @@ router.post("/chat", async (req: AuthedRequest, res) => {
     snippet: (r.snippet ?? "").slice(0, 200) || null,
     convId: r.conversationId ?? null,
   }));
+
+  // Override the per-conversation type with a stricter per-counterpart
+  // classification. The first sent message to a given counterpart (across
+  // ALL conversations, ordered by date) is "cold". Any later sent message
+  // with no received in between is "follow_up". Sent after at least one
+  // received is "reply". This matches what the user means by "first
+  // message" — LinkedIn often opens a new conversation_id for the same
+  // counterpart, which used to inflate the cold count.
+  const groups = new Map<string, typeof rowsBase>();
+  for (const r of rowsBase) {
+    const k = `${r.teamMember}|${r.counterpart}`;
+    const arr = groups.get(k);
+    if (arr) arr.push(r);
+    else groups.set(k, [r]);
+  }
+  const tsOf = (s: string | null): number => {
+    if (!s) return 0;
+    const cleaned = s.replace(/\sUTC$/i, "Z").replace(" ", "T");
+    const t = Date.parse(cleaned);
+    return Number.isNaN(t) ? 0 : t;
+  };
+  const idToType = new Map<typeof rowsBase[number], string>();
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => tsOf(a.date) - tsOf(b.date));
+    let receivedSeen = false;
+    let sentSeen = false;
+    for (const r of arr) {
+      let type: string;
+      if (r.direction === "received") {
+        type = "received";
+        receivedSeen = true;
+      } else if (receivedSeen) {
+        type = "reply";
+      } else if (sentSeen) {
+        type = "follow_up";
+      } else {
+        type = "cold";
+      }
+      if (r.direction === "sent") sentSeen = true;
+      idToType.set(r, type);
+    }
+  }
+  const rows = rowsBase.map((r) => ({ ...r, type: idToType.get(r) ?? r.type }));
 
   // Pre-compute aggregates so simple totals don't require the LLM to
   // count rows. The LLM gets BOTH — aggregates for fast lookups, rows
@@ -624,7 +667,7 @@ Rules:
 - Compute from the data. Never invent numbers.
 - A "response" = that counterpart appears with direction='received' for the same teamMember at any point. Don't require time ordering.
 - Response rate = (unique counterparts who replied) / (unique counterparts messaged). Always unique-people.
-- "Cold" / "follow_up" / "reply" are pre-computed in the 'type' field — trust them.
+- The 'type' field is computed PER COUNTERPART (not per LinkedIn conversation_id). 'cold' = the very first message ever sent to that counterpart by that team member, across all conversations. 'follow_up' = a later sent message to the same counterpart with no received in between. 'reply' = sent after at least one received. When the user says "first messages only", filter to type='cold'. Do NOT include type='follow_up' rows in a "first messages only" analysis.
 - Be specific. Cite numbers, names, percentages. Don't be vague.
 - When the user asks for a chart, return one in the chart field. For open questions, return a chart if it sharpens the answer.
 - For long multi-step briefs: work through every step. Use markdown headings (##), tables, bullet lists in the answer field — they will render. Don't truncate. Don't punt to "the user should run this elsewhere".
@@ -635,9 +678,14 @@ CHARTS — IMPORTANT:
 - Don't bother charting anything where n < 30 across categories — flag that in the answer instead.
 - Each chart must have a clear title and a meaningful "metric" label (e.g. "Success rate (%)").
 
+INLINE PLACEMENT — IMPORTANT:
+- Place each chart inline next to the table or paragraph it belongs to. Insert the literal placeholder \`[[CHART:N]]\` on its own line at the position you want the chart to render, where N is the 0-based index in the "charts" array. Example: a 3-chart answer might have \`[[CHART:0]]\` after the personalization table, \`[[CHART:1]]\` after the seniority breakdown, \`[[CHART:2]]\` in the conclusion.
+- Every chart in the array MUST have exactly one matching \`[[CHART:N]]\` marker in the answer. Don't dump charts at the end. Don't reference a chart with prose — use the marker.
+- The marker is the only way charts render inline. Without it the chart is hidden.
+
 Output STRICTLY this JSON shape (no other prose, no code fences):
 {
-  "answer": "<your full analysis as markdown — can be long, multi-section, with tables and bullets>",
+  "answer": "<full analysis as markdown — multi-section with tables, bullets, and [[CHART:N]] markers placed inline>",
   "charts": [
     {
       "kind": "bar" | "pie" | "line" | "number",
