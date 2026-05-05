@@ -2396,7 +2396,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-back:active { transform: translateY(1px); }
 
 .sa-content {
-  width: 100%; max-width: 1100px; margin: 0 auto;
+  width: 100%; max-width: 1400px; margin: 0 auto;
   padding: 88px 32px 48px;
   display: flex; flex-direction: column; gap: 28px;
 }
@@ -2572,15 +2572,18 @@ button:focus-visible { outline-offset: 3px; }
   .sa-charts { grid-template-columns: 1fr; }
 }
 
-/* Sales analysis — chat surface (mirrors the main chat aesthetic). */
+/* Sales analysis — chat surface (mirrors the main chat aesthetic).
+ * Shell takes the full content width; thread + composer cap themselves
+ * internally so message text stays readable. */
 .sa-chat-shell {
   display: flex; flex-direction: column;
-  width: 100%; max-width: 920px; margin: 0 auto;
+  width: 100%;
+  flex: 1 1 auto; min-height: 600px;
   gap: 8px;
 }
 .sa-chat-hero {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 16px; padding: 28px 0 20px;
+  gap: 16px; padding: 80px 0 40px;
 }
 .sa-chat-hero h2 {
   margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em;
@@ -2594,7 +2597,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-thread {
   display: flex; flex-direction: column; gap: 16px;
   padding: 4px 0 12px;
-  width: 100%;
+  width: 100%; max-width: 1000px; margin: 0 auto;
 }
 .sa-composer-wrap {
   /* Same shape as the main chat composer-wrap, but no horizontal padding —
@@ -2603,6 +2606,10 @@ button:focus-visible { outline-offset: 3px; }
   position: sticky; bottom: 0; z-index: 5;
   background: linear-gradient(to bottom, transparent, var(--bg-0) 24px);
 }
+
+/* Sales chat overrides the default ai-summary 880px cap — analyses contain
+ * wide breakdown tables that need room. */
+.sa-thread .ai-summary { max-width: none; }
 
 /* Markdown rendering inside an assistant turn — tables, headings, code,
  * lists, blockquotes — kept tight so dense answers still scan well. */
