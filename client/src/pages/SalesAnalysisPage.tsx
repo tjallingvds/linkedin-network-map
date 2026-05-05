@@ -5,8 +5,11 @@ import {
   Line, LineChart, Pie, PieChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from "recharts";
+import { marked } from "marked";
 import { IconArrowR, IconClose, IconUpload, IconSparkle } from "../design/icons";
 import { api } from "../lib/api";
+
+marked.setOptions({ breaks: true, gfm: true });
 import {
   parseLinkedIn,
   parseLinkedInMessages,
@@ -293,8 +296,17 @@ function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, tit
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [turns]);
+
+  // Auto-grow the composer textarea as the user pastes / types longer briefs.
+  useEffect(() => {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
+  }, [input]);
 
   const send = async () => {
     const q = input.trim();
@@ -316,60 +328,92 @@ function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, tit
         suggestedTitle: r.suggestedTitle,
       }]);
     } catch (e) {
-      setTurns((t) => [...t, { role: "assistant", content: `Error: ${(e as Error).message}` }]);
+      setTurns((t) => [...t, { role: "assistant", content: `**Error:** ${(e as Error).message}` }]);
     } finally { setBusy(false); }
   };
 
   return (
-    <section className="sa-section">
-      <div className="sa-section-head">
-        <div className="sa-section-title">Ask the data</div>
-      </div>
-      <div className="sa-chat">
-        <div className="sa-chat-stream">
-          {turns.length === 0 && (
-            <div className="sa-chat-empty">
-              Ask things like <em>"who has the highest reply rate at director level"</em> or{" "}
-              <em>"which message type works best for my team?"</em>. If a chart helps, I'll generate one and you can pin it.
+    <div className="sa-chat-shell">
+      {turns.length === 0 ? (
+        <div className="sa-chat-hero">
+          <div className="orb-wrap"><div className={`orb ${busy ? "thinking" : ""}`} /></div>
+          <h2>Ask the data.</h2>
+          <div className="sa-chat-hero-sub">
+            Try <em>"which template variant works best per seniority"</em> or paste a full analysis brief — I have every row in context.
+          </div>
+        </div>
+      ) : (
+        <div className="sa-thread">
+          {turns.map((t, i) => {
+            if (t.role === "user") return <div key={i} className="user-msg">{t.content}</div>;
+            return (
+              <div key={i} className="ai-block">
+                <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
+                <div
+                  className="ai-summary sa-md"
+                  dangerouslySetInnerHTML={{ __html: marked.parse(t.content) as string }}
+                />
+                {t.chart && (
+                  <div className="sa-inline-chart">
+                    <div className="sa-inline-chart-head">
+                      <div>
+                        <div className="sa-chart-title">{t.chart.title}</div>
+                        {t.chart.metric && <div className="sa-chart-sub">{t.chart.metric}</div>}
+                      </div>
+                      <button
+                        className="pill-btn"
+                        onClick={() => onPin(t.chart!, turns[i - 1]?.content ?? "", t.suggestedTitle ?? t.chart!.title)}
+                      >
+                        Pin to dashboard
+                      </button>
+                    </div>
+                    <div className="sa-chart-body"><RenderSpec spec={t.chart} /></div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {busy && (
+            <div className="ai-block">
+              <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
+              <div className="thinking-row">
+                <div className="dots"><div className="dot" /><div className="dot" /><div className="dot" /></div>
+                <span>Reading your data…</span>
+              </div>
             </div>
           )}
-          {turns.map((t, i) => (
-            <div key={i} className={`sa-chat-turn ${t.role}`}>
-              <div className="sa-chat-bubble">{t.content}</div>
-              {t.chart && t.role === "assistant" && (
-                <div className="sa-chat-chart">
-                  <div className="sa-chart-title">{t.chart.title}</div>
-                  <div className="sa-chart-body"><RenderSpec spec={t.chart} /></div>
-                  <button
-                    className="pill-btn"
-                    style={{ marginTop: 8 }}
-                    onClick={() => onPin(t.chart!, turns[i - 1]?.content ?? "", t.suggestedTitle ?? t.chart!.title)}
-                  >
-                    Pin to dashboard
-                  </button>
-                </div>
-              )}
-            </div>
-          ))}
-          {busy && <div className="sa-chat-turn assistant"><div className="sa-chat-bubble sa-chat-thinking">Thinking…</div></div>}
           <div ref={endRef} />
         </div>
-        <div className="sa-chat-input">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-            }}
-            placeholder="Ask about the data… e.g. 'response rate by seniority for Sarah'"
-            rows={2}
-          />
-          <button className="pill-btn primary" onClick={send} disabled={busy || !input.trim()}>
-            <IconSparkle size={12} />Ask
-          </button>
+      )}
+
+      <div className="composer-wrap sa-composer-wrap">
+        <div className="composer">
+          <div className="composer-row">
+            <div className="composer-spark">
+              <IconSparkle size={16} style={{ color: "var(--accent)" }} />
+            </div>
+            <textarea
+              ref={taRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              }}
+              placeholder="Ask about your data, or paste a full brief…"
+              rows={1}
+            />
+          </div>
+          <div className="composer-tools">
+            <div className="tool-group" />
+            <div className="send-group">
+              <button className="send" onClick={send} disabled={busy || !input.trim()}>
+                <IconSparkle size={14} />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 

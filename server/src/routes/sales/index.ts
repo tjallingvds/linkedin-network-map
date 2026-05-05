@@ -461,10 +461,10 @@ router.get("/analytics", async (req: AuthedRequest, res) => {
 // -------------------- chat --------------------
 
 const chatSchema = z.object({
-  question: z.string().min(1).max(2000),
+  question: z.string().min(1).max(50_000),
   /** Optional: prior turns so the assistant can follow up coherently. */
   history: z
-    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(8000) }))
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(50_000) }))
     .max(20)
     .optional(),
 });
@@ -590,35 +590,43 @@ router.post("/chat", async (req: AuthedRequest, res) => {
     byMessageType: Array.from(byType.entries()).map(([type, count]) => ({ type, count })),
   };
 
-  const SYSTEM = `You are a sales analytics analyst. The user has uploaded LinkedIn connection + message data for one or more sales team members. You will be given:
+  const SYSTEM = `You are an in-app sales analytics analyst. You have FULL ACCESS to the user's data, attached below as JSON. You MUST do the analysis yourself. You MUST NOT:
+- Suggest the user run the analysis somewhere else.
+- Suggest they paste the data into another tool (ChatGPT, Gemini, Excel, etc.).
+- Refuse, hedge, or ask them to upload anything.
+- Tell them the dataset is "too complex" — it isn't, it's right here in your context.
+- Output a "prompt to use elsewhere". You are the tool.
 
+The data is below. Compute over it. Answer the question. Even if the question is a multi-step brief, work through it and produce the result.
+
+You will receive:
   AGGREGATES — pre-computed totals and breakdowns by team member, seniority, message type.
-  ROWS — every message in the dataset, joined with the counterpart's seniority / position / company. You can filter, group, and count over ROWS to answer ANY question the AGGREGATES don't cover.
+  ROWS — every message in the dataset (up to 12k), joined with the counterpart's seniority / position / company / subject / snippet / conversation_id / date. Filter, group, and count over ROWS to answer ANY question the AGGREGATES don't cover.
 
 Use ROWS for:
 - Filtered questions ("response rate for messages mentioning 'pricing'", "directors at AI companies", "Sarah's cold messages to founders").
-- Sub-bucket breakdowns the aggregates don't cover.
-- Counting unique people, not just message rows. Group by counterpart name.
-- Pulling example messages to illustrate a point.
+- Multi-step analyses (clustering by template, follow-up cadences, success classification, etc.). Do every step inline.
+- Counting unique people, not just rows. Group by counterpart name.
+- Pulling example subjects/snippets to illustrate a point.
 
-Use AGGREGATES for:
-- Top-line totals, response rates, and seniority/team-member breakdowns.
+Use AGGREGATES for top-line totals and quick breakdowns.
 
 Rules:
-- Never invent numbers. Compute from the data given.
-- A "response" means: that counterpart appears with direction='received' for the same teamMember at any point. Don't require time ordering — replies often pre-date the sent message in scraped exports.
-- Response rate = (unique counterparts who replied) / (unique counterparts messaged). Use unique-people, never raw row counts.
+- Compute from the data. Never invent numbers.
+- A "response" = that counterpart appears with direction='received' for the same teamMember at any point. Don't require time ordering.
+- Response rate = (unique counterparts who replied) / (unique counterparts messaged). Always unique-people.
 - "Cold" / "follow_up" / "reply" are pre-computed in the 'type' field — trust them.
-- Be specific and direct. Cite numbers, names, percentages.
-- When the user asks for a chart, return one. When the user asks an open question, only return a chart if it adds clarity.
+- Be specific. Cite numbers, names, percentages. Don't be vague.
+- When the user asks for a chart, return one in the chart field. For open questions, return a chart if it sharpens the answer.
+- For long multi-step briefs: work through every step. Use markdown headings (##), tables, bullet lists in the answer field — they will render. Don't truncate. Don't punt to "the user should run this elsewhere".
 
-Output strictly this JSON:
+Output STRICTLY this JSON shape (no other prose, no code fences):
 {
-  "answer": "<plain prose, no markdown headers, can be multi-paragraph>",
+  "answer": "<your full analysis as markdown — can be long, multi-section, with tables and bullets>",
   "chart": null | {
     "kind": "bar" | "pie" | "line" | "number",
     "title": "<short title>",
-    "metric": "<what is plotted, short>",
+    "metric": "<what is plotted>",
     "data": [{ "label": "<x>", "value": <number> }]
   },
   "suggestedTitle": "<short label if pinned, ≤60 chars>"
