@@ -39,7 +39,7 @@ interface ChartSpec {
 interface ChatTurn {
   role: "user" | "assistant";
   content: string;
-  chart?: ChartSpec | null;
+  charts?: ChartSpec[];
   suggestedTitle?: string;
 }
 
@@ -318,13 +318,13 @@ function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, tit
       const history = turns.map((t) => ({ role: t.role, content: t.content }));
       const r = await api.post<{
         answer: string;
-        chart: ChartSpec | null;
+        charts: ChartSpec[];
         suggestedTitle: string;
       }>("/api/sales/chat", { question: q, history });
       setTurns((t) => [...t, {
         role: "assistant",
         content: r.answer,
-        chart: r.chart,
+        charts: r.charts ?? [],
         suggestedTitle: r.suggestedTitle,
       }]);
     } catch (e) {
@@ -353,23 +353,23 @@ function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, tit
                   className="ai-summary sa-md"
                   dangerouslySetInnerHTML={{ __html: marked.parse(t.content) as string }}
                 />
-                {t.chart && (
-                  <div className="sa-inline-chart">
+                {(t.charts ?? []).map((chart, ci) => (
+                  <div key={ci} className="sa-inline-chart">
                     <div className="sa-inline-chart-head">
                       <div>
-                        <div className="sa-chart-title">{t.chart.title}</div>
-                        {t.chart.metric && <div className="sa-chart-sub">{t.chart.metric}</div>}
+                        <div className="sa-chart-title">{chart.title}</div>
+                        {chart.metric && <div className="sa-chart-sub">{chart.metric}</div>}
                       </div>
                       <button
                         className="pill-btn"
-                        onClick={() => onPin(t.chart!, turns[i - 1]?.content ?? "", t.suggestedTitle ?? t.chart!.title)}
+                        onClick={() => onPin(chart, turns[i - 1]?.content ?? "", t.suggestedTitle ?? chart.title)}
                       >
-                        Pin to dashboard
+                        Pin
                       </button>
                     </div>
-                    <div className="sa-chart-body"><RenderSpec spec={t.chart} /></div>
+                    <div className="sa-chart-body"><RenderSpec spec={chart} /></div>
                   </div>
-                )}
+                ))}
               </div>
             );
           })}

@@ -620,15 +620,23 @@ Rules:
 - When the user asks for a chart, return one in the chart field. For open questions, return a chart if it sharpens the answer.
 - For long multi-step briefs: work through every step. Use markdown headings (##), tables, bullet lists in the answer field — they will render. Don't truncate. Don't punt to "the user should run this elsewhere".
 
+CHARTS — IMPORTANT:
+- Output charts as an ARRAY (one or more) in the "charts" field. NEVER return an empty array when the analysis includes comparison tables or numerical breakdowns where a chart would aid scanning. If the answer has 5 breakdown tables, you should typically produce 3–5 charts (the comparisons that matter most).
+- "kind": "bar" for category × value comparisons, "pie" only when showing parts of a whole, "line" for time series, "number" for a single headline metric.
+- Don't bother charting anything where n < 30 across categories — flag that in the answer instead.
+- Each chart must have a clear title and a meaningful "metric" label (e.g. "Success rate (%)").
+
 Output STRICTLY this JSON shape (no other prose, no code fences):
 {
   "answer": "<your full analysis as markdown — can be long, multi-section, with tables and bullets>",
-  "chart": null | {
-    "kind": "bar" | "pie" | "line" | "number",
-    "title": "<short title>",
-    "metric": "<what is plotted>",
-    "data": [{ "label": "<x>", "value": <number> }]
-  },
+  "charts": [
+    {
+      "kind": "bar" | "pie" | "line" | "number",
+      "title": "<short title>",
+      "metric": "<what is plotted>",
+      "data": [{ "label": "<x>", "value": <number> }]
+    }
+  ],
   "suggestedTitle": "<short label if pinned, ≤60 chars>"
 }`;
 
@@ -647,7 +655,15 @@ ${parsed.data.question}`;
   try {
     const result = await aiJson<{
       answer: string;
-      chart: null | {
+      charts?: Array<{
+        kind: "bar" | "pie" | "line" | "number";
+        title: string;
+        metric: string;
+        data: { label: string; value: number }[];
+      }>;
+      // Legacy single-chart shape — older runs may still emit it. Fold into
+      // `charts` so the client only has to handle one shape.
+      chart?: null | {
         kind: "bar" | "pie" | "line" | "number";
         title: string;
         metric: string;
@@ -655,7 +671,12 @@ ${parsed.data.question}`;
       };
       suggestedTitle: string;
     }>(provider, SYSTEM, USER, { maxTokens: 4000, userId, userKeys });
-    res.json(result);
+    const charts = result.charts ?? (result.chart ? [result.chart] : []);
+    res.json({
+      answer: result.answer,
+      charts,
+      suggestedTitle: result.suggestedTitle,
+    });
   } catch (e) {
     if (isLlmAuthError(e)) return res.status(401).json({ error: "llm_auth", message: (e as Error).message });
     if (isLlmQuotaError(e)) return res.status(402).json({ error: "llm_quota", message: (e as Error).message });
