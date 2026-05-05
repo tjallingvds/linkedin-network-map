@@ -323,9 +323,9 @@ function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, tit
       }>("/api/sales/chat", { question: q, history });
       setTurns((t) => [...t, {
         role: "assistant",
-        content: r.answer,
+        content: r.answer ?? "",
         charts: r.charts ?? [],
-        suggestedTitle: r.suggestedTitle,
+        suggestedTitle: r.suggestedTitle ?? "",
       }]);
     } catch (e) {
       setTurns((t) => [...t, { role: "assistant", content: `**Error:** ${(e as Error).message}` }]);
@@ -345,13 +345,14 @@ function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, tit
       ) : (
         <div className="sa-thread">
           {turns.map((t, i) => {
-            if (t.role === "user") return <div key={i} className="user-msg">{t.content}</div>;
+            if (t.role === "user") return <div key={i} className="user-msg">{t.content ?? ""}</div>;
+            const text = t.content ?? "";
             return (
               <div key={i} className="ai-block">
                 <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
                 <div
                   className="ai-summary sa-md"
-                  dangerouslySetInnerHTML={{ __html: marked.parse(t.content) as string }}
+                  dangerouslySetInnerHTML={{ __html: text ? (marked.parse(text) as string) : "" }}
                 />
                 {(t.charts ?? []).map((chart, ci) => (
                   <div key={ci} className="sa-inline-chart">

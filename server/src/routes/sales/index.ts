@@ -673,9 +673,9 @@ ${parsed.data.question}`;
     }>(provider, SYSTEM, USER, { maxTokens: 4000, userId, userKeys });
     const charts = result.charts ?? (result.chart ? [result.chart] : []);
     res.json({
-      answer: result.answer,
+      answer: result.answer ?? "",
       charts,
-      suggestedTitle: result.suggestedTitle,
+      suggestedTitle: result.suggestedTitle ?? "",
     });
   } catch (e) {
     if (isLlmAuthError(e)) return res.status(401).json({ error: "llm_auth", message: (e as Error).message });
