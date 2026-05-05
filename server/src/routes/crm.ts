@@ -566,6 +566,7 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
     linkedin: findCustomCol("link",  ["linkedin"]),
     title:    findCustomCol("text",  ["title", "role", "position"]),
     company:  findCustomCol("text",  ["company", "organization", "org"]),
+    location: findCustomCol("text",  ["location", "city", "based", "based in"]),
   };
   const customMerge: Record<string, string> = { ...((p.customFields ?? {}) as Record<string, string>) };
   const writeIfMapped = (val: string | null | undefined, colId: string | null) => {
@@ -795,6 +796,10 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     linkedin: findCustomCol("link",  ["linkedin"]),
     title:    findCustomCol("text",  ["title", "role", "position"]),
     company:  findCustomCol("text",  ["company", "organization", "org"]),
+    // Location is a custom-only field — there's no legacy DB column for
+    // it. We accept any text-typed column labelled location/city/based(-in)
+    // and stitch Apollo's city/state/country into a single string.
+    location: findCustomCol("text",  ["location", "city", "based", "based in"]),
   };
 
   const rows = await db
@@ -882,6 +887,25 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     tryWrite("linkedin", r.linkedin, person.linkedin_url, targets.linkedin);
     tryWrite("title",    r.title,    person.title, targets.title);
     tryWrite("company",  r.company,  person.organization?.name, targets.company);
+
+    // Location: custom-column-only (no legacy DB field). Stitch Apollo's
+    // city/state/country into a "City, State, Country" style string,
+    // dropping empties so a US person becomes "New York, NY, United States"
+    // and a London person becomes just "London, United Kingdom".
+    if (targets.location) {
+      const locParts = [person.city, person.state, person.country]
+        .map((s) => (s ?? "").trim())
+        .filter((s) => s.length > 0);
+      const locValue = locParts.join(", ");
+      if (locValue) {
+        const cf = (r.custom_fields ?? {}) as Record<string, string>;
+        const existing = (cf[targets.location] ?? "").trim();
+        if (!existing) {
+          customMerge[targets.location] = locValue;
+          fieldsTouched.push("location");
+        }
+      }
+    }
 
     if (fieldsTouched.length === 0) { skipped++; continue; }
 

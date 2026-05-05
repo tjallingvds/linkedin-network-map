@@ -2576,17 +2576,24 @@ function ImportModal({
 }
 
 function AddContactModal({
-  boardName, onClose, onAdd,
+  boardName, onClose, onAdd, locationLabel,
 }: {
   boardName: string;
   onClose: () => void;
-  onAdd: (d: { name: string; title?: string; company?: string; email?: string; linkedin?: string }) => Promise<void>;
+  onAdd: (d: { name: string; title?: string; company?: string; email?: string; linkedin?: string; location?: string }) => Promise<void>;
+  /** When the active board has a Location-style custom column, the modal
+   *  renders a Location field labelled with the user's exact column name
+   *  (so a board with column "City" shows "City", not "Location"). When
+   *  undefined the field is hidden — no point asking for a value the
+   *  board has nowhere to put. */
+  locationLabel?: string;
 }) {
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [company, setCompany] = useState("");
   const [email, setEmail] = useState("");
   const [linkedin, setLinkedin] = useState("");
+  const [location, setLocation] = useState("");
   const [saving, setSaving] = useState(false);
   const firstRef = useRef<HTMLInputElement>(null);
   useEffect(() => { firstRef.current?.focus(); }, []);
@@ -2602,6 +2609,7 @@ function AddContactModal({
         company: company.trim() || undefined,
         email: email.trim() || undefined,
         linkedin: normalizeLinkedInInput(linkedin),
+        location: location.trim() || undefined,
       });
     } finally { setSaving(false); }
   };
@@ -2645,6 +2653,13 @@ function AddContactModal({
               onKeyDown={(e) => { if (e.key === "Enter" && canSave) submit(); }}
               placeholder="linkedin.com/in/maya-okafor" style={{ padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 12.5, color: "var(--text)" }}/>
           </Field>
+          {locationLabel && (
+            <Field label={locationLabel}>
+              <input value={location} onChange={(e) => setLocation(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && canSave) submit(); }}
+                placeholder="e.g. London, United Kingdom" style={{ padding: "8px 10px", background: "var(--panel)", border: "1px solid var(--hairline)", borderRadius: 8, fontSize: 12.5, color: "var(--text)" }}/>
+            </Field>
+          )}
         </div>
         <div className="im-foot">
           <button className="pill-btn" onClick={onClose}>Cancel</button>
@@ -3408,15 +3423,24 @@ export function CRMView({
     }
   };
 
-  const addContact = async (draft: { name: string; title?: string; company?: string; email?: string; linkedin?: string }) => {
+  const addContact = async (draft: { name: string; title?: string; company?: string; email?: string; linkedin?: string; location?: string }) => {
     if (!activeId) return;
     try {
+      // Route a Location value into the board's Location-style custom column
+      // via customFields, since location isn't a legacy DB field. The server
+      // merges customFields with anything its own findCustomCol routing
+      // produces from title/company/email/linkedin.
+      const customFields: Record<string, string> = {};
+      if (draft.location && locationCol) {
+        customFields[locationCol.id] = draft.location;
+      }
       const c = await api.post<CrmContact>(`/api/crm/boards/${activeId}/contacts`, {
         name: draft.name,
         title: draft.title || null,
         company: draft.company || null,
         email: draft.email || null,
         linkedin: draft.linkedin || null,
+        ...(Object.keys(customFields).length > 0 ? { customFields } : {}),
       });
       setContacts((cs) => [...cs, c]);
       setBoards((bs) => bs.map((b) => b.id === activeId ? { ...b, contactCount: (b.contactCount ?? 0) + 1 } : b));
@@ -3488,6 +3512,17 @@ export function CRMView({
     () => columns.find((c) => !c.builtin && c.type === "dropdown" && (c.label ?? "").trim().toLowerCase() === "skill"),
     [columns],
   );
+  // Location custom column. Mirrors the server's findCustomCol mapping in
+  // crm.ts (label hints: location/city/based/based-in) so the Add Contact
+  // modal asks for a Location only when the board has somewhere to put
+  // the value, AND so the field's label tracks whatever the user named
+  // their column ("Based in", "City", etc.).
+  const locationCol = useMemo(() => {
+    const hints = new Set(["location", "city", "based", "based in"]);
+    return columns.find(
+      (c) => !c.builtin && c.type === "text" && hints.has((c.label ?? "").trim().toLowerCase()),
+    );
+  }, [columns]);
   const classifySkill = async () => {
     if (!activeId || classifyingSkill) return;
     if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
@@ -3690,6 +3725,7 @@ export function CRMView({
       {addOpen && (
         <AddContactModal
           boardName={active.name}
+          locationLabel={locationCol?.label}
           onClose={() => setAddOpen(false)}
           onAdd={async (d) => { await addContact(d); setAddOpen(false); }}
         />
