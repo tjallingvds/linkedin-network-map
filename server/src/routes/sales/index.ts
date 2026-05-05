@@ -1,0 +1,671 @@
+/**
+ * Sales analysis routes.
+ *
+ *   POST   /api/sales/uploads           ingest a paired connections+messages
+ *                                       CSV pair for one team member
+ *   GET    /api/sales/uploads           list uploads (with counts)
+ *   DELETE /api/sales/uploads/:id       delete one upload (cascades rows)
+ *   GET    /api/sales/analytics         computed metrics across all uploads
+ *   POST   /api/sales/chat              one-shot LLM call scoped to the
+ *                                       analytics dataset; returns answer +
+ *                                       optional chart spec
+ *   GET    /api/sales/pinned            list pinned custom analyses
+ *   POST   /api/sales/pinned            pin a chart spec
+ *   DELETE /api/sales/pinned/:id        unpin
+ */
+import { Router } from "express";
+import { z } from "zod";
+import { sql } from "kysely";
+import { db } from "../../db/index.js";
+import type { AuthedRequest } from "../../auth/session.js";
+import {
+  normalizeCounterpartName,
+  normalizeCounterpartLinkedIn,
+} from "../../ai/messaged-set.js";
+import { extractUserKeys } from "../../ai/user-keys.js";
+import { aiJson, isLlmAuthError, isLlmQuotaError } from "../../ai/json.js";
+import { availableProviders } from "../../ai/providers.js";
+import type { AiProvider } from "@app/shared";
+import { classifyTitle, SENIORITY_LABEL, SENIORITY_ORDER, type SeniorityBucket } from "./seniority.js";
+
+const router = Router();
+
+// -------------------- helpers --------------------
+
+function parseLinkedInDate(raw: string | null | undefined): Date | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  // LinkedIn formats: "2024-04-12 13:45:00 UTC", ISO, or "Apr 12, 2024".
+  const cleaned = trimmed.replace(/\sUTC$/i, "Z").replace(" ", "T");
+  const t = Date.parse(cleaned);
+  if (!Number.isNaN(t)) return new Date(t);
+  const t2 = Date.parse(trimmed);
+  return Number.isNaN(t2) ? null : new Date(t2);
+}
+
+/** Classify each sent message into cold / follow_up / reply by walking each
+ *  conversation in order. The first sent message in a conversation with no
+ *  prior received is "cold"; a sent message after only prior sent messages is
+ *  "follow_up"; a sent message after at least one received message is "reply".
+ *  Received messages are tagged "received" but never enter the type chart. */
+function computeMessageTypes<T extends {
+  conversation_id: string | null;
+  counterpart_name_normalized: string;
+  direction: string;
+  message_ts: Date | null;
+  message_date: string | null;
+}>(messages: T[]): (T & { message_type: string })[] {
+  // Group by (conversation_id || counterpartName) so we still get useful
+  // grouping when LinkedIn omitted the conversation id.
+  const groupKey = (m: T) =>
+    m.conversation_id && m.conversation_id.length > 0
+      ? `c:${m.conversation_id}`
+      : `n:${m.counterpart_name_normalized}`;
+
+  const groups = new Map<string, T[]>();
+  for (const m of messages) {
+    const k = groupKey(m);
+    const arr = groups.get(k);
+    if (arr) arr.push(m);
+    else groups.set(k, [m]);
+  }
+
+  const tsOf = (m: T): number => {
+    if (m.message_ts instanceof Date) return m.message_ts.getTime();
+    const t = parseLinkedInDate(m.message_date);
+    return t ? t.getTime() : 0;
+  };
+
+  const out: (T & { message_type: string })[] = [];
+  for (const [, arr] of groups) {
+    arr.sort((a, b) => tsOf(a) - tsOf(b));
+    let receivedSeen = false;
+    let sentSeen = false;
+    for (const m of arr) {
+      let type: string;
+      if (m.direction === "received") {
+        type = "received";
+        receivedSeen = true;
+      } else if (receivedSeen) {
+        type = "reply";
+      } else if (sentSeen) {
+        type = "follow_up";
+      } else {
+        type = "cold";
+      }
+      if (m.direction === "sent") sentSeen = true;
+      out.push({ ...m, message_type: type });
+    }
+  }
+  return out;
+}
+
+// -------------------- uploads --------------------
+
+const connectionInput = z.object({
+  firstName: z.string().min(1).max(200),
+  lastName: z.string().min(1).max(200),
+  company: z.string().max(500).nullish(),
+  position: z.string().max(500).nullish(),
+  linkedinUrl: z.string().max(500).nullish(),
+  email: z.string().max(200).nullish(),
+  connectedOn: z.string().max(64).nullish(),
+});
+
+const messageInput = z.object({
+  conversationId: z.string().max(200).nullish(),
+  counterpartName: z.string().min(1).max(200),
+  counterpartLinkedinUrl: z.string().max(500).nullish(),
+  direction: z.enum(["sent", "received"]),
+  messageDate: z.string().max(64).nullish(),
+  subject: z.string().max(500).nullish(),
+  contentSnippet: z.string().max(4000).nullish(),
+});
+
+const uploadSchema = z.object({
+  teamMemberName: z.string().min(1).max(200),
+  detectedUserName: z.string().max(200).nullish(),
+  connections: z.array(connectionInput).max(50_000),
+  messages: z.array(messageInput).max(100_000),
+});
+
+router.post("/uploads", async (req: AuthedRequest, res) => {
+  const parsed = uploadSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: "invalid_body", issues: parsed.error.issues });
+  }
+  const userId = req.user!.id;
+  const { teamMemberName, detectedUserName, connections, messages } = parsed.data;
+
+  const upload = await db
+    .insertInto("sales_analysis_uploads")
+    .values({
+      user_id: userId,
+      team_member_name: teamMemberName,
+      detected_user_name: detectedUserName ?? null,
+      connections_count: connections.length,
+      messages_count: messages.length,
+    })
+    .returning(["id"])
+    .executeTakeFirstOrThrow();
+
+  // Ingest connections in batches of 500.
+  for (let i = 0; i < connections.length; i += 500) {
+    const batch = connections.slice(i, i + 500);
+    await db
+      .insertInto("sales_analysis_connections")
+      .values(
+        batch.map((c) => ({
+          user_id: userId,
+          upload_id: upload.id,
+          first_name: c.firstName,
+          last_name: c.lastName,
+          name_normalized: normalizeCounterpartName(`${c.firstName} ${c.lastName}`),
+          company: c.company ?? null,
+          position: c.position ?? null,
+          seniority: classifyTitle(c.position ?? null),
+          linkedin_url: c.linkedinUrl ?? null,
+          linkedin_normalized: c.linkedinUrl ? normalizeCounterpartLinkedIn(c.linkedinUrl) : null,
+          email: c.email ?? null,
+          connected_on: c.connectedOn ?? null,
+        })),
+      )
+      .execute();
+  }
+
+  // Compute message_type at ingest by sorting per conversation.
+  const annotated = computeMessageTypes(
+    messages.map((m) => ({
+      conversation_id: m.conversationId ?? null,
+      counterpart_name_normalized: normalizeCounterpartName(m.counterpartName),
+      direction: m.direction,
+      message_ts: parseLinkedInDate(m.messageDate ?? null),
+      message_date: m.messageDate ?? null,
+      _orig: m,
+    })),
+  );
+
+  for (let i = 0; i < annotated.length; i += 500) {
+    const batch = annotated.slice(i, i + 500);
+    await db
+      .insertInto("sales_analysis_messages")
+      .values(
+        batch.map((m) => ({
+          user_id: userId,
+          upload_id: upload.id,
+          conversation_id: m._orig.conversationId ?? null,
+          counterpart_name: m._orig.counterpartName,
+          counterpart_name_normalized: m.counterpart_name_normalized,
+          counterpart_linkedin_url: m._orig.counterpartLinkedinUrl ?? null,
+          counterpart_linkedin_normalized: m._orig.counterpartLinkedinUrl
+            ? normalizeCounterpartLinkedIn(m._orig.counterpartLinkedinUrl)
+            : null,
+          direction: m._orig.direction,
+          message_date: m._orig.messageDate ?? null,
+          message_ts: m.message_ts,
+          subject: m._orig.subject ?? null,
+          content_snippet: m._orig.contentSnippet ?? null,
+          message_type: m.message_type,
+        })),
+      )
+      .execute();
+  }
+
+  res.json({ id: upload.id, connectionsInserted: connections.length, messagesInserted: messages.length });
+});
+
+router.get("/uploads", async (req: AuthedRequest, res) => {
+  const userId = req.user!.id;
+  const rows = await db
+    .selectFrom("sales_analysis_uploads")
+    .select([
+      "id",
+      "team_member_name",
+      "detected_user_name",
+      "connections_count",
+      "messages_count",
+      sql<string>`created_at::text`.as("created_at"),
+    ])
+    .where("user_id", "=", userId)
+    .orderBy("created_at", "desc")
+    .execute();
+  res.json({ uploads: rows });
+});
+
+router.delete("/uploads/:id", async (req: AuthedRequest, res) => {
+  const userId = req.user!.id;
+  await db
+    .deleteFrom("sales_analysis_uploads")
+    .where("user_id", "=", userId)
+    .where("id", "=", req.params.id)
+    .execute();
+  res.json({ ok: true });
+});
+
+// -------------------- analytics --------------------
+
+interface AnalyticsRow {
+  totals: {
+    uploads: number;
+    connections: number;
+    messages: number;
+    sent: number;
+    received: number;
+    cold: number;
+    followUp: number;
+    reply: number;
+    uniqueCounterparts: number;
+  };
+  responseRate: {
+    overall: number;
+    cold: number;
+    followUp: number;
+  };
+  byTeamMember: {
+    uploadId: string;
+    teamMember: string;
+    sent: number;
+    received: number;
+    cold: number;
+    followUp: number;
+    responseRate: number;
+  }[];
+  bySeniority: { bucket: SeniorityBucket; label: string; sent: number; replies: number; responseRate: number }[];
+  byMessageType: { type: string; count: number }[];
+  byMonth: { month: string; sent: number; received: number }[];
+}
+
+router.get("/analytics", async (req: AuthedRequest, res) => {
+  const userId = req.user!.id;
+
+  const uploads = await db
+    .selectFrom("sales_analysis_uploads")
+    .select(["id", "team_member_name"])
+    .where("user_id", "=", userId)
+    .execute();
+
+  if (uploads.length === 0) {
+    return res.json({
+      totals: { uploads: 0, connections: 0, messages: 0, sent: 0, received: 0, cold: 0, followUp: 0, reply: 0, uniqueCounterparts: 0 },
+      responseRate: { overall: 0, cold: 0, followUp: 0 },
+      byTeamMember: [],
+      bySeniority: [],
+      byMessageType: [],
+      byMonth: [],
+    } satisfies AnalyticsRow);
+  }
+
+  const totals = await db
+    .selectFrom("sales_analysis_messages")
+    .select((eb) => [
+      eb.fn.count<number>("id").as("messages"),
+      eb.fn.count<number>("id").filterWhere("direction", "=", "sent").as("sent"),
+      eb.fn.count<number>("id").filterWhere("direction", "=", "received").as("received"),
+      eb.fn.count<number>("id").filterWhere("message_type", "=", "cold").as("cold"),
+      eb.fn.count<number>("id").filterWhere("message_type", "=", "follow_up").as("followUp"),
+      eb.fn.count<number>("id").filterWhere("message_type", "=", "reply").as("reply"),
+      sql<number>`count(distinct counterpart_name_normalized)`.as("uniqueCounterparts"),
+    ])
+    .where("user_id", "=", userId)
+    .executeTakeFirst();
+
+  const connectionsCount = await db
+    .selectFrom("sales_analysis_connections")
+    .select((eb) => eb.fn.count<number>("id").as("c"))
+    .where("user_id", "=", userId)
+    .executeTakeFirst();
+
+  // Response rate = % of sent counterparts (cold or follow_up) that ever
+  // produced any received reply. We compute per team member then aggregate.
+  const perUploadStats = await db
+    .selectFrom("sales_analysis_messages")
+    .select([
+      "upload_id",
+      sql<number>`count(*) filter (where direction = 'sent')`.as("sent"),
+      sql<number>`count(*) filter (where direction = 'received')`.as("received"),
+      sql<number>`count(*) filter (where message_type = 'cold')`.as("cold"),
+      sql<number>`count(*) filter (where message_type = 'follow_up')`.as("followUp"),
+      sql<number>`count(distinct counterpart_name_normalized) filter (where direction = 'sent')`.as("sentTo"),
+      sql<number>`count(distinct counterpart_name_normalized) filter (where direction = 'sent' and counterpart_name_normalized in (select counterpart_name_normalized from sales_analysis_messages sm2 where sm2.upload_id = sales_analysis_messages.upload_id and sm2.direction = 'received'))`.as("respondedBy"),
+    ])
+    .where("user_id", "=", userId)
+    .groupBy("upload_id")
+    .execute();
+
+  const teamLookup = new Map(uploads.map((u) => [u.id, u.team_member_name]));
+  const byTeamMember = perUploadStats
+    .map((s) => ({
+      uploadId: s.upload_id,
+      teamMember: teamLookup.get(s.upload_id) ?? "—",
+      sent: Number(s.sent),
+      received: Number(s.received),
+      cold: Number(s.cold),
+      followUp: Number(s.followUp),
+      responseRate: Number(s.sentTo) > 0 ? Number(s.respondedBy) / Number(s.sentTo) : 0,
+    }))
+    .sort((a, b) => b.sent - a.sent);
+
+  // Overall response rate across the whole workspace.
+  const overall = await db
+    .selectFrom("sales_analysis_messages")
+    .select([
+      sql<number>`count(distinct counterpart_name_normalized) filter (where direction = 'sent')`.as("sentTo"),
+      sql<number>`count(distinct counterpart_name_normalized) filter (where direction = 'sent' and counterpart_name_normalized in (select counterpart_name_normalized from sales_analysis_messages sm2 where sm2.user_id = sales_analysis_messages.user_id and sm2.upload_id = sales_analysis_messages.upload_id and sm2.direction = 'received'))`.as("respondedBy"),
+      sql<number>`count(distinct counterpart_name_normalized) filter (where message_type = 'cold')`.as("coldTo"),
+      sql<number>`count(distinct counterpart_name_normalized) filter (where message_type = 'cold' and counterpart_name_normalized in (select counterpart_name_normalized from sales_analysis_messages sm2 where sm2.user_id = sales_analysis_messages.user_id and sm2.upload_id = sales_analysis_messages.upload_id and sm2.direction = 'received'))`.as("coldResponded"),
+      sql<number>`count(distinct counterpart_name_normalized) filter (where message_type = 'follow_up')`.as("followUpTo"),
+      sql<number>`count(distinct counterpart_name_normalized) filter (where message_type = 'follow_up' and counterpart_name_normalized in (select counterpart_name_normalized from sales_analysis_messages sm2 where sm2.user_id = sales_analysis_messages.user_id and sm2.upload_id = sales_analysis_messages.upload_id and sm2.direction = 'received'))`.as("followUpResponded"),
+    ])
+    .where("user_id", "=", userId)
+    .executeTakeFirst();
+
+  // Seniority breakdown — join messages to connections by upload_id +
+  // normalized name. A connection's seniority drives the bucket. If no match,
+  // bucket = "unknown".
+  const seniorityRaw = await db
+    .selectFrom("sales_analysis_messages as m")
+    .leftJoin("sales_analysis_connections as c", (join) =>
+      join
+        .onRef("c.upload_id", "=", "m.upload_id")
+        .onRef("c.name_normalized", "=", "m.counterpart_name_normalized"),
+    )
+    .select([
+      sql<string>`coalesce(c.seniority, 'unknown')`.as("bucket"),
+      sql<number>`count(distinct m.counterpart_name_normalized) filter (where m.direction = 'sent')`.as("sentTo"),
+      sql<number>`count(distinct m.counterpart_name_normalized) filter (where m.direction = 'sent' and m.counterpart_name_normalized in (select counterpart_name_normalized from sales_analysis_messages sm2 where sm2.upload_id = m.upload_id and sm2.direction = 'received'))`.as("respondedBy"),
+    ])
+    .where("m.user_id", "=", userId)
+    .groupBy(sql`coalesce(c.seniority, 'unknown')`)
+    .execute();
+
+  const bySeniority = seniorityRaw
+    .map((r) => {
+      const bucket = (r.bucket as SeniorityBucket) ?? "unknown";
+      const sent = Number(r.sentTo);
+      const replies = Number(r.respondedBy);
+      return {
+        bucket,
+        label: SENIORITY_LABEL[bucket] ?? bucket,
+        sent,
+        replies,
+        responseRate: sent > 0 ? replies / sent : 0,
+      };
+    })
+    .sort((a, b) => SENIORITY_ORDER.indexOf(a.bucket) - SENIORITY_ORDER.indexOf(b.bucket));
+
+  const typeCounts = await db
+    .selectFrom("sales_analysis_messages")
+    .select([
+      sql<string>`coalesce(message_type, 'unknown')`.as("type"),
+      sql<number>`count(*)`.as("count"),
+    ])
+    .where("user_id", "=", userId)
+    .groupBy(sql`coalesce(message_type, 'unknown')`)
+    .execute();
+
+  const byMessageType = typeCounts.map((r) => ({ type: r.type, count: Number(r.count) }));
+
+  const monthly = await db
+    .selectFrom("sales_analysis_messages")
+    .select([
+      sql<string>`to_char(date_trunc('month', message_ts), 'YYYY-MM')`.as("month"),
+      sql<number>`count(*) filter (where direction = 'sent')`.as("sent"),
+      sql<number>`count(*) filter (where direction = 'received')`.as("received"),
+    ])
+    .where("user_id", "=", userId)
+    .where("message_ts", "is not", null)
+    .groupBy(sql`date_trunc('month', message_ts)`)
+    .orderBy(sql`date_trunc('month', message_ts)`, "asc")
+    .execute();
+
+  const byMonth = monthly.map((r) => ({
+    month: r.month,
+    sent: Number(r.sent),
+    received: Number(r.received),
+  }));
+
+  const sentTo = Number(overall?.sentTo ?? 0);
+  const respondedBy = Number(overall?.respondedBy ?? 0);
+  const coldTo = Number(overall?.coldTo ?? 0);
+  const coldResp = Number(overall?.coldResponded ?? 0);
+  const fuTo = Number(overall?.followUpTo ?? 0);
+  const fuResp = Number(overall?.followUpResponded ?? 0);
+
+  const payload: AnalyticsRow = {
+    totals: {
+      uploads: uploads.length,
+      connections: Number(connectionsCount?.c ?? 0),
+      messages: Number(totals?.messages ?? 0),
+      sent: Number(totals?.sent ?? 0),
+      received: Number(totals?.received ?? 0),
+      cold: Number(totals?.cold ?? 0),
+      followUp: Number(totals?.followUp ?? 0),
+      reply: Number(totals?.reply ?? 0),
+      uniqueCounterparts: Number(totals?.uniqueCounterparts ?? 0),
+    },
+    responseRate: {
+      overall: sentTo > 0 ? respondedBy / sentTo : 0,
+      cold: coldTo > 0 ? coldResp / coldTo : 0,
+      followUp: fuTo > 0 ? fuResp / fuTo : 0,
+    },
+    byTeamMember,
+    bySeniority,
+    byMessageType,
+    byMonth,
+  };
+
+  res.json(payload);
+});
+
+// -------------------- chat --------------------
+
+const chatSchema = z.object({
+  question: z.string().min(1).max(2000),
+  /** Optional: prior turns so the assistant can follow up coherently. */
+  history: z
+    .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(8000) }))
+    .max(20)
+    .optional(),
+});
+
+router.post("/chat", async (req: AuthedRequest, res) => {
+  const parsed = chatSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "invalid_body", issues: parsed.error.issues });
+
+  const userKeys = extractUserKeys(req);
+  const provider: AiProvider = availableProviders(userKeys)[0] ?? ("openai" as AiProvider);
+
+  // Build the dataset the LLM reasons over. Aggregated counts only — never
+  // raw message bodies, both for prompt size and privacy.
+  const userId = req.user!.id;
+
+  const summary = await db
+    .selectFrom("sales_analysis_messages as m")
+    .leftJoin("sales_analysis_connections as c", (join) =>
+      join
+        .onRef("c.upload_id", "=", "m.upload_id")
+        .onRef("c.name_normalized", "=", "m.counterpart_name_normalized"),
+    )
+    .leftJoin("sales_analysis_uploads as u", "u.id", "m.upload_id")
+    .select([
+      "u.team_member_name as teamMember",
+      "m.direction",
+      "m.message_type as messageType",
+      sql<string>`coalesce(c.seniority, 'unknown')`.as("seniority"),
+      "c.position",
+      "c.company",
+      "m.counterpart_name_normalized as counterpart",
+    ])
+    .where("m.user_id", "=", userId)
+    .limit(20000)
+    .execute();
+
+  // Build aggregates the model can reason over without seeing raw rows.
+  const total = summary.length;
+  const sent = summary.filter((r) => r.direction === "sent").length;
+  const received = summary.filter((r) => r.direction === "received").length;
+
+  const byTeam: Record<string, { sent: number; received: number; coldSent: number; replies: number; counterparts: Set<string>; responded: Set<string> }> = {};
+  const bySeniority: Record<string, { sent: number; counterparts: Set<string>; responded: Set<string> }> = {};
+  const byType: Record<string, number> = {};
+
+  // First pass — figure out who responded (per upload).
+  // Build a set of (upload_id, counterpart) where direction=received.
+  const responders = new Set<string>();
+  for (const r of summary) {
+    if (r.direction === "received") responders.add(`${r.teamMember ?? ""}|${r.counterpart}`);
+  }
+
+  for (const r of summary) {
+    const tm = r.teamMember ?? "—";
+    byTeam[tm] ??= { sent: 0, received: 0, coldSent: 0, replies: 0, counterparts: new Set(), responded: new Set() };
+    if (r.direction === "sent") {
+      byTeam[tm].sent += 1;
+      byTeam[tm].counterparts.add(r.counterpart);
+      if (responders.has(`${tm}|${r.counterpart}`)) byTeam[tm].responded.add(r.counterpart);
+      if (r.messageType === "cold") byTeam[tm].coldSent += 1;
+    } else {
+      byTeam[tm].received += 1;
+    }
+
+    if (r.direction === "sent") {
+      const sen = r.seniority ?? "unknown";
+      bySeniority[sen] ??= { sent: 0, counterparts: new Set(), responded: new Set() };
+      bySeniority[sen].sent += 1;
+      bySeniority[sen].counterparts.add(r.counterpart);
+      if (responders.has(`${tm}|${r.counterpart}`)) bySeniority[sen].responded.add(r.counterpart);
+    }
+    const t = r.messageType ?? "unknown";
+    byType[t] = (byType[t] ?? 0) + 1;
+  }
+
+  const dataset = {
+    totals: { messages: total, sent, received },
+    byTeamMember: Object.entries(byTeam).map(([name, v]) => ({
+      teamMember: name,
+      sent: v.sent,
+      received: v.received,
+      coldSent: v.coldSent,
+      uniqueCounterparts: v.counterparts.size,
+      uniqueResponded: v.responded.size,
+      responseRate: v.counterparts.size > 0 ? +(v.responded.size / v.counterparts.size).toFixed(3) : 0,
+    })),
+    bySeniority: Object.entries(bySeniority).map(([bucket, v]) => ({
+      seniority: bucket,
+      label: SENIORITY_LABEL[bucket as SeniorityBucket] ?? bucket,
+      sent: v.sent,
+      uniqueCounterparts: v.counterparts.size,
+      uniqueResponded: v.responded.size,
+      responseRate: v.counterparts.size > 0 ? +(v.responded.size / v.counterparts.size).toFixed(3) : 0,
+    })),
+    byMessageType: Object.entries(byType).map(([type, count]) => ({ type, count })),
+  };
+
+  const SYSTEM = `You are a sales analytics assistant. The user has uploaded LinkedIn connection and message data for one or more sales team members. You will be given a structured DATASET (already aggregated) and a QUESTION. Your job is to give a concise data-driven answer and, when a chart would help, propose a chart spec.
+
+Rules:
+- Never invent numbers. Only cite values that appear in DATASET.
+- If the dataset is empty, say so plainly.
+- Be concrete: name the team member, the seniority bucket, the percentage.
+- Prefer % response rate over raw sent counts when judging "what works best".
+- Keep the answer under 120 words.
+
+Output strictly this JSON shape:
+{
+  "answer": "<plain text response, no markdown headers>",
+  "chart": null | {
+    "kind": "bar" | "pie" | "line" | "number",
+    "title": "<short title>",
+    "metric": "<short label of what is plotted>",
+    "data": [{ "label": "<x>", "value": <number> }]
+  },
+  "suggestedTitle": "<short title for pinning this analysis, max 60 chars>"
+}`;
+
+  const USER = `DATASET:
+${JSON.stringify(dataset, null, 2)}
+
+PRIOR TURNS (most recent last):
+${(parsed.data.history ?? []).map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n") || "(none)"}
+
+QUESTION:
+${parsed.data.question}`;
+
+  try {
+    const result = await aiJson<{
+      answer: string;
+      chart: null | {
+        kind: "bar" | "pie" | "line" | "number";
+        title: string;
+        metric: string;
+        data: { label: string; value: number }[];
+      };
+      suggestedTitle: string;
+    }>(provider, SYSTEM, USER, { maxTokens: 1200, userId, userKeys });
+    res.json(result);
+  } catch (e) {
+    if (isLlmAuthError(e)) return res.status(401).json({ error: "llm_auth", message: (e as Error).message });
+    if (isLlmQuotaError(e)) return res.status(402).json({ error: "llm_quota", message: (e as Error).message });
+    return res.status(500).json({ error: "llm_error", message: (e as Error).message });
+  }
+});
+
+// -------------------- pinned analyses --------------------
+
+const pinSchema = z.object({
+  title: z.string().min(1).max(120),
+  question: z.string().max(2000).nullish(),
+  spec: z.object({
+    kind: z.enum(["bar", "pie", "line", "number"]),
+    metric: z.string().max(200),
+    data: z.array(z.object({ label: z.string().max(200), value: z.number() })).max(50),
+  }).passthrough(),
+});
+
+router.get("/pinned", async (req: AuthedRequest, res) => {
+  const userId = req.user!.id;
+  const rows = await db
+    .selectFrom("sales_analysis_pinned")
+    .select(["id", "title", "question", "spec", "position", sql<string>`created_at::text`.as("created_at")])
+    .where("user_id", "=", userId)
+    .orderBy("position", "asc")
+    .orderBy("created_at", "asc")
+    .execute();
+  res.json({ pinned: rows });
+});
+
+router.post("/pinned", async (req: AuthedRequest, res) => {
+  const parsed = pinSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "invalid_body", issues: parsed.error.issues });
+  const userId = req.user!.id;
+  const max = await db
+    .selectFrom("sales_analysis_pinned")
+    .select(sql<number>`coalesce(max(position), -1)`.as("m"))
+    .where("user_id", "=", userId)
+    .executeTakeFirst();
+  const inserted = await db
+    .insertInto("sales_analysis_pinned")
+    .values({
+      user_id: userId,
+      title: parsed.data.title,
+      question: parsed.data.question ?? null,
+      spec: JSON.stringify(parsed.data.spec),
+      position: Number(max?.m ?? -1) + 1,
+    })
+    .returning(["id"])
+    .executeTakeFirstOrThrow();
+  res.json({ id: inserted.id });
+});
+
+router.delete("/pinned/:id", async (req: AuthedRequest, res) => {
+  const userId = req.user!.id;
+  await db
+    .deleteFrom("sales_analysis_pinned")
+    .where("user_id", "=", userId)
+    .where("id", "=", req.params.id)
+    .execute();
+  res.json({ ok: true });
+});
+
+export default router;

@@ -23,6 +23,7 @@ import apolloRoutes from "./routes/apollo.js";
 import crmRoutes from "./routes/crm.js";
 import usageRoutes from "./routes/usage.js";
 import messagesLogRoutes from "./routes/messages_log.js";
+import salesRoutes from "./routes/sales/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -66,6 +67,7 @@ app.use("/api/apollo", requireAuth, apolloRoutes);
 app.use("/api/crm", requireAuth, crmRoutes);
 app.use("/api/usage", requireAuth, usageRoutes);
 app.use("/api/messages-log", requireAuth, messagesLogRoutes);
+app.use("/api/sales", requireAuth, salesRoutes);
 
 // JSON 404 for the API surface.
 app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));

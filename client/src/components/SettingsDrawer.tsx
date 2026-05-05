@@ -6,6 +6,7 @@
  * the user's key over its own. (Server wiring of those headers is a follow-up.)
  */
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { IconClose, IconUpload, IconUsers } from "../design/icons";
 import type { UsageBucket } from "./Sidebar";
 import { api } from "../lib/api";
@@ -71,6 +72,7 @@ export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn
   const [dirty, setDirty] = useState(false);
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
+  const navigate = useNavigate();
 
   const join = async () => {
     const token = joinCode.trim();
@@ -201,6 +203,35 @@ export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn
               <KeyField label="Apollo.io (enrichment)" value={keys.apollo ?? ""} onChange={(v) => setKey("apollo", v)} />
             </div>
           </section>
+
+          <div
+            style={{
+              marginTop: 8,
+              paddingTop: 12,
+              borderTop: "1px dashed var(--hairline)",
+              display: "flex",
+              justifyContent: "flex-end",
+            }}
+          >
+            <button
+              onClick={() => { onClose(); navigate("/sales-analysis"); }}
+              title="Sales analysis"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-mute)",
+                fontSize: 10.5,
+                letterSpacing: "0.04em",
+                opacity: 0.5,
+                cursor: "pointer",
+                padding: "2px 4px",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "1"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.5"; }}
+            >
+              ·
+            </button>
+          </div>
         </div>
 
         <div className="drawer-foot">

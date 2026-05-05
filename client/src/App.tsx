@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "./lib/auth";
 import { LoginPage } from "./pages/LoginPage";
 import { DiscoverPage } from "./pages/DiscoverPage";
+import { SalesAnalysisPage } from "./pages/SalesAnalysisPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import type { ReactNode } from "react";
 
@@ -29,6 +30,7 @@ export function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<LoginPage />} />
         <Route path="/" element={<RequireAuth><DiscoverPage /></RequireAuth>} />
+        <Route path="/sales-analysis" element={<RequireAuth><SalesAnalysisPage /></RequireAuth>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </ErrorBoundary>

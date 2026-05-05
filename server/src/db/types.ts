@@ -16,6 +16,10 @@ export interface Database {
   usage_events: UsageEventsTable;
   credit_purchases: CreditPurchasesTable;
   message_log: MessageLogTable;
+  sales_analysis_uploads: SalesUploadsTable;
+  sales_analysis_connections: SalesConnectionsTable;
+  sales_analysis_messages: SalesMessagesTable;
+  sales_analysis_pinned: SalesPinnedAnalysesTable;
 }
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -193,6 +197,60 @@ export interface MessageLogTable {
   message_date: string | null;
   subject: string | null;
   content_snippet: string | null;
+  created_at: Generated<Timestamp>;
+}
+
+export interface SalesUploadsTable {
+  id: Generated<string>;
+  user_id: string;
+  team_member_name: string;
+  detected_user_name: string | null;
+  connections_count: Generated<number>;
+  messages_count: Generated<number>;
+  created_at: Generated<Timestamp>;
+}
+
+export interface SalesConnectionsTable {
+  id: Generated<string>;
+  user_id: string;
+  upload_id: string;
+  first_name: string;
+  last_name: string;
+  name_normalized: string;
+  company: string | null;
+  position: string | null;
+  seniority: string | null;
+  linkedin_url: string | null;
+  linkedin_normalized: string | null;
+  email: string | null;
+  connected_on: string | null;
+}
+
+export interface SalesMessagesTable {
+  id: Generated<string>;
+  user_id: string;
+  upload_id: string;
+  conversation_id: string | null;
+  counterpart_name: string;
+  counterpart_name_normalized: string;
+  counterpart_linkedin_url: string | null;
+  counterpart_linkedin_normalized: string | null;
+  direction: string;
+  message_date: string | null;
+  message_ts: Timestamp | null;
+  subject: string | null;
+  content_snippet: string | null;
+  /** "cold" | "follow_up" | "reply" — computed at ingest time. */
+  message_type: string | null;
+}
+
+export interface SalesPinnedAnalysesTable {
+  id: Generated<string>;
+  user_id: string;
+  title: string;
+  question: string | null;
+  spec: unknown;
+  position: Generated<number>;
   created_at: Generated<Timestamp>;
 }
 
