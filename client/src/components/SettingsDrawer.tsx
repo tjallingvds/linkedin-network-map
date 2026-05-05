@@ -207,7 +207,7 @@ export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn
           <div
             style={{
               marginTop: 8,
-              paddingTop: 12,
+              paddingTop: 14,
               borderTop: "1px dashed var(--hairline)",
               display: "flex",
               justifyContent: "flex-end",
@@ -220,16 +220,28 @@ export function SettingsDrawer({ open, usage, onClose, onFlash, onImportLinkedIn
                 background: "transparent",
                 border: "none",
                 color: "var(--text-mute)",
-                fontSize: 10.5,
-                letterSpacing: "0.04em",
-                opacity: 0.5,
+                fontSize: 11,
+                letterSpacing: "0.02em",
+                opacity: 0.55,
                 cursor: "pointer",
-                padding: "2px 4px",
+                padding: "4px 8px",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                transition: "opacity 120ms, color 120ms",
               }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "1"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.5"; }}
+              onMouseEnter={(e) => {
+                const el = e.currentTarget as HTMLButtonElement;
+                el.style.opacity = "1";
+                el.style.color = "var(--text)";
+              }}
+              onMouseLeave={(e) => {
+                const el = e.currentTarget as HTMLButtonElement;
+                el.style.opacity = "0.55";
+                el.style.color = "var(--text-mute)";
+              }}
             >
-              ·
+              Sales analysis →
             </button>
           </div>
         </div>
