@@ -2627,13 +2627,16 @@ button:focus-visible { outline-offset: 3px; }
 .sa-md p { margin: 0 0 10px; }
 .sa-md p:last-child { margin-bottom: 0; }
 .sa-md table {
-  border-collapse: collapse; width: 100%;
+  /* `border-collapse: separate` (and the default border-spacing) so sticky
+   * thead borders render correctly across browsers. `overflow: hidden`
+   * removed because it clips position: sticky on descendant thead. */
+  border-collapse: separate; border-spacing: 0;
+  width: 100%;
   margin: 10px 0;
   font-size: 12.5px;
   background: var(--panel);
   border: 1px solid var(--hairline);
   border-radius: 8px;
-  overflow: hidden;
 }
 .sa-md th, .sa-md td {
   padding: 8px 10px;
@@ -2644,8 +2647,23 @@ button:focus-visible { outline-offset: 3px; }
 .sa-md tr:last-child td { border-bottom: none; }
 .sa-md th {
   font-weight: 600; color: var(--text-dim);
-  background: rgba(20, 14, 40, 0.025);
+  /* Opaque background — sticky thead floats over the body rows below
+   * as the user scrolls, and a translucent fill would let cell text
+   * bleed through. Mix the panel base with a subtle tint for the
+   * "header" feel. */
+  background: linear-gradient(rgba(20,14,40,0.025), rgba(20,14,40,0.025)), var(--bg-0);
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+}
+/* Sticky table headers: when a long markdown table from the analyst
+ * scrolls, keep its column labels pinned at the top of the scroll
+ * container so the row context never gets lost. */
+.sa-md thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* Add an explicit bottom shadow so the floating header reads as
+   * detached from the body rows underneath. */
+  box-shadow: 0 1px 0 var(--hairline);
 }
 .sa-md td { color: var(--text); }
 .sa-md code {
