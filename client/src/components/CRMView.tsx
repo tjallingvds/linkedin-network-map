@@ -3063,6 +3063,7 @@ export function CRMView({
   const [enriching, setEnriching] = useState(false);
   const [backgrounding, setBackgrounding] = useState(false);
   const [classifyingSkill, setClassifyingSkill] = useState(false);
+  const [classifyingCountry, setClassifyingCountry] = useState(false);
   const [search, setSearch] = useState("");
   const [columns, setColumns] = useState<CrmColumnDef[]>(defaultColumns);
   const [rowHeight, setRowHeight] = useState<CrmRowHeight>(DEFAULT_ROW_HEIGHT);
@@ -3523,6 +3524,47 @@ export function CRMView({
       (c) => !c.builtin && c.type === "text" && hints.has((c.label ?? "").trim().toLowerCase()),
     );
   }, [columns]);
+  /** Country column — text or dropdown labelled "Country". The classify
+   *  button only appears when this column exists. */
+  const countryCol = useMemo(
+    () => columns.find(
+      (c) => !c.builtin && (c.type === "text" || c.type === "dropdown") && (c.label ?? "").trim().toLowerCase() === "country",
+    ),
+    [columns],
+  );
+
+  const classifyCountry = async () => {
+    if (!activeId || classifyingCountry) return;
+    if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
+    if (!countryCol) {
+      onFlash("Add a Text or Dropdown column called \"Country\" first.");
+      return;
+    }
+    const needCountry = contacts.filter((c) => {
+      const cf = (c.customFields ?? {}) as Record<string, string>;
+      return !((cf[countryCol.id] ?? "").trim());
+    }).length;
+    if (needCountry === 0) { onFlash("Every contact already has a Country value — nothing to classify."); return; }
+    setClassifyingCountry(true);
+    try {
+      const r = await api.post<{ classified: number; skipped: number; alreadyHad?: number; total: number }>(
+        `/api/crm/boards/${activeId}/classify-country`,
+      );
+      const fresh = await api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`);
+      setContacts(fresh.contacts);
+      const had = r.alreadyHad ?? 0;
+      onFlash(
+        `Classified ${r.classified}` +
+        (r.skipped ? ` · ${r.skipped} too thin to call` : "") +
+        (had ? ` · ${had} already had one` : ""),
+      );
+    } catch (e) {
+      onFlash(`Classify country failed: ${(e as Error).message}`);
+    } finally {
+      setClassifyingCountry(false);
+    }
+  };
+
   const classifySkill = async () => {
     if (!activeId || classifyingSkill) return;
     if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
@@ -3603,6 +3645,12 @@ export function CRMView({
               Classifying skill…
             </span>
           )}
+          {classifyingCountry && (
+            <span className="crm-progress-pill" role="status" aria-live="polite">
+              <span className="crm-spinner" aria-hidden="true" />
+              Classifying country…
+            </span>
+          )}
           <ActionsMenu>
             {(close) => (
               <>
@@ -3651,6 +3699,16 @@ export function CRMView({
                     title={`Auto-fill the "${skillCol.label ?? "Skill"}" column by reading each contact's LinkedIn (technical roles, posts, articles).`}
                   >
                     <IconSparkle size={12} />{classifyingSkill ? "Classifying…" : "Classify skill"}
+                  </button>
+                )}
+                {countryCol && (
+                  <button
+                    className="pill-btn"
+                    disabled={classifyingCountry}
+                    onClick={() => { close(); classifyCountry(); }}
+                    title={`Auto-fill the "${countryCol.label ?? "Country"}" column by reading each contact's LinkedIn location.`}
+                  >
+                    <IconSparkle size={12} />{classifyingCountry ? "Classifying…" : "Classify country"}
                   </button>
                 )}
                 <button className="pill-btn" onClick={() => { close(); setImportOpen(true); }}>
