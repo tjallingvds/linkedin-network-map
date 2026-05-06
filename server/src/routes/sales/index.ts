@@ -974,6 +974,28 @@ router.post("/audit", async (req: AuthedRequest, res) => {
     };
   });
 
+  // Build per-counterpart thread bundles so the LLM can judge thread
+  // outcomes (success / no-success) by reading the received messages.
+  // threadKey matches what the cluster stats below use for joining.
+  const receivedByThread = new Map<string, Annotated[]>();
+  for (const r of annotated) {
+    if (r.direction !== "received") continue;
+    const k = `${r.teamMember}|${r.counterpartKey}`;
+    const arr = receivedByThread.get(k);
+    if (arr) arr.push(r);
+    else receivedByThread.set(k, [r]);
+  }
+  // Only emit threads where the user actually sent something — no point
+  // asking the LLM to judge threads with zero outbound from us.
+  const threadKeysWithSent = new Set(sentRows.map((r) => `${r.teamMember}|${r.counterpartKey}`));
+  const promptThreads = Array.from(threadKeysWithSent).map((k) => {
+    const replies = (receivedByThread.get(k) ?? [])
+      .slice(0, 6) // 6 received snippets is plenty to judge tone
+      .map((r) => r.snippet ?? "")
+      .filter((s) => s.length > 0);
+    return { threadKey: k, replies };
+  });
+
   const SYSTEM = `You are a sales-quality auditor. Your ONLY job is filtering and clustering — the server computes every stat deterministically. Do NOT return counts, percentages, rates, averages, or any number except a sample row id.
 
 INPUT YOU GET
@@ -997,9 +1019,19 @@ YOUR JOB
 1. Pick the row IDs that match the INDUSTRY filter (recipient is in the industry per their company/position). Put them in filteredRowIds.
 2. Among the FILTERED rows where ty='cold', cluster them VERY GRANULARLY by message content. Same paragraphs in different order = different cluster. Only group two messages together when their bodies are near-verbatim duplicates with just the recipient name/company swapped. For each cluster: assign a stable id ("fmg-1", "fmg-2", …), a short human label, the row IDs that belong to it, and a sampleId pointing at one row whose snippet is most representative.
 3. Among the FILTERED rows where ty='follow_up', cluster the same way (ids "fug-1", "fug-2", …).
-4. Write 4–7 short topInsights as plain text. These are the only place numbers can appear, and they MUST be numbers the server will compute — phrase them in terms of the cluster's expected behavior (e.g. "Cluster fmg-3 was sent to the most C-level recipients."). Don't fabricate specific percentages — the server computes those and renders them next to the cluster label.
+4. Read the THREADS array (one per recipient-of-our-outreach with up to 6 of their reply snippets) and decide which threads ended in real success. Put those thread keys in successfulThreadKeys. SUCCESS is strictly:
+     - The recipient agreed to a call / proposed a time / accepted a meeting, OR
+     - A substantive multi-turn back-and-forth on the topic (questions, info shared, real engagement — not just acknowledgements).
+   NOT success:
+     - "Thanks, I'll take a look" / "Got it" / "Will check" — polite acknowledgements.
+     - "Not for us right now" / "Too busy" — declines.
+     - Single emoji / one-liner.
+     - Out-of-office or autoresponses.
+     - Generic interest with no commitment ("sounds interesting").
+   Be strict. Better to under-count success than to overstate.
+5. Write 4–7 short topInsights as plain text. NO numbers — describe patterns the server will quantify (e.g. "Cluster fmg-3 was concentrated on C-level recipients.").
 
-DO NOT return: counts, percentages, reply rates, success rates, average follow-ups, mean days, sender splits, per-seniority breakdowns, video impact, or anything numeric per cluster. The server computes ALL of those from the row IDs you return.
+DO NOT return: counts, percentages, reply rates, success rates, average follow-ups, mean days, sender splits, per-seniority breakdowns, video impact, or anything numeric per cluster. The server computes ALL of those from the IDs and keys you return.
 
 Output STRICTLY this JSON shape (no other prose, no fences):
 {
@@ -1020,6 +1052,7 @@ Output STRICTLY this JSON shape (no other prose, no fences):
       "rowIds": ["r48", ...]
     }
   ],
+  "successfulThreadKeys": ["Tjalling|allison nathan", "Fatimah|eric hahn", ...],
   "topInsights": ["<short text only — no fabricated numbers>", "..."]
 }
 
@@ -1027,19 +1060,25 @@ Constraints:
 - Every rowId in any cluster's rowIds MUST also appear in filteredRowIds.
 - Every cluster's sampleId MUST be in its own rowIds.
 - A row should appear in at most one cluster (cold OR follow-up, never both — the type is fixed).
-- Don't include any rows whose recipient isn't in the industry, even if the body sounds relevant.`;
+- Don't include any rows whose recipient isn't in the industry, even if the body sounds relevant.
+- Thread keys in successfulThreadKeys must come from the THREADS list — they're "<teamMember>|<normalized counterpart name>" exactly as given.
+- A thread that has no reply at all is NEVER a success.`;
 
   const USER = `INDUSTRY: ${parsed.data.industry}
 GOAL: ${parsed.data.goal ?? ""}
 
 ROWS (${promptRows.length} sent rows):
-${JSON.stringify(promptRows)}`;
+${JSON.stringify(promptRows)}
+
+THREADS (${promptThreads.length} threads with ≥1 sent message — judge success from the replies):
+${JSON.stringify(promptThreads)}`;
 
   type LlmCluster = { id: string; label: string; sampleId: string; rowIds: string[] };
   type LlmResponse = {
     filteredRowIds: string[];
     coldClusters: LlmCluster[];
     followUpClusters: LlmCluster[];
+    successfulThreadKeys?: string[];
     topInsights: string[];
   };
 
@@ -1087,27 +1126,17 @@ ${JSON.stringify(promptRows)}`;
     return +(replied.size / cps.size).toFixed(3);
   };
 
-  /** % of counterparts whose post-cold thread looks substantive. We
-   *  approximate "success" as: counterpart replied AND there are ≥2 received
-   *  messages (or ≥1 received followed by another sent — multi-turn). */
+  // The LLM has already classified every thread as success / not-success
+  // by reading the actual reply text. Any thread key it didn't list is a
+  // non-success. Use this set to score clusters.
+  const successThreads = new Set(llm.successfulThreadKeys ?? []);
+  /** % of unique counterparts in this set whose thread the LLM marked as a
+   *  real success (booked call / substantive multi-turn engagement). */
   const successRate = (rows: Annotated[]): number => {
     const cps = new Set(rows.map((r) => `${r.teamMember}|${r.counterpartKey}`));
     if (cps.size === 0) return 0;
-    const received = new Map<string, number>();
-    const sentAfterReceived = new Map<string, number>();
-    for (const r of annotated) {
-      const k = `${r.teamMember}|${r.counterpartKey}`;
-      if (!cps.has(k)) continue;
-      if (r.direction === "received") received.set(k, (received.get(k) ?? 0) + 1);
-      if (r.type === "reply") sentAfterReceived.set(k, (sentAfterReceived.get(k) ?? 0) + 1);
-    }
     let successes = 0;
-    for (const k of cps) {
-      const rec = received.get(k) ?? 0;
-      const replyTurns = sentAfterReceived.get(k) ?? 0;
-      // Two-turn back-and-forth OR multi-message reply thread = success.
-      if (rec >= 2 || (rec >= 1 && replyTurns >= 1)) successes += 1;
-    }
+    for (const k of cps) if (successThreads.has(k)) successes += 1;
     return +(successes / cps.size).toFixed(3);
   };
 
