@@ -1040,20 +1040,19 @@ router.post("/audit", async (req: AuthedRequest, res) => {
 INPUT YOU GET
 - AGGREGATES: deterministic counts the server already computed (totals, mean follow-up gap, video stats). Trust these — don't recompute.
 - ROWS: every SENT message (cold + follow_up) with the counterpart's seniority, position, company, message subject + snippet (≤320 chars), date, sent-number-in-thread (1=cold, 2=first follow-up, …), days since previous sent, hasVideo flag, and whether the counterpart ever replied to that team member.
-- INDUSTRY: what the user's OUTREACH is about. This is a TOPIC filter, not a recipient-industry filter. Decide by reading the message itself.
+- INDUSTRY: filter by the RECIPIENT'S industry. The user audits outreach SENT TO people in this industry. The message body / subject is IRRELEVANT for inclusion — only the recipient's company and position matter.
 
-  INCLUDE a row when ANY of these are clearly true (not boilerplate):
-    1. The sender's message body or subject is pitching / discussing the industry (e.g. "research within the financial sector", "AI in banking", "credit risk model", "wealth management product"). Repeated boilerplate counts here — if Tjalling's banking template mentions "financial sector" in a sales pitch, that's a banking message even when the recipient happens to be in another field.
-    2. The recipient is unambiguously in the industry per their company / position AND the message is a sales / outreach style message (cold pitch, demo ask, intro, partnership). This catches highly-personalized one-offs to bankers.
+  INCLUDE a row when ANY of these are clearly true:
+    - recipient.company is a firm in the industry. For "banking" / "financial services": Wells Fargo, JPMorgan / JPMorgan Chase, Goldman Sachs, Morgan Stanley, UBS, HSBC, Citi / Citigroup, Barclays, Deutsche Bank, Bank of America, BNY Mellon, BNP Paribas, ING, Rabobank, Lazard, BlackRock, Bridgewater, Two Sigma, Citadel, Renaissance, generic "X Bank" / "X Financial" / "X Capital", credit unions, asset managers, hedge funds, wealth managers, private equity, insurance giants, etc.
+    - recipient.position mentions an industry term: "banker", "investment banking", "credit risk", "trading", "wealth management", "fixed income", "asset management", "private equity", "head of AI in banking", "CIO at a bank", etc.
 
   EXCLUDE a row when:
-    - The message body is clearly about a DIFFERENT topic (e.g. ed-tech, biotech, recruiting, personal networking). Example: "Thanks for the intro Joshua! I'm building in the ed-tech space" → EXCLUDE for "banking" even if Joshua works at a bank.
-    - The message is conversational chitchat / scheduling that doesn't carry topic signal. Skip these unless they're follow-ups in a thread you've already included.
-    - The recipient is clearly in another industry AND the body doesn't pitch the audit topic.
+    - recipient.company / position is in a different industry (ed-tech, biotech, recruiting, design, healthcare, climate, etc.). The message body / sender's pitch is irrelevant — even if the user's template mentions "banking", a recipient in ed-tech is OUT OF SCOPE.
+    - recipient.company AND recipient.position are both null/missing AND the recipient name doesn't clearly belong to a known industry firm. Without evidence the recipient is in the industry, drop the row. Be willing to drop most of the dataset to keep the audit focused.
 
-  Be willing to drop most of the dataset. A focused 30–80 row audit on the right messages beats a noisy 400-row one mixing ed-tech, biotech and banking. If a cluster is mixed-topic, prefer dropping it over including it.
+  IGNORE the message body / subject when deciding inclusion. Their only job is to inform clustering AFTER the filter has run.
 
-- GOAL: optional. When set, narrows the audit further (e.g. "book a call" → drop pure-info messages with no CTA). When empty, treat any outreach about the industry as in-scope.
+- GOAL: optional context for clustering and success-classification. Doesn't affect industry inclusion.
 - Some rows have type='unknown' — that means the timestamp was missing so we can't tell whether they were a cold or a follow-up. Treat them as their own category; do NOT include them as cold first messages.
 
 YOUR JOB
