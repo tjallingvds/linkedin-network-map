@@ -780,12 +780,14 @@ router.post("/audit", async (req: AuthedRequest, res) => {
     .select([
       "u.team_member_name as teamMember",
       "m.counterpart_name as counterpart",
-      "m.counterpart_name_normalized as counterpartKey",
+      "m.counterpart_name_normalized as counterpartNameKey",
+      "m.counterpart_linkedin_normalized as counterpartUrlKey",
       "m.direction",
       sql<string>`coalesce(c.seniority, 'unknown')`.as("seniority"),
       "c.position",
       "c.company",
       "m.message_date as messageDate",
+      "m.message_ts as messageTs",
       "m.subject",
       "m.content_snippet as snippet",
       "m.conversation_id as conversationId",
@@ -800,19 +802,48 @@ router.post("/audit", async (req: AuthedRequest, res) => {
     .limit(CHAT_ROW_BUDGET)
     .execute();
 
-  const tsOf = (s: string | null): number => {
-    if (!s) return 0;
-    const cleaned = s.replace(/\sUTC$/i, "Z").replace(" ", "T");
-    const t = Date.parse(cleaned);
-    return Number.isNaN(t) ? 0 : t;
+  /** Best-effort timestamp. Prefer the indexed message_ts column the ingest
+   *  computed; fall back to parsing message_date; -1 means unknown. We use
+   *  -1 rather than 0 so unknown rows sort to the end of the asc walk
+   *  (otherwise a row with no date would steal the "cold" slot from a real
+   *  first message). */
+  const tsOf = (tsCol: Date | string | null | undefined, dateCol: string | null | undefined): number => {
+    if (tsCol instanceof Date) return tsCol.getTime();
+    if (typeof tsCol === "string") {
+      const t = Date.parse(tsCol);
+      if (!Number.isNaN(t)) return t;
+    }
+    if (dateCol) {
+      const cleaned = dateCol.replace(/\sUTC$/i, "Z").replace(" ", "T");
+      const t = Date.parse(cleaned);
+      if (!Number.isNaN(t)) return t;
+    }
+    return -1;
   };
 
-  // Group by (teamMember, normalized counterpart) so the same human is one
-  // bucket even if they showed up across multiple LinkedIn conversation_ids.
+  /** Strip trailing credential / suffix tokens that change between messages
+   *  ("Allison Nathan" vs "Allison Nathan, CFA, MD"). Keeps every name token,
+   *  just drops the credentials, so compound surnames like "van der Schaar"
+   *  survive intact. */
+  const STRIP = /\b(ph\.?\s*d\.?|phd|cfa|cpa|m\.?d\.?|md|mba|m\.?sc|msc|mphil|m\.?b\.?b\.?s\.?|mbbs|esq|jr|sr|ii|iii|iv)\b/gi;
+  const cleanName = (name: string): string =>
+    name.replace(STRIP, "").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+
+  /** Group key for cold/follow_up classification. Uses ONLY the cleaned
+   *  name — the LinkedIn URL is missing on many received messages (LinkedIn
+   *  doesn't always export SENDER PROFILE URL), which used to put a sent
+   *  + the counterpart's reply into separate buckets and made the second
+   *  sent look like a follow_up when it was really a reply. */
+  const groupKeyFor = (r: typeof rowsRaw[number]): string =>
+    `${r.teamMember}|${cleanName(r.counterpartNameKey ?? "")}`;
+
+  // Group by (teamMember, stable counterpart key) so the same human is one
+  // bucket even when their displayed name shifts across messages or they add
+  // credentials. groupKeyFor prefers the LinkedIn URL when present.
   type RawRow = typeof rowsRaw[number];
   const buckets = new Map<string, RawRow[]>();
   for (const r of rowsRaw) {
-    const k = `${r.teamMember ?? ""}|${r.counterpartKey ?? ""}`;
+    const k = groupKeyFor(r);
     const arr = buckets.get(k);
     if (arr) arr.push(r);
     else buckets.set(k, [r]);
@@ -833,8 +864,8 @@ router.post("/audit", async (req: AuthedRequest, res) => {
     counterpart: string;
     counterpartKey: string;
     direction: string;
-    type: "cold" | "follow_up" | "reply" | "received";
-    sentNo: number | null;        // 1-indexed: 1=cold, 2=first follow-up, ...
+    type: "cold" | "follow_up" | "reply" | "received" | "unknown";
+    sentNo: number | null;        // 1-indexed across this counterpart's SENT messages
     daysSincePrevSent: number | null;
     seniority: string;
     position: string | null;
@@ -849,15 +880,33 @@ router.post("/audit", async (req: AuthedRequest, res) => {
   const annotated: Annotated[] = [];
 
   for (const arr of buckets.values()) {
-    arr.sort((a, b) => tsOf(a.messageDate ?? null) - tsOf(b.messageDate ?? null));
+    // Stable sort by best-effort timestamp. Rows whose date can't be parsed
+    // get ts = -1 and sort to the FRONT only if they're at -1 — but we
+    // explicitly defer those to the END below so they can never claim the
+    // "cold" slot from a real first message.
+    arr.sort((a, b) => {
+      const ta = tsOf(a.messageTs as Date | null, a.messageDate ?? null);
+      const tb = tsOf(b.messageTs as Date | null, b.messageDate ?? null);
+      // Push undated (-1) to the end of the asc walk:
+      const ka = ta < 0 ? Number.MAX_SAFE_INTEGER : ta;
+      const kb = tb < 0 ? Number.MAX_SAFE_INTEGER : tb;
+      return ka - kb;
+    });
     const counterpartReplied = arr.some((r) => r.direction === "received");
     let receivedSeen = false;
     let sentSeen = false;
     let sentNo = 0;
     let prevSentTs: number | null = null;
     for (const r of arr) {
+      const ts = tsOf(r.messageTs as Date | null, r.messageDate ?? null);
+      const dated = ts >= 0;
       let type: Annotated["type"];
-      if (r.direction === "received") {
+      if (!dated) {
+        // Without a timestamp we can't tell where this falls in the thread.
+        // Mark it 'unknown' rather than risk labeling an undated row 'cold'
+        // and inflating the cold bucket.
+        type = "unknown";
+      } else if (r.direction === "received") {
         type = "received";
         receivedSeen = true;
       } else if (receivedSeen) {
@@ -869,12 +918,11 @@ router.post("/audit", async (req: AuthedRequest, res) => {
       }
       let myNo: number | null = null;
       let gap: number | null = null;
-      if (r.direction === "sent") {
+      if (r.direction === "sent" && dated) {
         sentNo += 1;
         myNo = sentNo;
-        const ts = tsOf(r.messageDate ?? null);
-        if (prevSentTs && ts) gap = +(((ts - prevSentTs) / 86_400_000).toFixed(1));
-        prevSentTs = ts || prevSentTs;
+        if (prevSentTs != null && ts > 0) gap = +(((ts - prevSentTs) / 86_400_000).toFixed(1));
+        prevSentTs = ts;
         sentSeen = true;
       }
       // Prefer the DB flag (set at ingest from ATTACHMENTS / hosted-video URLs
@@ -885,7 +933,7 @@ router.post("/audit", async (req: AuthedRequest, res) => {
       annotated.push({
         teamMember: r.teamMember ?? "—",
         counterpart: r.counterpart,
-        counterpartKey: r.counterpartKey ?? "",
+        counterpartKey: r.counterpartNameKey ?? "",
         direction: r.direction,
         type,
         sentNo: myNo,
@@ -992,12 +1040,15 @@ router.post("/audit", async (req: AuthedRequest, res) => {
 INPUT YOU GET
 - AGGREGATES: deterministic counts the server already computed (totals, mean follow-up gap, video stats). Trust these — don't recompute.
 - ROWS: every SENT message (cold + follow_up) with the counterpart's seniority, position, company, message subject + snippet (≤320 chars), date, sent-number-in-thread (1=cold, 2=first follow-up, …), days since previous sent, hasVideo flag, and whether the counterpart ever replied to that team member.
-- INDUSTRY: the user's filter. Match a row if ANY of these signals point at the industry:
-    1. recipient's company contains a known firm in that industry (e.g. "banking" → Wells Fargo, JPMorgan, Goldman Sachs, Morgan Stanley, UBS, HSBC, Citi, Barclays, Deutsche Bank, fintech names, retail banks, investment banks, asset managers).
-    2. recipient's position mentions an industry term (e.g. "banking" → "banker", "investment banking", "credit risk", "trading", "wealth", "AI in banking").
-    3. the message SUBJECT or SNIPPET mentions the industry, an industry firm, or industry vocabulary. This catches messages where the SENDER is talking about banking even if the recipient's connection record is incomplete.
-  Most LinkedIn cold-message recipients aren't in the user's connections (they message them before accepting), so company and position are often NULL. NEVER drop a row just because company/position is null — fall through to the snippet check. ONLY drop a row if zero signals match. Err strongly on the side of inclusion.
+- INDUSTRY: the user's filter. Apply this priority order — DO NOT match on snippet content alone:
+    1. PRIMARY (strong signal): recipient's company is a known firm in the industry (e.g. "banking" → Wells Fargo, JPMorgan, Goldman Sachs, Morgan Stanley, UBS, HSBC, Citi, Barclays, Deutsche Bank, BNP, ING, Rabobank, Société Générale, Lazard, retail banks, investment banks, asset managers, fintech names if the user said "fintech").
+    2. PRIMARY (strong signal): recipient's position mentions an industry term ("banker", "investment banking", "credit risk", "trading", "wealth management", "fixed income", "head of AI in banking", etc.).
+    3. FALLBACK (weak signal, ONLY when company AND position are both null): the message SUBJECT mentions a specific industry firm or a recipient-specific industry context. Subjects are more likely to be tailored than bodies.
+  CRITICAL: the SENDER's template body often mentions the industry as boilerplate ("we're doing research within the financial sector…"). DO NOT treat that as a match — the recipient may be in a totally different industry. A snippet mention of "banking" or "financial sector" is NEVER on its own enough to include a row. The recipient must be in that industry per their company / position / subject.
+  EXCLUSION: if the recipient's company OR position is clearly in another industry (e.g. company = "Retro Biosciences", position = "biotech founder"), DROP the row even if the snippet mentions banking — the sender just used the same boilerplate.
+  Be willing to drop most of the dataset. A focused 30–80 row audit beats a noisy 400-row one.
 - GOAL: the conversation goal (optional context). If the goal is "book a call", treat any sales-y outreach matching the industry as in-scope.
+- Some rows have type='unknown' — that means the timestamp was missing so we can't tell whether they were a cold or a follow-up. Treat them as their own category; do NOT include them as cold first messages.
 
 YOUR JOB
 1. Filter the ROWS to those matching the INDUSTRY/GOAL.

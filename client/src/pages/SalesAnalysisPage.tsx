@@ -276,15 +276,7 @@ function AuditView() {
   };
 
   if (busy) {
-    return (
-      <div className="sa-chat-shell">
-        <div className="sa-chat-hero">
-          <div className="orb-wrap"><div className="orb thinking" /></div>
-          <h2>Auditing your outreach.</h2>
-          <div className="sa-chat-hero-sub">Clustering messages, computing per-group metrics, ranking by seniority. Usually a minute or two.</div>
-        </div>
-      </div>
-    );
+    return <AuditProgress />;
   }
 
   if (!result) {
@@ -330,6 +322,83 @@ function AuditView() {
   }
 
   return <AuditReport result={result} onReset={() => setResult(null)} />;
+}
+
+/** Stage labels that cycle while the LLM runs. There's no real progress
+ *  signal coming back from the provider, so this is best-effort: each stage
+ *  has a min-duration; we advance to the next once the minimum has elapsed.
+ *  The progress bar fills toward an EXPECTED total (90s) but caps at 95%
+ *  until the actual response lands so the user never sees a finished bar
+ *  on a still-running call. */
+const AUDIT_STAGES: { label: string; minSeconds: number }[] = [
+  { label: "Filtering messages by industry & goal", minSeconds: 0 },
+  { label: "Re-classifying cold vs follow-up per counterpart", minSeconds: 6 },
+  { label: "Clustering message templates", minSeconds: 14 },
+  { label: "Computing per-group reply / success rates", minSeconds: 28 },
+  { label: "Breaking down by seniority", minSeconds: 44 },
+  { label: "Analyzing video impact by message-number", minSeconds: 58 },
+  { label: "Drafting top insights", minSeconds: 74 },
+  { label: "Still working — large datasets take longer", minSeconds: 95 },
+];
+const EXPECTED_SECONDS = 90;
+
+function AuditProgress() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const start = Date.now();
+    const id = setInterval(() => {
+      setElapsed((Date.now() - start) / 1000);
+    }, 250);
+    return () => clearInterval(id);
+  }, []);
+
+  // Pick the latest stage whose minSeconds is ≤ elapsed.
+  let stageIdx = 0;
+  for (let i = 0; i < AUDIT_STAGES.length; i++) {
+    if (elapsed >= AUDIT_STAGES[i].minSeconds) stageIdx = i;
+  }
+  const stage = AUDIT_STAGES[stageIdx];
+  const pct = Math.min(95, (elapsed / EXPECTED_SECONDS) * 100);
+  const elapsedLabel =
+    elapsed < 60
+      ? `${Math.floor(elapsed)}s elapsed`
+      : `${Math.floor(elapsed / 60)}m ${Math.floor(elapsed % 60)}s elapsed`;
+
+  return (
+    <div className="sa-chat-shell">
+      <div className="sa-chat-hero">
+        <div className="orb-wrap"><div className="orb thinking" /></div>
+        <h2>Auditing your outreach.</h2>
+        <div className="sa-chat-hero-sub">
+          {stage.label}…
+        </div>
+      </div>
+      <div className="sa-progress-wrap">
+        <div className="sa-progress-bar">
+          <div className="sa-progress-fill" style={{ width: `${pct}%` }} />
+          <div className="sa-progress-shimmer" />
+        </div>
+        <div className="sa-progress-meta">
+          <span>{stageIdx + 1} of {AUDIT_STAGES.length}</span>
+          <span>{elapsedLabel}</span>
+        </div>
+        <ol className="sa-progress-steps">
+          {AUDIT_STAGES.slice(0, -1).map((s, i) => (
+            <li
+              key={s.label}
+              className={
+                i < stageIdx ? "done" :
+                i === stageIdx ? "active" :
+                "pending"
+              }
+            >
+              {s.label}
+            </li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
 }
 
 function AuditReport({ result, onReset }: { result: AuditResult; onReset: () => void }) {

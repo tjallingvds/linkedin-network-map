@@ -2572,6 +2572,73 @@ button:focus-visible { outline-offset: 3px; }
   .sa-charts { grid-template-columns: 1fr; }
 }
 
+/* Audit progress — busy state while the LLM runs. */
+.sa-progress-wrap {
+  width: 100%; max-width: 520px; margin: 0 auto 28px;
+  padding: 14px 18px 18px;
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: 14px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.sa-progress-bar {
+  position: relative;
+  height: 6px; border-radius: 999px;
+  background: var(--hairline);
+  overflow: hidden;
+}
+.sa-progress-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 600ms ease-out;
+}
+/* Indeterminate shimmer — always animating so the UI feels alive even if
+ * the determinate fill happens to be paused (e.g. server still chewing on
+ * the same stage). */
+.sa-progress-shimmer {
+  position: absolute; top: 0; bottom: 0; width: 30%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent);
+  animation: sa-progress-shimmer 1.6s linear infinite;
+  border-radius: 999px;
+  pointer-events: none;
+}
+@keyframes sa-progress-shimmer {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(360%); }
+}
+.sa-progress-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 11px; color: var(--text-mute);
+  font-family: "Geist Mono", monospace;
+  letter-spacing: 0.04em;
+}
+.sa-progress-steps {
+  list-style: none; margin: 6px 0 0; padding: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.sa-progress-steps li {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-mute);
+  padding: 2px 0;
+}
+.sa-progress-steps li::before {
+  content: "";
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-mute); opacity: 0.35;
+  flex-shrink: 0;
+}
+.sa-progress-steps li.done { color: var(--text-dim); }
+.sa-progress-steps li.done::before { background: var(--accent); opacity: 0.7; }
+.sa-progress-steps li.active { color: var(--text); font-weight: 500; }
+.sa-progress-steps li.active::before {
+  background: var(--accent); opacity: 1;
+  animation: sa-step-pulse 1.4s ease-in-out infinite;
+}
+@keyframes sa-step-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 oklch(0.55 0.07 165 / 0.5); }
+  50%      { transform: scale(1.4); box-shadow: 0 0 0 4px oklch(0.55 0.07 165 / 0); }
+}
+
 /* Audit form (replaces chat) — sits below the orb hero on the empty state. */
 .sa-audit-form {
   display: flex; flex-direction: column; gap: 14px;
