@@ -1,15 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Bar, BarChart, CartesianGrid, Cell, Legend,
-  Line, LineChart, Pie, PieChart, ResponsiveContainer,
+  Bar, BarChart, CartesianGrid,
+  Line, LineChart, ResponsiveContainer,
   Tooltip, XAxis, YAxis,
 } from "recharts";
-import { marked } from "marked";
 import { IconArrowR, IconClose, IconUpload, IconSparkle } from "../design/icons";
 import { api } from "../lib/api";
-
-marked.setOptions({ breaks: true, gfm: true });
 import {
   parseLinkedIn,
   parseLinkedInMessages,
@@ -29,55 +26,78 @@ interface UploadRow {
   created_at: string;
 }
 
-interface ChartSpec {
-  kind: "bar" | "pie" | "line" | "number";
-  title: string;
-  metric: string;
-  data: { label: string; value: number }[];
-}
-
-interface ChatTurn {
-  role: "user" | "assistant";
-  content: string;
-  charts?: ChartSpec[];
-  suggestedTitle?: string;
-}
-
-interface PinnedRow {
+interface MessageGroup {
   id: string;
-  title: string;
-  question: string | null;
-  spec: ChartSpec;
-  position: number;
-  created_at: string;
+  label: string;
+  sampleSnippet: string;
+  count: number;
+  uniqueRecipients: number;
+  senderSplit: { name: string; count: number }[];
+  metrics: {
+    replyRate: number;
+    successRate: number;
+    avgFollowupsAfter?: number;
+    meanDaysToFirstFollowup?: number | null;
+    typicalSentNumber?: number;
+    meanDaysSincePrev?: number | null;
+  };
+  bySeniority: { bucket: string; n: number; successRate: number }[];
 }
 
-const PIE_COLORS = ["#5e8b7e", "#a7c4bc", "#dfeeea", "#f5b8a3", "#c9a8d4", "#e6c89a"];
+interface AuditResult {
+  scope: {
+    industry: string;
+    goal: string;
+    totalMatched: number;
+    totalCold: number;
+    totalFollowUps: number;
+  };
+  firstMessageGroups: MessageGroup[];
+  followUpGroups: MessageGroup[];
+  bySeniority: {
+    bucket: string;
+    label: string;
+    bestGroupId: string;
+    bestGroupLabel: string;
+    successRate: number;
+    n: number;
+  }[];
+  videoImpact: {
+    overall: {
+      withVideo: { n: number; replyRate: number };
+      without: { n: number; replyRate: number };
+    };
+    byMessageNumber: {
+      messageNumber: number;
+      n: number;
+      withVideo: number;
+      replyRateWithVideo: number;
+      replyRateOverall: number;
+    }[];
+    recommendation: string;
+  };
+  topInsights: string[];
+}
 
 // ---------- main page ----------
 
 export function SalesAnalysisPage() {
   const navigate = useNavigate();
   const [uploads, setUploads] = useState<UploadRow[]>([]);
-  const [pinned, setPinned] = useState<PinnedRow[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
 
-  const refreshAll = async () => {
+  const refreshUploads = async () => {
     try {
-      const [u, p] = await Promise.all([
-        api.get<{ uploads: UploadRow[] }>("/api/sales/uploads"),
-        api.get<{ pinned: PinnedRow[] }>("/api/sales/pinned"),
-      ]);
+      const u = await api.get<{ uploads: UploadRow[] }>("/api/sales/uploads");
       setUploads(u.uploads);
-      setPinned(p.pinned);
     } catch (e) {
       setFlash(`Load failed: ${(e as Error).message}`);
     }
   };
 
   useEffect(() => {
-    refreshAll();
+    refreshUploads();
   }, []);
 
   useEffect(() => {
@@ -91,29 +111,8 @@ export function SalesAnalysisPage() {
     try {
       await api.del<{ ok: true }>(`/api/sales/uploads/${id}`);
       setFlash("Upload deleted");
-      refreshAll();
+      refreshUploads();
     } catch (e) { setFlash(`Delete failed: ${(e as Error).message}`); }
-  };
-
-  const unpin = async (id: string) => {
-    try {
-      await api.del<{ ok: true }>(`/api/sales/pinned/${id}`);
-      setPinned((rs) => rs.filter((r) => r.id !== id));
-    } catch (e) { setFlash(`Unpin failed: ${(e as Error).message}`); }
-  };
-
-  const pinChart = async (spec: ChartSpec, question: string, title: string) => {
-    try {
-      const r = await api.post<{ id: string }>("/api/sales/pinned", { title, question, spec });
-      setPinned((rs) => [
-        ...rs,
-        {
-          id: r.id, title, question, spec,
-          position: rs.length, created_at: new Date().toISOString(),
-        },
-      ]);
-      setFlash("Pinned to dashboard");
-    } catch (e) { setFlash(`Pin failed: ${(e as Error).message}`); }
   };
 
   return (
@@ -134,8 +133,7 @@ export function SalesAnalysisPage() {
               onAdd={() => setShowUpload(true)}
               onDelete={deleteUpload}
             />
-            <PinnedSection pinned={pinned} onUnpin={unpin} />
-            <ChatSection onPin={pinChart} />
+            <AuditView />
           </div>
         ) : (
           <div className="sa-content">
@@ -164,7 +162,7 @@ export function SalesAnalysisPage() {
             onUploaded={(team) => {
               setShowUpload(false);
               setFlash(`Imported ${team}'s data`);
-              refreshAll();
+              refreshUploads();
             }}
           />
         )}
@@ -247,267 +245,259 @@ function UploadsSection({
   );
 }
 
-// ---------- pinned analyses ----------
+// ---------- audit view (replaces chat) ----------
 
-function PinnedSection({ pinned, onUnpin }: { pinned: PinnedRow[]; onUnpin: (id: string) => void }) {
-  if (pinned.length === 0) return null;
-  return (
-    <section className="sa-section">
-      <div className="sa-section-head">
-        <div className="sa-section-title">Pinned analyses</div>
-      </div>
-      <div className="sa-charts">
-        {pinned.map((p) => (
-          <div key={p.id} className="sa-chart-panel">
-            <div className="sa-chart-pin-head">
-              <div>
-                <div className="sa-chart-title">{p.title}</div>
-                {p.question && <div className="sa-chart-sub">{p.question}</div>}
-              </div>
-              <button className="sa-upload-del" onClick={() => onUnpin(p.id)} title="Unpin">
-                <IconClose size={12} />
-              </button>
-            </div>
-            <div className="sa-chart-body"><RenderSpec spec={p.spec} /></div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
+function fmtPct(n: number | undefined | null): string {
+  if (n == null || Number.isNaN(n)) return "—";
+  return `${(n * 100).toFixed(1)}%`;
 }
 
-function RenderSpec({ spec }: { spec: ChartSpec }) {
-  if (spec.kind === "number") {
-    const v = spec.data[0]?.value ?? 0;
-    return (
-      <div className="sa-spec-number">
-        <div className="sa-spec-num-value">{typeof v === "number" ? v.toLocaleString() : v}</div>
-        <div className="sa-spec-num-metric">{spec.metric}</div>
-      </div>
-    );
-  }
-  const data = spec.data.map((d) => ({ name: d.label, value: d.value }));
-  if (spec.kind === "pie") {
-    return (
-      <ResponsiveContainer width="100%" height={220}>
-        <PieChart>
-          <Pie data={data} dataKey="value" nameKey="name" outerRadius={70}>
-            {data.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
-          </Pie>
-          <Tooltip />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
-        </PieChart>
-      </ResponsiveContainer>
-    );
-  }
-  if (spec.kind === "line") {
-    return (
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={data}>
-          <CartesianGrid strokeDasharray="3 3" stroke="rgba(20,14,40,0.06)" />
-          <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--text-dim)" }} />
-          <YAxis tick={{ fontSize: 11, fill: "var(--text-dim)" }} />
-          <Tooltip />
-          <Line type="monotone" dataKey="value" stroke="#5e8b7e" strokeWidth={2} dot={false} />
-        </LineChart>
-      </ResponsiveContainer>
-    );
-  }
-  // bar
-  return (
-    <ResponsiveContainer width="100%" height={220}>
-      <BarChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(20,14,40,0.06)" />
-        <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--text-dim)" }} angle={-15} textAnchor="end" height={50} />
-        <YAxis tick={{ fontSize: 11, fill: "var(--text-dim)" }} />
-        <Tooltip />
-        <Bar dataKey="value" fill="#5e8b7e" radius={[4, 4, 0, 0]} />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
+function AuditView() {
+  const [industry, setIndustry] = useState("");
+  const [goal, setGoal] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<AuditResult | null>(null);
 
-// ---------- chat section ----------
+  const run = async () => {
+    if (!industry.trim() || busy) return;
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const r = await api.post<AuditResult>("/api/sales/audit", {
+        industry: industry.trim(),
+        goal: goal.trim() || null,
+      });
+      setResult(r);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally { setBusy(false); }
+  };
 
-/** Split an assistant-turn markdown answer on inline chart markers. The
- *  model is told to insert `[[CHART:N]]` on its own line where the Nth
- *  chart should render. We walk the text, emit the text-before as a `md`
- *  segment, then a `chart` segment for the marker, and continue. Unknown
- *  indices (out of range) are kept as plain text so the user notices. */
-type AnswerSegment = { kind: "md"; text: string } | { kind: "chart"; idx: number };
-function splitAnswerByChartMarkers(text: string, chartCount: number): AnswerSegment[] {
-  if (!text) return [];
-  const re = /\[\[CHART:(\d+)\]\]/g;
-  const out: AnswerSegment[] = [];
-  let last = 0;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    const idx = Number(m[1]);
-    if (idx >= 0 && idx < chartCount) {
-      out.push({ kind: "md", text: text.slice(last, m.index) });
-      out.push({ kind: "chart", idx });
-      last = m.index + m[0].length;
-    }
-  }
-  out.push({ kind: "md", text: text.slice(last) });
-  return out;
-}
-
-function InlineChart({ chart, onPin }: { chart: ChartSpec; onPin: () => void }) {
-  return (
-    <div className="sa-inline-chart">
-      <div className="sa-inline-chart-head">
-        <div>
-          <div className="sa-chart-title">{chart.title}</div>
-          {chart.metric && <div className="sa-chart-sub">{chart.metric}</div>}
+  if (busy) {
+    return (
+      <div className="sa-chat-shell">
+        <div className="sa-chat-hero">
+          <div className="orb-wrap"><div className="orb thinking" /></div>
+          <h2>Auditing your outreach.</h2>
+          <div className="sa-chat-hero-sub">Clustering messages, computing per-group metrics, ranking by seniority. Usually a minute or two.</div>
         </div>
-        <button className="pill-btn" onClick={onPin}>Pin</button>
       </div>
-      <div className="sa-chart-body"><RenderSpec spec={chart} /></div>
+    );
+  }
+
+  if (!result) {
+    return (
+      <div className="sa-chat-shell">
+        <div className="sa-chat-hero">
+          <div className="orb-wrap"><div className="orb" /></div>
+          <h2>Audit your outreach.</h2>
+          <div className="sa-chat-hero-sub">
+            Tell me the industry and goal — I'll find the relevant messages, group them granularly, and show what works.
+          </div>
+        </div>
+        <div className="sa-audit-form">
+          <div>
+            <div className="sa-field-label">Industry / target</div>
+            <input
+              className="sa-input"
+              value={industry}
+              onChange={(e) => setIndustry(e.target.value)}
+              placeholder="e.g. Banking, fintech, biotech founders…"
+              onKeyDown={(e) => { if (e.key === "Enter" && industry.trim()) run(); }}
+            />
+          </div>
+          <div>
+            <div className="sa-field-label">Goal of these messages (optional)</div>
+            <input
+              className="sa-input"
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              placeholder="e.g. Book a 30-min call about our research"
+              onKeyDown={(e) => { if (e.key === "Enter" && industry.trim()) run(); }}
+            />
+          </div>
+          {err && <div style={{ color: "var(--danger)", fontSize: 12 }}>{err}</div>}
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button className="pill-btn primary" onClick={run} disabled={!industry.trim()}>
+              <IconSparkle size={12} />Run audit
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <AuditReport result={result} onReset={() => setResult(null)} />;
+}
+
+function AuditReport({ result, onReset }: { result: AuditResult; onReset: () => void }) {
+  return (
+    <div className="sa-audit-report">
+      <div className="sa-report-head">
+        <div>
+          <div className="sa-eyebrow" style={{ marginBottom: 4 }}>
+            Audit · {result.scope.industry}{result.scope.goal ? ` · ${result.scope.goal}` : ""}
+          </div>
+          <h2 className="sa-report-title">
+            {result.scope.totalCold} first messages · {result.scope.totalFollowUps} follow-ups · {result.scope.totalMatched} total matched
+          </h2>
+        </div>
+        <button className="pill-btn" onClick={onReset}>New audit</button>
+      </div>
+
+      {result.topInsights?.length > 0 && (
+        <div className="sa-insights">
+          {result.topInsights.map((ins, i) => (
+            <div key={i} className="sa-insight">{ins}</div>
+          ))}
+        </div>
+      )}
+
+      <div className="sa-section-title">First-message templates</div>
+      <div className="sa-group-grid">
+        {result.firstMessageGroups.map((g) => <GroupCard key={g.id} group={g} kind="cold" />)}
+      </div>
+
+      {result.followUpGroups?.length > 0 && (
+        <>
+          <div className="sa-section-title">Follow-up templates</div>
+          <div className="sa-group-grid">
+            {result.followUpGroups.map((g) => <GroupCard key={g.id} group={g} kind="follow_up" />)}
+          </div>
+        </>
+      )}
+
+      {result.bySeniority?.length > 0 && (
+        <>
+          <div className="sa-section-title">Best approach per seniority</div>
+          <div className="sa-table-wrap">
+            <table className="sa-md-table">
+              <thead>
+                <tr><th>Seniority</th><th>Best template</th><th>Success</th><th>n</th></tr>
+              </thead>
+              <tbody>
+                {result.bySeniority.map((s) => (
+                  <tr key={s.bucket}>
+                    <td>{s.label}</td>
+                    <td>{s.bestGroupLabel}</td>
+                    <td>{fmtPct(s.successRate)}</td>
+                    <td>{s.n}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {result.videoImpact && (
+        <>
+          <div className="sa-section-title">Video impact</div>
+          <div className="sa-video-impact">
+            <div className="sa-video-summary">
+              <div className="sa-video-cell">
+                <div className="sa-video-label">With video</div>
+                <div className="sa-video-value">{fmtPct(result.videoImpact.overall.withVideo.replyRate)}</div>
+                <div className="sa-video-n">n = {result.videoImpact.overall.withVideo.n}</div>
+              </div>
+              <div className="sa-video-cell">
+                <div className="sa-video-label">Without video</div>
+                <div className="sa-video-value">{fmtPct(result.videoImpact.overall.without.replyRate)}</div>
+                <div className="sa-video-n">n = {result.videoImpact.overall.without.n}</div>
+              </div>
+            </div>
+            {result.videoImpact.byMessageNumber.length > 0 && (
+              <div className="sa-video-chart">
+                <div className="sa-chart-sub">Reply rate by sent-message-number — bars show with-video, line shows overall.</div>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={result.videoImpact.byMessageNumber.map((b) => ({
+                    name: `#${b.messageNumber} (n=${b.n})`,
+                    withVideo: +(b.replyRateWithVideo * 100).toFixed(1),
+                    overall: +(b.replyRateOverall * 100).toFixed(1),
+                  }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(20,14,40,0.06)" />
+                    <XAxis dataKey="name" tick={{ fontSize: 11, fill: "var(--text-dim)" }} />
+                    <YAxis tick={{ fontSize: 11, fill: "var(--text-dim)" }} unit="%" />
+                    <Tooltip />
+                    <Bar dataKey="withVideo" fill="#5e8b7e" radius={[4, 4, 0, 0]} />
+                    <Line type="monotone" dataKey="overall" stroke="#c9a8d4" strokeWidth={2} dot={false} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+            {result.videoImpact.recommendation && (
+              <div className="sa-video-rec">{result.videoImpact.recommendation}</div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-
-function ChatSection({ onPin }: { onPin: (spec: ChartSpec, question: string, title: string) => void }) {
-  const [turns, setTurns] = useState<ChatTurn[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const endRef = useRef<HTMLDivElement>(null);
-  const taRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [turns]);
-
-  // Auto-grow the composer textarea as the user pastes / types longer briefs.
-  useEffect(() => {
-    const el = taRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 320)}px`;
-  }, [input]);
-
-  const send = async () => {
-    const q = input.trim();
-    if (!q || busy) return;
-    setInput("");
-    setBusy(true);
-    setTurns((t) => [...t, { role: "user", content: q }]);
-    try {
-      const history = turns.map((t) => ({ role: t.role, content: t.content }));
-      const r = await api.post<{
-        answer: string;
-        charts: ChartSpec[];
-        suggestedTitle: string;
-      }>("/api/sales/chat", { question: q, history });
-      setTurns((t) => [...t, {
-        role: "assistant",
-        content: r.answer ?? "",
-        charts: r.charts ?? [],
-        suggestedTitle: r.suggestedTitle ?? "",
-      }]);
-    } catch (e) {
-      setTurns((t) => [...t, { role: "assistant", content: `**Error:** ${(e as Error).message}` }]);
-    } finally { setBusy(false); }
-  };
-
+function GroupCard({ group, kind }: { group: MessageGroup; kind: "cold" | "follow_up" }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className="sa-chat-shell">
-      {turns.length === 0 ? (
-        <div className="sa-chat-hero">
-          <div className="orb-wrap"><div className={`orb ${busy ? "thinking" : ""}`} /></div>
-          <h2>Ask the data.</h2>
-          <div className="sa-chat-hero-sub">
-            Try <em>"which template variant works best per seniority"</em> or paste a full analysis brief — I have every row in context.
-          </div>
-        </div>
-      ) : (
-        <div className="sa-thread">
-          {turns.map((t, i) => {
-            if (t.role === "user") return <div key={i} className="user-msg">{t.content ?? ""}</div>;
-            const text = t.content ?? "";
-            const charts = t.charts ?? [];
-            const userQuestion = turns[i - 1]?.content ?? "";
-            const segments = splitAnswerByChartMarkers(text, charts.length);
-            const usedCharts = new Set<number>();
-            return (
-              <div key={i} className="ai-block">
-                <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
-                {segments.map((seg, si) => {
-                  if (seg.kind === "md") {
-                    if (!seg.text) return null;
-                    return (
-                      <div
-                        key={si}
-                        className="ai-summary sa-md"
-                        dangerouslySetInnerHTML={{ __html: marked.parse(seg.text) as string }}
-                      />
-                    );
-                  }
-                  // chart marker
-                  const chart = charts[seg.idx];
-                  if (!chart) return null;
-                  usedCharts.add(seg.idx);
-                  return (
-                    <InlineChart
-                      key={si}
-                      chart={chart}
-                      onPin={() => onPin(chart, userQuestion, t.suggestedTitle ?? chart.title)}
-                    />
-                  );
-                })}
-                {/* Any chart the model produced but didn't tag with a marker
-                 * still renders at the end so it isn't lost. */}
-                {charts.map((chart, ci) =>
-                  usedCharts.has(ci) ? null : (
-                    <InlineChart
-                      key={`tail-${ci}`}
-                      chart={chart}
-                      onPin={() => onPin(chart, userQuestion, t.suggestedTitle ?? chart.title)}
-                    />
-                  ),
-                )}
-              </div>
-            );
-          })}
-          {busy && (
-            <div className="ai-block">
-              <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
-              <div className="thinking-row">
-                <div className="dots"><div className="dot" /><div className="dot" /><div className="dot" /></div>
-                <span>Reading your data…</span>
-              </div>
-            </div>
-          )}
-          <div ref={endRef} />
+    <div className="sa-group-card">
+      <div className="sa-group-head">
+        <div className="sa-group-label">{group.label}</div>
+        <button className="sa-group-toggle" onClick={() => setOpen((o) => !o)}>
+          {open ? "Hide message" : "Read message"}
+        </button>
+      </div>
+      <div className="sa-group-metrics">
+        <Metric label="Sent" value={String(group.count)} />
+        <Metric label="Unique recipients" value={String(group.uniqueRecipients)} />
+        <Metric label="Reply rate" value={fmtPct(group.metrics.replyRate)} />
+        <Metric label="Success" value={fmtPct(group.metrics.successRate)} accent />
+        {kind === "cold" ? (
+          <>
+            <Metric label="Avg follow-ups after" value={group.metrics.avgFollowupsAfter?.toFixed(1) ?? "—"} />
+            <Metric label="Mean days → first follow-up" value={group.metrics.meanDaysToFirstFollowup != null ? group.metrics.meanDaysToFirstFollowup.toFixed(1) + "d" : "—"} />
+          </>
+        ) : (
+          <>
+            <Metric label="Typical position" value={group.metrics.typicalSentNumber ? `#${group.metrics.typicalSentNumber}` : "—"} />
+            <Metric label="Mean days since prev" value={group.metrics.meanDaysSincePrev != null ? group.metrics.meanDaysSincePrev.toFixed(1) + "d" : "—"} />
+          </>
+        )}
+      </div>
+      {group.senderSplit?.length > 0 && (
+        <div className="sa-group-senders">
+          {group.senderSplit.map((s) => (
+            <span key={s.name} className="sa-sender-chip">{s.name}: {s.count}</span>
+          ))}
         </div>
       )}
-
-      <div className="composer-wrap sa-composer-wrap">
-        <div className="composer">
-          <div className="composer-row">
-            <div className="composer-spark">
-              <IconSparkle size={16} style={{ color: "var(--accent)" }} />
-            </div>
-            <textarea
-              ref={taRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
-              }}
-              placeholder="Ask about your data, or paste a full brief…"
-              rows={1}
-            />
-          </div>
-          <div className="composer-tools">
-            <div className="tool-group" />
-            <div className="send-group">
-              <button className="send" onClick={send} disabled={busy || !input.trim()}>
-                <IconSparkle size={14} />
-              </button>
-            </div>
-          </div>
+      {open && (
+        <div className="sa-group-sample">
+          <div className="sa-field-label">Sample message</div>
+          <div className="sa-sample-text">{group.sampleSnippet}</div>
         </div>
-      </div>
+      )}
+      {group.bySeniority?.length > 0 && (
+        <div className="sa-group-seniority">
+          <div className="sa-field-label" style={{ marginBottom: 4 }}>Per seniority</div>
+          {group.bySeniority.map((s) => (
+            <div key={s.bucket} className="sa-seniority-row">
+              <span>{s.bucket}</span>
+              <span className="sa-seniority-n">n={s.n}</span>
+              <span className="sa-seniority-rate">{fmtPct(s.successRate)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="sa-metric">
+      <div className="sa-metric-label">{label}</div>
+      <div className="sa-metric-value" style={accent ? { color: "var(--accent)" } : undefined}>{value}</div>
     </div>
   );
 }

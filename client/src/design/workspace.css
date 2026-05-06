@@ -2572,6 +2572,177 @@ button:focus-visible { outline-offset: 3px; }
   .sa-charts { grid-template-columns: 1fr; }
 }
 
+/* Audit form (replaces chat) — sits below the orb hero on the empty state. */
+.sa-audit-form {
+  display: flex; flex-direction: column; gap: 14px;
+  width: 100%; max-width: 640px; margin: 0 auto 28px;
+  padding: 16px 18px;
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: 14px;
+}
+
+/* Audit report */
+.sa-audit-report {
+  display: flex; flex-direction: column; gap: 24px;
+  width: 100%; max-width: 1100px; margin: 0 auto;
+  padding: 24px 0 32px;
+  overflow-y: auto;
+}
+.sa-fullchat .sa-audit-report { max-height: 100%; }
+.sa-report-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px;
+}
+.sa-report-title {
+  margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em;
+  color: var(--text);
+}
+.sa-section-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  letter-spacing: -0.01em;
+  margin-top: 8px;
+}
+
+.sa-insights {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.sa-insight {
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px; color: var(--text); line-height: 1.5;
+}
+
+/* Group cards */
+.sa-group-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 12px;
+}
+.sa-group-card {
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.sa-group-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 10px;
+}
+.sa-group-label {
+  font-size: 13.5px; font-weight: 600; color: var(--text);
+  line-height: 1.35;
+}
+.sa-group-toggle {
+  background: transparent; border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px; color: var(--text-dim);
+  cursor: pointer; white-space: nowrap;
+}
+.sa-group-toggle:hover { background: var(--hairline); color: var(--text); }
+
+.sa-group-metrics {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px;
+}
+.sa-metric {
+  background: rgba(20, 14, 40, 0.025);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.sa-metric-label {
+  font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-mute);
+}
+.sa-metric-value {
+  margin-top: 2px;
+  font-size: 16px; font-weight: 600; color: var(--text);
+  font-family: "Geist Mono", monospace;
+}
+
+.sa-group-senders {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.sa-sender-chip {
+  font-size: 11px; color: var(--text-dim);
+  background: var(--hairline); padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.sa-group-sample {
+  border-top: 1px dashed var(--hairline);
+  padding-top: 10px;
+}
+.sa-sample-text {
+  font-size: 12.5px; line-height: 1.55; color: var(--text);
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
+
+.sa-group-seniority {
+  border-top: 1px dashed var(--hairline);
+  padding-top: 8px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.sa-seniority-row {
+  display: grid; grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  font-size: 12px; color: var(--text-dim);
+}
+.sa-seniority-n { font-family: "Geist Mono", monospace; color: var(--text-mute); }
+.sa-seniority-rate { font-family: "Geist Mono", monospace; color: var(--text); }
+
+.sa-table-wrap {
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.sa-md-table {
+  width: 100%; border-collapse: collapse;
+  font-size: 13px;
+}
+.sa-md-table th {
+  background: rgba(20, 14, 40, 0.025);
+  text-align: left;
+  padding: 9px 14px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-mute); font-weight: 600;
+  border-bottom: 1px solid var(--hairline);
+}
+.sa-md-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--text);
+}
+.sa-md-table tbody tr:last-child td { border-bottom: none; }
+
+.sa-video-impact {
+  display: flex; flex-direction: column; gap: 14px;
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.sa-video-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.sa-video-cell {
+  background: rgba(20, 14, 40, 0.025);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.sa-video-label { font-size: 11px; color: var(--text-mute); letter-spacing: 0.05em; text-transform: uppercase; }
+.sa-video-value {
+  margin-top: 4px;
+  font-size: 22px; font-weight: 600; color: var(--accent);
+  font-family: "Geist Mono", monospace;
+}
+.sa-video-n { font-size: 11px; color: var(--text-mute); margin-top: 2px; }
+.sa-video-chart { padding-top: 4px; }
+.sa-video-rec {
+  font-size: 13px; line-height: 1.55; color: var(--text);
+  border-top: 1px dashed var(--hairline); padding-top: 12px;
+}
+
 /* Chat-dominant layout — fills the viewport when uploads exist.
  * Contained vertically: scroll happens INSIDE .sa-thread so the composer
  * stays put at the bottom of the shell instead of jumping with page-level
