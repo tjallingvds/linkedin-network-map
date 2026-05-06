@@ -355,9 +355,10 @@ function AuditProgress() {
   // Pick the latest stage whose minSeconds is ≤ elapsed.
   let stageIdx = 0;
   for (let i = 0; i < AUDIT_STAGES.length; i++) {
-    if (elapsed >= AUDIT_STAGES[i].minSeconds) stageIdx = i;
+    const s = AUDIT_STAGES[i];
+    if (s && elapsed >= s.minSeconds) stageIdx = i;
   }
-  const stage = AUDIT_STAGES[stageIdx];
+  const stage = AUDIT_STAGES[stageIdx] ?? AUDIT_STAGES[0]!;
   const pct = Math.min(95, (elapsed / EXPECTED_SECONDS) * 100);
   const elapsedLabel =
     elapsed < 60
@@ -438,9 +439,9 @@ function AuditReport({ result, onReset }: { result: AuditResult; onReset: () => 
         </>
       )}
 
-      {result.bySeniority?.length > 0 && (
-        <>
-          <div className="sa-section-title">Best approach per seniority</div>
+      <>
+        <div className="sa-section-title">Best approach per seniority</div>
+        {result.bySeniority?.length > 0 ? (
           <div className="sa-table-wrap">
             <table className="sa-md-table">
               <thead>
@@ -458,8 +459,12 @@ function AuditReport({ result, onReset }: { result: AuditResult; onReset: () => 
               </tbody>
             </table>
           </div>
-        </>
-      )}
+        ) : (
+          <div className="sa-empty">
+            Not enough data per seniority bucket after filtering. Try a broader industry / goal.
+          </div>
+        )}
+      </>
 
       {result.videoImpact && (
         <>

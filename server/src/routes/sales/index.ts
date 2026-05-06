@@ -1040,14 +1040,20 @@ router.post("/audit", async (req: AuthedRequest, res) => {
 INPUT YOU GET
 - AGGREGATES: deterministic counts the server already computed (totals, mean follow-up gap, video stats). Trust these — don't recompute.
 - ROWS: every SENT message (cold + follow_up) with the counterpart's seniority, position, company, message subject + snippet (≤320 chars), date, sent-number-in-thread (1=cold, 2=first follow-up, …), days since previous sent, hasVideo flag, and whether the counterpart ever replied to that team member.
-- INDUSTRY: the user's filter. Apply this priority order — DO NOT match on snippet content alone:
-    1. PRIMARY (strong signal): recipient's company is a known firm in the industry (e.g. "banking" → Wells Fargo, JPMorgan, Goldman Sachs, Morgan Stanley, UBS, HSBC, Citi, Barclays, Deutsche Bank, BNP, ING, Rabobank, Société Générale, Lazard, retail banks, investment banks, asset managers, fintech names if the user said "fintech").
-    2. PRIMARY (strong signal): recipient's position mentions an industry term ("banker", "investment banking", "credit risk", "trading", "wealth management", "fixed income", "head of AI in banking", etc.).
-    3. FALLBACK (weak signal, ONLY when company AND position are both null): the message SUBJECT mentions a specific industry firm or a recipient-specific industry context. Subjects are more likely to be tailored than bodies.
-  CRITICAL: the SENDER's template body often mentions the industry as boilerplate ("we're doing research within the financial sector…"). DO NOT treat that as a match — the recipient may be in a totally different industry. A snippet mention of "banking" or "financial sector" is NEVER on its own enough to include a row. The recipient must be in that industry per their company / position / subject.
-  EXCLUSION: if the recipient's company OR position is clearly in another industry (e.g. company = "Retro Biosciences", position = "biotech founder"), DROP the row even if the snippet mentions banking — the sender just used the same boilerplate.
-  Be willing to drop most of the dataset. A focused 30–80 row audit beats a noisy 400-row one.
-- GOAL: the conversation goal (optional context). If the goal is "book a call", treat any sales-y outreach matching the industry as in-scope.
+- INDUSTRY: what the user's OUTREACH is about. This is a TOPIC filter, not a recipient-industry filter. Decide by reading the message itself.
+
+  INCLUDE a row when ANY of these are clearly true (not boilerplate):
+    1. The sender's message body or subject is pitching / discussing the industry (e.g. "research within the financial sector", "AI in banking", "credit risk model", "wealth management product"). Repeated boilerplate counts here — if Tjalling's banking template mentions "financial sector" in a sales pitch, that's a banking message even when the recipient happens to be in another field.
+    2. The recipient is unambiguously in the industry per their company / position AND the message is a sales / outreach style message (cold pitch, demo ask, intro, partnership). This catches highly-personalized one-offs to bankers.
+
+  EXCLUDE a row when:
+    - The message body is clearly about a DIFFERENT topic (e.g. ed-tech, biotech, recruiting, personal networking). Example: "Thanks for the intro Joshua! I'm building in the ed-tech space" → EXCLUDE for "banking" even if Joshua works at a bank.
+    - The message is conversational chitchat / scheduling that doesn't carry topic signal. Skip these unless they're follow-ups in a thread you've already included.
+    - The recipient is clearly in another industry AND the body doesn't pitch the audit topic.
+
+  Be willing to drop most of the dataset. A focused 30–80 row audit on the right messages beats a noisy 400-row one mixing ed-tech, biotech and banking. If a cluster is mixed-topic, prefer dropping it over including it.
+
+- GOAL: optional. When set, narrows the audit further (e.g. "book a call" → drop pure-info messages with no CTA). When empty, treat any outreach about the industry as in-scope.
 - Some rows have type='unknown' — that means the timestamp was missing so we can't tell whether they were a cold or a follow-up. Treat them as their own category; do NOT include them as cold first messages.
 
 YOUR JOB
@@ -1057,7 +1063,7 @@ YOUR JOB
 4. For each cluster, compute: count, unique recipients, sender split (Tjalling/Fatima/etc), reply rate (counterpart ever responded to that team member), success rate (had a substantive back-and-forth, agreed to a call, or booked a slot — strict; "thanks I'll look" is not success).
 5. For each cluster, list its top seniorities and the success rate per seniority bucket.
 6. Per cluster, surface the SAMPLE SNIPPET — the actual snippet text from one example so the user can read what this group says.
-7. For each seniority bucket, name the cluster with the highest success rate (n ≥ 3).
+7. For each seniority bucket that has ANY sent rows in the filtered data (don't apply a minimum-n threshold — return whatever the data shows, even n=1; the user can read the n column and judge sample size themselves), name the cluster with the highest success rate. Tie-break on highest reply rate. ALWAYS include every seniority bucket that appears in the filtered dataset — don't return an empty array.
 8. Video analysis: from AGGREGATES.videoStats, summarise whether sending a video improved replies overall, and at which sent-message-number videos worked best. Be honest about sample size.
 
 A "success" requires evidence of substantive engagement. Do not infer success from a one-line acknowledgement. If you can't tell, mark it as not success.
