@@ -567,6 +567,7 @@ function UploadModal({
           messageDate: m.messageDate ?? null,
           subject: m.subject ?? null,
           contentSnippet: m.contentSnippet ?? null,
+          hasVideo: m.hasVideo ?? false,
         })),
       });
       onUploaded(teamName.trim());

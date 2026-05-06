@@ -242,6 +242,11 @@ export interface SalesMessagesTable {
   content_snippet: string | null;
   /** "cold" | "follow_up" | "reply" — computed at ingest time. */
   message_type: string | null;
+  /** True when the original LinkedIn ATTACHMENTS column contained a video
+   *  URL (LinkedIn-native, Loom, Vidyard, Vimeo, Wistia, YouTube) OR the
+   *  message body mentions one. False (default) for older rows that were
+   *  ingested before video tracking landed — re-upload to backfill. */
+  has_video: Generated<boolean>;
 }
 
 export interface SalesPinnedAnalysesTable {

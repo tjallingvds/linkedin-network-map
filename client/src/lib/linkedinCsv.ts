@@ -31,6 +31,11 @@ export interface MessageImportRow {
   messageDate?: string;
   subject?: string;
   contentSnippet?: string;
+  /** True when the original message had a video — either a video URL in the
+   *  LinkedIn ATTACHMENTS column (transmuxed-video-private), a third-party
+   *  video link (Loom / Vidyard / Vimeo / Wistia / YouTube), or an explicit
+   *  reference in the body text. */
+  hasVideo?: boolean;
 }
 
 export interface ParsedMessages {
@@ -165,6 +170,7 @@ export function parseLinkedInMessages(
   const iDate = col("date", "sent at", "timestamp");
   const iSubject = col("subject");
   const iContent = col("content", "message", "body");
+  const iAttach = col("attachments", "attachment");
 
   if (iFrom === -1 || iTo === -1) return empty;
 
@@ -182,6 +188,19 @@ export function parseLinkedInMessages(
 
   if (!detectedUserName) return { ...empty, candidateUserNames };
 
+  // Two ways a row can be a "video" message:
+  //   1. The ATTACHMENTS column contains a LinkedIn-native video URL — those
+  //      have "transmuxed-video-private" or "video-private" in the path. The
+  //      cover-image URL ("videocover-high-private") also implies a video.
+  //   2. Any column references a third-party video host (Loom / Vidyard /
+  //      Vimeo / Wistia / YouTube) or the body text mentions a video.
+  // Importantly, LinkedIn-native videos add nothing to the message body — the
+  // text content can be empty while the row carries a video. The ATTACHMENTS
+  // signal is the only reliable detector for those.
+  const NATIVE_VIDEO_RE = /(transmuxed-video-private|videocover-high-private|messaging-video|\/dms\/[^\s,"]+\/vid\/)/i;
+  const HOSTED_VIDEO_RE = /(loom\.com|vidyard\.com|vimeo\.com|wistia\.com|youtu\.?be|youtube\.com)/i;
+  const TEXT_VIDEO_RE = /\b(video|videos|loom|vidyard|vimeo|wistia|youtube|walkthrough|screencast|recorded a (?:quick |short )?(?:video|clip|loom|walkthrough))\b/i;
+
   const out: MessageImportRow[] = [];
   for (const r of data) {
     const from = r[iFrom]?.trim() ?? "";
@@ -190,10 +209,14 @@ export function parseLinkedInMessages(
     const isSent = from === detectedUserName;
     const dateStr = iDate !== -1 ? r[iDate]?.trim() || undefined : undefined;
     const subject = iSubject !== -1 ? r[iSubject]?.trim()?.slice(0, 500) || undefined : undefined;
-    const content = iContent !== -1
-      ? r[iContent]?.trim()?.replace(/\s+/g, " ").slice(0, maxContent) || undefined
-      : undefined;
+    const rawContent = iContent !== -1 ? r[iContent]?.trim() ?? "" : "";
+    const content = rawContent.replace(/\s+/g, " ").slice(0, maxContent) || undefined;
     const conversationId = iConv !== -1 ? r[iConv]?.trim() || undefined : undefined;
+    const attachments = iAttach !== -1 ? r[iAttach]?.trim() ?? "" : "";
+    const hasVideo =
+      (attachments && (NATIVE_VIDEO_RE.test(attachments) || HOSTED_VIDEO_RE.test(attachments))) ||
+      HOSTED_VIDEO_RE.test(rawContent) ||
+      TEXT_VIDEO_RE.test(`${subject ?? ""} ${rawContent}`);
 
     if (isSent) {
       const tos = to.split(/[;,]\s*/).filter(Boolean);
@@ -209,6 +232,7 @@ export function parseLinkedInMessages(
           messageDate: dateStr,
           subject,
           contentSnippet: content,
+          hasVideo: !!hasVideo,
         });
       });
     } else {
@@ -220,6 +244,7 @@ export function parseLinkedInMessages(
         messageDate: dateStr,
         subject,
         contentSnippet: content,
+        hasVideo: !!hasVideo,
       });
     }
   }

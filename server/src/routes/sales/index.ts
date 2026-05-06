@@ -121,6 +121,10 @@ const messageInput = z.object({
   messageDate: z.string().max(64).nullish(),
   subject: z.string().max(500).nullish(),
   contentSnippet: z.string().max(4000).nullish(),
+  /** Set by the parser when ATTACHMENTS contained a LinkedIn-native video,
+   *  a third-party video URL, or the body mentioned a video. Older clients
+   *  that don't send this default to false. */
+  hasVideo: z.boolean().optional(),
 });
 
 const uploadSchema = z.object({
@@ -207,6 +211,7 @@ router.post("/uploads", async (req: AuthedRequest, res) => {
           subject: m._orig.subject ?? null,
           content_snippet: m._orig.contentSnippet ?? null,
           message_type: m.message_type,
+          has_video: m._orig.hasVideo ?? false,
         })),
       )
       .execute();
@@ -784,9 +789,14 @@ router.post("/audit", async (req: AuthedRequest, res) => {
       "m.subject",
       "m.content_snippet as snippet",
       "m.conversation_id as conversationId",
+      "m.has_video as hasVideo",
     ])
     .where("m.user_id", "=", userId)
-    .orderBy("m.message_ts", "asc")
+    // Newest-first so if the dataset is bigger than CHAT_ROW_BUDGET we keep
+    // the recent campaigns the user actually cares about. Per-counterpart
+    // re-classification below sorts each bucket by date again, so the type
+    // assignment is unaffected by the SQL order.
+    .orderBy("m.message_ts", "desc")
     .limit(CHAT_ROW_BUDGET)
     .execute();
 
@@ -811,7 +821,13 @@ router.post("/audit", async (req: AuthedRequest, res) => {
   // For every row: compute the per-counterpart-global type, the
   // sent-message-number-in-conversation (1 = cold, 2 = first follow-up, …),
   // the days since the previous sent message, and a simple has-video flag.
-  const VIDEO_RE = /\b(loom|vidyard|vimeo|wistia|video|recorded a (?:quick )?video)\b/i;
+  // Match explicit video signals. Platforms (loom, vidyard, vimeo, wistia,
+  // youtube/youtu.be) plus common phrases. Stays loose enough to catch
+  // "I made a quick walkthrough" and "screencast attached" but not so loose
+  // that "demo" or "watch" alone trigger it (those have too many false
+  // positives in sales messages).
+  const VIDEO_RE =
+    /(\bloom\.com\b|\bloom\b|\bvidyard\b|\bvimeo\b|\bwistia\b|\byoutu\.?be\b|\byoutube\b|\bvideo\b|\bvideos\b|\bvids?\b|\bwalkthrough\b|\bscreencast\b|\b(?:recorded|made|sent|attached|here'?s)\s+(?:a\s+)?(?:quick\s+)?(?:short\s+)?(?:little\s+)?(?:video|clip|loom|walkthrough|screencast))/i;
   type Annotated = {
     teamMember: string;
     counterpart: string;
@@ -861,7 +877,11 @@ router.post("/audit", async (req: AuthedRequest, res) => {
         prevSentTs = ts || prevSentTs;
         sentSeen = true;
       }
+      // Prefer the DB flag (set at ingest from ATTACHMENTS / hosted-video URLs
+      // / body text); fall back to a body-text regex for older rows that
+      // were imported before video tracking landed.
       const haystack = `${r.subject ?? ""} ${r.snippet ?? ""}`;
+      const hasVideo = r.hasVideo === true || VIDEO_RE.test(haystack);
       annotated.push({
         teamMember: r.teamMember ?? "—",
         counterpart: r.counterpart,
@@ -876,7 +896,7 @@ router.post("/audit", async (req: AuthedRequest, res) => {
         date: r.messageDate ?? null,
         subject: r.subject ?? null,
         snippet: (r.snippet ?? "").slice(0, 320) || null,
-        hasVideo: VIDEO_RE.test(haystack),
+        hasVideo,
         counterpartReplied,
       });
     }
@@ -972,8 +992,12 @@ router.post("/audit", async (req: AuthedRequest, res) => {
 INPUT YOU GET
 - AGGREGATES: deterministic counts the server already computed (totals, mean follow-up gap, video stats). Trust these — don't recompute.
 - ROWS: every SENT message (cold + follow_up) with the counterpart's seniority, position, company, message subject + snippet (≤320 chars), date, sent-number-in-thread (1=cold, 2=first follow-up, …), days since previous sent, hasVideo flag, and whether the counterpart ever replied to that team member.
-- INDUSTRY: the user's filter — only consider messages whose recipient's company OR position matches this industry/goal. Be generous (e.g. "banking" matches investment banks, retail banks, fintech where sensible). If a row's company/position is too vague to tell, INCLUDE it rather than drop it.
-- GOAL: the conversation goal (optional context).
+- INDUSTRY: the user's filter. Match a row if ANY of these signals point at the industry:
+    1. recipient's company contains a known firm in that industry (e.g. "banking" → Wells Fargo, JPMorgan, Goldman Sachs, Morgan Stanley, UBS, HSBC, Citi, Barclays, Deutsche Bank, fintech names, retail banks, investment banks, asset managers).
+    2. recipient's position mentions an industry term (e.g. "banking" → "banker", "investment banking", "credit risk", "trading", "wealth", "AI in banking").
+    3. the message SUBJECT or SNIPPET mentions the industry, an industry firm, or industry vocabulary. This catches messages where the SENDER is talking about banking even if the recipient's connection record is incomplete.
+  Most LinkedIn cold-message recipients aren't in the user's connections (they message them before accepting), so company and position are often NULL. NEVER drop a row just because company/position is null — fall through to the snippet check. ONLY drop a row if zero signals match. Err strongly on the side of inclusion.
+- GOAL: the conversation goal (optional context). If the goal is "book a call", treat any sales-y outreach matching the industry as in-scope.
 
 YOUR JOB
 1. Filter the ROWS to those matching the INDUSTRY/GOAL.
