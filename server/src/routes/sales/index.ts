@@ -943,7 +943,11 @@ router.post("/audit", async (req: AuthedRequest, res) => {
         company: r.company ?? null,
         date: r.messageDate ?? null,
         subject: r.subject ?? null,
-        snippet: (r.snippet ?? "").slice(0, 320) || null,
+        // Keep the full snippet (DB stores up to 1000 chars from the new
+        // upload flow). Truncation was masking late-paragraph differences
+        // that distinguish templates, so the LLM was lumping semantic
+        // siblings into one cluster.
+        snippet: r.snippet ?? null,
         hasVideo,
         counterpartReplied,
       });
@@ -1017,8 +1021,22 @@ INPUT YOU GET
 
 YOUR JOB
 1. Pick the row IDs that match the INDUSTRY filter (recipient is in the industry per their company/position). Put them in filteredRowIds.
-2. Among the FILTERED rows where ty='cold', cluster them VERY GRANULARLY by message content. Same paragraphs in different order = different cluster. Only group two messages together when their bodies are near-verbatim duplicates with just the recipient name/company swapped. For each cluster: assign a stable id ("fmg-1", "fmg-2", …), a short human label, the row IDs that belong to it, and a sampleId pointing at one row whose snippet is most representative.
-3. Among the FILTERED rows where ty='follow_up', cluster the same way (ids "fug-1", "fug-2", …).
+
+2. Cluster the FILTERED COLD messages (ty='cold') by message content. Aim for VERY HIGH granularity — better to return 30 small clusters than 5 big ones that hide variation. The user wants to spot subtle template differences, not a tidy summary.
+
+   Two messages are the SAME cluster ONLY when their bodies are near-verbatim duplicates with only the following swapped:
+     - recipient first name / last name / company name / job title.
+   Anything else makes them different clusters. Examples of DIFFERENT clusters even when 80% the same:
+     - One has an extra sentence the other doesn't.
+     - The paragraphs are in a different order.
+     - A different opening hook ("Loved your post on X" vs "Saw your interview about X" vs "Just read your piece on X").
+     - A different CTA wording ("would love to chat" vs "would love your perspective" vs "open to a 30-min call?").
+     - A different P.S. / signoff / value-prop sentence.
+     - Different mention of the team member's credential (DeepMind Scholar vs Imperial researcher vs Schmidt Futures).
+     - One adds a referral or social proof line the other lacks.
+   When in doubt, split rather than merge. A cluster of 1 is fine — the user wants to read it.
+
+3. Cluster the FILTERED FOLLOW-UP messages (ty='follow_up') the same way (ids "fug-1", "fug-2", …). Same strict rule.
 4. Read the THREADS array (one per recipient-of-our-outreach with up to 6 of their reply snippets) and decide which threads ended in real success. Put those thread keys in successfulThreadKeys. SUCCESS is strictly:
      - The recipient agreed to a call / proposed a time / accepted a meeting, OR
      - A substantive multi-turn back-and-forth on the topic (questions, info shared, real engagement — not just acknowledgements).
