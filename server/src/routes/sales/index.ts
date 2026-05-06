@@ -950,81 +950,20 @@ router.post("/audit", async (req: AuthedRequest, res) => {
     }
   }
 
-  // Pre-computed deterministic stats — give the LLM the math so it doesn't
-  // have to count, and exact numbers don't drift.
-  const sent = annotated.filter((r) => r.direction === "sent");
-  const followUps = sent.filter((r) => r.type === "follow_up");
-  const cold = sent.filter((r) => r.type === "cold");
-  const followGaps = followUps.map((r) => r.daysSincePrevSent ?? 0).filter((v) => v > 0);
-  const meanFollowGapDays =
-    followGaps.length > 0 ? +(followGaps.reduce((a, b) => a + b, 0) / followGaps.length).toFixed(1) : null;
-
-  // Video impact (deterministic precompute by sent-message-number).
-  const videoStats = (() => {
-    const buckets: Record<number, { n: number; nWithVideo: number; replied: number; repliedWithVideo: number }> = {};
-    for (const r of sent) {
-      const k = r.sentNo ?? 0;
-      buckets[k] ??= { n: 0, nWithVideo: 0, replied: 0, repliedWithVideo: 0 };
-      buckets[k].n += 1;
-      if (r.hasVideo) buckets[k].nWithVideo += 1;
-      if (r.counterpartReplied) buckets[k].replied += 1;
-      if (r.hasVideo && r.counterpartReplied) buckets[k].repliedWithVideo += 1;
-    }
-    const overall = {
-      withVideo: { n: 0, replied: 0 },
-      without: { n: 0, replied: 0 },
-    };
-    for (const r of sent) {
-      const t = r.hasVideo ? overall.withVideo : overall.without;
-      t.n += 1;
-      if (r.counterpartReplied) t.replied += 1;
-    }
-    const byMsgNumber = Object.entries(buckets)
-      .filter(([n]) => Number(n) > 0 && Number(n) <= 6)
-      .map(([n, v]) => ({
-        messageNumber: Number(n),
-        n: v.n,
-        withVideo: v.nWithVideo,
-        replyRateWithVideo: v.nWithVideo > 0 ? +(v.repliedWithVideo / v.nWithVideo).toFixed(3) : 0,
-        replyRateOverall: v.n > 0 ? +(v.replied / v.n).toFixed(3) : 0,
-      }))
-      .sort((a, b) => a.messageNumber - b.messageNumber);
+  // Stable per-row ID so the LLM can reference rows by ID instead of
+  // restating their content. The server then resolves IDs back to full
+  // rows for deterministic stats — no number is ever hallucinated.
+  const sentRows = annotated.filter((r) => r.direction === "sent");
+  const rowsById = new Map<string, Annotated>();
+  const promptRows = sentRows.map((r, i) => {
+    const id = `r${i}`;
+    rowsById.set(id, r);
     return {
-      overall: {
-        withVideo: {
-          n: overall.withVideo.n,
-          replyRate: overall.withVideo.n > 0 ? +(overall.withVideo.replied / overall.withVideo.n).toFixed(3) : 0,
-        },
-        without: {
-          n: overall.without.n,
-          replyRate: overall.without.n > 0 ? +(overall.without.replied / overall.without.n).toFixed(3) : 0,
-        },
-      },
-      byMessageNumber: byMsgNumber,
-    };
-  })();
-
-  const aggregates = {
-    totals: {
-      sent: sent.length,
-      cold: cold.length,
-      followUps: followUps.length,
-      uniqueCounterpartsContacted: new Set(sent.map((r) => `${r.teamMember}|${r.counterpartKey}`)).size,
-    },
-    meanFollowGapDays,
-    videoStats,
-  };
-
-  // Compact rows for the LLM. Only sent (cold + follow_up) — received messages
-  // aren't part of the audit story and would just bloat the prompt.
-  const promptRows = annotated
-    .filter((r) => r.direction === "sent")
-    .map((r) => ({
+      id,
       tm: r.teamMember,
       cp: r.counterpart,
       ty: r.type,
       no: r.sentNo,
-      gap: r.daysSincePrevSent,
       sn: r.seniority,
       pos: r.position,
       co: r.company,
@@ -1032,14 +971,13 @@ router.post("/audit", async (req: AuthedRequest, res) => {
       sub: r.subject,
       sn_text: r.snippet,
       vid: r.hasVideo,
-      replied: r.counterpartReplied,
-    }));
+    };
+  });
 
-  const SYSTEM = `You are a sales-quality auditor. The user has uploaded LinkedIn outreach data and wants ONE structured audit scoped to a particular industry/goal.
+  const SYSTEM = `You are a sales-quality auditor. Your ONLY job is filtering and clustering — the server computes every stat deterministically. Do NOT return counts, percentages, rates, averages, or any number except a sample row id.
 
 INPUT YOU GET
-- AGGREGATES: deterministic counts the server already computed (totals, mean follow-up gap, video stats). Trust these — don't recompute.
-- ROWS: every SENT message (cold + follow_up) with the counterpart's seniority, position, company, message subject + snippet (≤320 chars), date, sent-number-in-thread (1=cold, 2=first follow-up, …), days since previous sent, hasVideo flag, and whether the counterpart ever replied to that team member.
+- ROWS: every SENT message (cold + follow_up). Each row has an id (r0, r1, …) you'll reference back, plus team member, counterpart, type, sent-number, seniority, position, company, date, subject, snippet, video flag.
 - INDUSTRY: filter by the RECIPIENT'S industry. The user audits outreach SENT TO people in this industry. The message body / subject is IRRELEVANT for inclusion — only the recipient's company and position matter.
 
   INCLUDE a row when ANY of these are clearly true:
@@ -1056,100 +994,328 @@ INPUT YOU GET
 - Some rows have type='unknown' — that means the timestamp was missing so we can't tell whether they were a cold or a follow-up. Treat them as their own category; do NOT include them as cold first messages.
 
 YOUR JOB
-1. Filter the ROWS to those matching the INDUSTRY/GOAL.
-2. Cluster the FILTERED COLD messages (ty='cold') VERY GRANULARLY by content. Same paragraphs in different order = different clusters. Same paragraphs with one sentence added/removed = different clusters. Only mark two messages as the same cluster if they're near-verbatim duplicates with only the recipient's name/company swapped.
-3. Cluster the FILTERED FOLLOW-UP messages (ty='follow_up') the same way.
-4. For each cluster, compute: count, unique recipients, sender split (Tjalling/Fatima/etc), reply rate (counterpart ever responded to that team member), success rate (had a substantive back-and-forth, agreed to a call, or booked a slot — strict; "thanks I'll look" is not success).
-5. For each cluster, list its top seniorities and the success rate per seniority bucket.
-6. Per cluster, surface the SAMPLE SNIPPET — the actual snippet text from one example so the user can read what this group says.
-7. For each seniority bucket that has ANY sent rows in the filtered data (don't apply a minimum-n threshold — return whatever the data shows, even n=1; the user can read the n column and judge sample size themselves), name the cluster with the highest success rate. Tie-break on highest reply rate. ALWAYS include every seniority bucket that appears in the filtered dataset — don't return an empty array.
-8. Video analysis: from AGGREGATES.videoStats, summarise whether sending a video improved replies overall, and at which sent-message-number videos worked best. Be honest about sample size.
+1. Pick the row IDs that match the INDUSTRY filter (recipient is in the industry per their company/position). Put them in filteredRowIds.
+2. Among the FILTERED rows where ty='cold', cluster them VERY GRANULARLY by message content. Same paragraphs in different order = different cluster. Only group two messages together when their bodies are near-verbatim duplicates with just the recipient name/company swapped. For each cluster: assign a stable id ("fmg-1", "fmg-2", …), a short human label, the row IDs that belong to it, and a sampleId pointing at one row whose snippet is most representative.
+3. Among the FILTERED rows where ty='follow_up', cluster the same way (ids "fug-1", "fug-2", …).
+4. Write 4–7 short topInsights as plain text. These are the only place numbers can appear, and they MUST be numbers the server will compute — phrase them in terms of the cluster's expected behavior (e.g. "Cluster fmg-3 was sent to the most C-level recipients."). Don't fabricate specific percentages — the server computes those and renders them next to the cluster label.
 
-A "success" requires evidence of substantive engagement. Do not infer success from a one-line acknowledgement. If you can't tell, mark it as not success.
+DO NOT return: counts, percentages, reply rates, success rates, average follow-ups, mean days, sender splits, per-seniority breakdowns, video impact, or anything numeric per cluster. The server computes ALL of those from the row IDs you return.
 
 Output STRICTLY this JSON shape (no other prose, no fences):
 {
-  "scope": {
-    "industry": "<echo the user's industry>",
-    "goal": "<echo the goal or empty>",
-    "totalMatched": <int — sent rows that matched the filter>,
-    "totalCold": <int>,
-    "totalFollowUps": <int>
-  },
-  "firstMessageGroups": [
+  "filteredRowIds": ["r12", "r35", ...],
+  "coldClusters": [
     {
-      "id": "fmg-<n>",
-      "label": "<short, human label>",
-      "sampleSnippet": "<the actual content of one message in this cluster, ≤320 chars>",
-      "count": <int>,
-      "uniqueRecipients": <int>,
-      "senderSplit": [{ "name": "<teamMember>", "count": <int> }],
-      "metrics": {
-        "replyRate": <0..1>,
-        "successRate": <0..1>,
-        "avgFollowupsAfter": <float — average # of follow-up sends to the same counterpart after this cold opener>,
-        "meanDaysToFirstFollowup": <float | null>
-      },
-      "bySeniority": [
-        { "bucket": "<seniority key>", "n": <int>, "successRate": <0..1> }
-      ]
+      "id": "fmg-1",
+      "label": "<short human label>",
+      "sampleId": "<one row id from this cluster>",
+      "rowIds": ["r12", "r35", ...]
     }
   ],
-  "followUpGroups": [
+  "followUpClusters": [
     {
-      "id": "fug-<n>",
+      "id": "fug-1",
       "label": "<short>",
-      "sampleSnippet": "<actual snippet ≤320 chars>",
-      "count": <int>,
-      "uniqueRecipients": <int>,
-      "senderSplit": [{ "name": "<teamMember>", "count": <int> }],
-      "metrics": {
-        "replyRate": <0..1>,
-        "successRate": <0..1>,
-        "typicalSentNumber": <int — most common position in the thread (2 = first follow-up, etc.)>,
-        "meanDaysSincePrev": <float | null>
-      },
-      "bySeniority": [{ "bucket": "<key>", "n": <int>, "successRate": <0..1> }]
+      "sampleId": "<row id>",
+      "rowIds": ["r48", ...]
     }
   ],
-  "bySeniority": [
-    { "bucket": "<key>", "label": "<human>", "bestGroupId": "<fmg-...>", "bestGroupLabel": "<label>", "successRate": <0..1>, "n": <int> }
-  ],
-  "videoImpact": {
-    "overall": {
-      "withVideo": { "n": <int>, "replyRate": <0..1> },
-      "without":   { "n": <int>, "replyRate": <0..1> }
-    },
-    "byMessageNumber": [
-      { "messageNumber": <int>, "n": <int>, "withVideo": <int>, "replyRateWithVideo": <0..1>, "replyRateOverall": <0..1> }
-    ],
-    "recommendation": "<one short paragraph: did video help? at which message number was it most effective? sample-size caveat if any.>"
-  },
-  "topInsights": [
-    "<short concrete insight>",
-    "<...>"
-  ]
+  "topInsights": ["<short text only — no fabricated numbers>", "..."]
 }
 
-Numbers are decimals 0..1 for rates (the client multiplies by 100). Don't include any text outside the JSON.`;
+Constraints:
+- Every rowId in any cluster's rowIds MUST also appear in filteredRowIds.
+- Every cluster's sampleId MUST be in its own rowIds.
+- A row should appear in at most one cluster (cold OR follow-up, never both — the type is fixed).
+- Don't include any rows whose recipient isn't in the industry, even if the body sounds relevant.`;
 
   const USER = `INDUSTRY: ${parsed.data.industry}
 GOAL: ${parsed.data.goal ?? ""}
 
-AGGREGATES:
-${JSON.stringify(aggregates)}
-
 ROWS (${promptRows.length} sent rows):
 ${JSON.stringify(promptRows)}`;
 
+  type LlmCluster = { id: string; label: string; sampleId: string; rowIds: string[] };
+  type LlmResponse = {
+    filteredRowIds: string[];
+    coldClusters: LlmCluster[];
+    followUpClusters: LlmCluster[];
+    topInsights: string[];
+  };
+
+  let llm: LlmResponse;
   try {
-    const result = await aiJson<unknown>(provider, SYSTEM, USER, { maxTokens: 16000, userId, userKeys });
-    res.json(result);
+    llm = await aiJson<LlmResponse>(provider, SYSTEM, USER, { maxTokens: 16000, userId, userKeys });
   } catch (e) {
     if (isLlmAuthError(e)) return res.status(401).json({ error: "llm_auth", message: (e as Error).message });
     if (isLlmQuotaError(e)) return res.status(402).json({ error: "llm_quota", message: (e as Error).message });
     return res.status(500).json({ error: "llm_error", message: (e as Error).message });
   }
+
+  // ---- DETERMINISTIC STATS PASS ----
+  // From here on, every number is server-computed. We resolve LLM-returned
+  // row IDs back to full row objects (dropping any unknown IDs) and walk the
+  // data ourselves.
+
+  const validId = (id: string) => rowsById.has(id);
+  const filteredIds = new Set((llm.filteredRowIds ?? []).filter(validId));
+  const filteredRows = Array.from(filteredIds).map((id) => rowsById.get(id)!);
+
+  // Build a per-counterpart index across the FILTERED scope so we can
+  // compute per-cluster follow-up counts and time-to-first-followup.
+  // Counterparts in the filtered scope still have access to all their
+  // sent messages (filtered or not) for follow-up counting; using the
+  // original annotated array is fine because cold rows live there too.
+  const counterpartFollowUps = new Map<string, Annotated[]>();
+  const counterpartCold = new Map<string, Annotated>();
+  for (const r of annotated) {
+    if (r.direction !== "sent") continue;
+    const k = `${r.teamMember}|${r.counterpartKey}`;
+    if (r.type === "cold" && !counterpartCold.has(k)) counterpartCold.set(k, r);
+    if (r.type === "follow_up") {
+      const arr = counterpartFollowUps.get(k);
+      if (arr) arr.push(r);
+      else counterpartFollowUps.set(k, [r]);
+    }
+  }
+
+  /** % of unique counterparts in this set who ever replied. */
+  const replyRate = (rows: Annotated[]): number => {
+    const cps = new Set(rows.map((r) => `${r.teamMember}|${r.counterpartKey}`));
+    if (cps.size === 0) return 0;
+    const replied = new Set(rows.filter((r) => r.counterpartReplied).map((r) => `${r.teamMember}|${r.counterpartKey}`));
+    return +(replied.size / cps.size).toFixed(3);
+  };
+
+  /** % of counterparts whose post-cold thread looks substantive. We
+   *  approximate "success" as: counterpart replied AND there are ≥2 received
+   *  messages (or ≥1 received followed by another sent — multi-turn). */
+  const successRate = (rows: Annotated[]): number => {
+    const cps = new Set(rows.map((r) => `${r.teamMember}|${r.counterpartKey}`));
+    if (cps.size === 0) return 0;
+    const received = new Map<string, number>();
+    const sentAfterReceived = new Map<string, number>();
+    for (const r of annotated) {
+      const k = `${r.teamMember}|${r.counterpartKey}`;
+      if (!cps.has(k)) continue;
+      if (r.direction === "received") received.set(k, (received.get(k) ?? 0) + 1);
+      if (r.type === "reply") sentAfterReceived.set(k, (sentAfterReceived.get(k) ?? 0) + 1);
+    }
+    let successes = 0;
+    for (const k of cps) {
+      const rec = received.get(k) ?? 0;
+      const replyTurns = sentAfterReceived.get(k) ?? 0;
+      // Two-turn back-and-forth OR multi-message reply thread = success.
+      if (rec >= 2 || (rec >= 1 && replyTurns >= 1)) successes += 1;
+    }
+    return +(successes / cps.size).toFixed(3);
+  };
+
+  const senderSplit = (rows: Annotated[]): { name: string; count: number }[] => {
+    const m = new Map<string, number>();
+    for (const r of rows) m.set(r.teamMember, (m.get(r.teamMember) ?? 0) + 1);
+    return Array.from(m.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => ({ name, count }));
+  };
+
+  const senioritySplit = (rows: Annotated[]): { bucket: string; n: number; successRate: number }[] => {
+    const m = new Map<string, Annotated[]>();
+    for (const r of rows) {
+      const arr = m.get(r.seniority);
+      if (arr) arr.push(r);
+      else m.set(r.seniority, [r]);
+    }
+    return Array.from(m.entries())
+      .map(([bucket, arr]) => ({ bucket, n: arr.length, successRate: successRate(arr) }))
+      .sort((a, b) => b.n - a.n);
+  };
+
+  const buildColdGroup = (cluster: LlmCluster) => {
+    const rows = cluster.rowIds.filter(validId).map((id) => rowsById.get(id)!).filter((r) => r.type === "cold");
+    const cps = new Set(rows.map((r) => `${r.teamMember}|${r.counterpartKey}`));
+    // Avg follow-ups after this cold opener: count how many follow-ups were
+    // sent to each counterpart in this cluster.
+    const followCounts: number[] = [];
+    const firstGapDays: number[] = [];
+    for (const k of cps) {
+      const fus = counterpartFollowUps.get(k) ?? [];
+      followCounts.push(fus.length);
+      if (fus.length > 0 && fus[0]?.daysSincePrevSent != null) firstGapDays.push(fus[0].daysSincePrevSent);
+    }
+    const avgFollowupsAfter =
+      followCounts.length > 0 ? +(followCounts.reduce((a, b) => a + b, 0) / followCounts.length).toFixed(2) : 0;
+    const meanDaysToFirstFollowup =
+      firstGapDays.length > 0 ? +(firstGapDays.reduce((a, b) => a + b, 0) / firstGapDays.length).toFixed(1) : null;
+    const sample = rowsById.get(cluster.sampleId);
+    return {
+      id: cluster.id,
+      label: cluster.label,
+      sampleSnippet: sample?.snippet ?? rows[0]?.snippet ?? "",
+      count: rows.length,
+      uniqueRecipients: cps.size,
+      senderSplit: senderSplit(rows),
+      metrics: {
+        replyRate: replyRate(rows),
+        successRate: successRate(rows),
+        avgFollowupsAfter,
+        meanDaysToFirstFollowup,
+      },
+      bySeniority: senioritySplit(rows),
+    };
+  };
+
+  const buildFollowUpGroup = (cluster: LlmCluster) => {
+    const rows = cluster.rowIds.filter(validId).map((id) => rowsById.get(id)!).filter((r) => r.type === "follow_up");
+    const cps = new Set(rows.map((r) => `${r.teamMember}|${r.counterpartKey}`));
+    // Most-common sent number in this cluster (2 = first follow-up, …).
+    const numCounts = new Map<number, number>();
+    const gaps: number[] = [];
+    for (const r of rows) {
+      if (r.sentNo != null) numCounts.set(r.sentNo, (numCounts.get(r.sentNo) ?? 0) + 1);
+      if (r.daysSincePrevSent != null) gaps.push(r.daysSincePrevSent);
+    }
+    const typicalSentNumber = numCounts.size > 0
+      ? Array.from(numCounts.entries()).sort((a, b) => b[1] - a[1])[0]![0]
+      : 0;
+    const meanDaysSincePrev =
+      gaps.length > 0 ? +(gaps.reduce((a, b) => a + b, 0) / gaps.length).toFixed(1) : null;
+    const sample = rowsById.get(cluster.sampleId);
+    return {
+      id: cluster.id,
+      label: cluster.label,
+      sampleSnippet: sample?.snippet ?? rows[0]?.snippet ?? "",
+      count: rows.length,
+      uniqueRecipients: cps.size,
+      senderSplit: senderSplit(rows),
+      metrics: {
+        replyRate: replyRate(rows),
+        successRate: successRate(rows),
+        typicalSentNumber,
+        meanDaysSincePrev,
+      },
+      bySeniority: senioritySplit(rows),
+    };
+  };
+
+  const firstMessageGroups = (llm.coldClusters ?? []).map(buildColdGroup);
+  const followUpGroups = (llm.followUpClusters ?? []).map(buildFollowUpGroup);
+
+  // Best cluster per seniority (over the FILTERED cold rows + cold groups).
+  const SENIORITY_LABELS: Record<string, string> = {
+    c_level: "C-Level", founder: "Founder", head: "Head", director: "Director",
+    vp: "VP", partner: "Partner", principal: "Principal", senior_manager: "Senior Manager",
+    manager: "Manager", lead: "Lead", senior_ic: "Senior IC", ic: "IC",
+    junior: "Junior", intern: "Intern", student: "Student", advisor: "Advisor",
+    unknown: "Unknown",
+  };
+  const seniorityBuckets = new Map<string, Set<string>>(); // bucket → set of cluster ids
+  for (const g of firstMessageGroups) {
+    for (const s of g.bySeniority) {
+      if (!seniorityBuckets.has(s.bucket)) seniorityBuckets.set(s.bucket, new Set());
+      seniorityBuckets.get(s.bucket)!.add(g.id);
+    }
+  }
+  const bySeniority: Array<{ bucket: string; label: string; bestGroupId: string; bestGroupLabel: string; successRate: number; n: number }> = [];
+  for (const [bucket] of seniorityBuckets) {
+    let best: { groupId: string; groupLabel: string; rate: number; n: number } | null = null;
+    for (const g of firstMessageGroups) {
+      const s = g.bySeniority.find((x) => x.bucket === bucket);
+      if (!s || s.n === 0) continue;
+      if (
+        !best ||
+        s.successRate > best.rate ||
+        (s.successRate === best.rate && s.n > best.n)
+      ) {
+        best = { groupId: g.id, groupLabel: g.label, rate: s.successRate, n: s.n };
+      }
+    }
+    if (best) {
+      bySeniority.push({
+        bucket,
+        label: SENIORITY_LABELS[bucket] ?? bucket,
+        bestGroupId: best.groupId,
+        bestGroupLabel: best.groupLabel,
+        successRate: best.rate,
+        n: best.n,
+      });
+    }
+  }
+  bySeniority.sort((a, b) => b.successRate - a.successRate);
+
+  // Video impact — scoped to the FILTERED rows only (used to be over the
+  // entire dataset, which is why the user saw 113 vs 2330 even on a banking
+  // filter).
+  const videoImpact = (() => {
+    const buckets: Record<number, { n: number; nWithVideo: number; replied: number; repliedWithVideo: number }> = {};
+    let withVideoN = 0, withVideoReplied = 0, withoutN = 0, withoutReplied = 0;
+    for (const r of filteredRows) {
+      const k = r.sentNo ?? 0;
+      buckets[k] ??= { n: 0, nWithVideo: 0, replied: 0, repliedWithVideo: 0 };
+      buckets[k].n += 1;
+      if (r.hasVideo) {
+        buckets[k].nWithVideo += 1;
+        withVideoN += 1;
+        if (r.counterpartReplied) { buckets[k].repliedWithVideo += 1; withVideoReplied += 1; }
+      } else {
+        withoutN += 1;
+        if (r.counterpartReplied) withoutReplied += 1;
+      }
+      if (r.counterpartReplied) buckets[k].replied += 1;
+    }
+    const byMessageNumber = Object.entries(buckets)
+      .filter(([n]) => Number(n) > 0 && Number(n) <= 6)
+      .map(([n, v]) => ({
+        messageNumber: Number(n),
+        n: v.n,
+        withVideo: v.nWithVideo,
+        replyRateWithVideo: v.nWithVideo > 0 ? +(v.repliedWithVideo / v.nWithVideo).toFixed(3) : 0,
+        replyRateOverall: v.n > 0 ? +(v.replied / v.n).toFixed(3) : 0,
+      }))
+      .sort((a, b) => a.messageNumber - b.messageNumber);
+    // Auto-recommendation. Plain math, no LLM — keeps the audit honest.
+    const overallWith = withVideoN > 0 ? withVideoReplied / withVideoN : 0;
+    const overallWithout = withoutN > 0 ? withoutReplied / withoutN : 0;
+    const lift = overallWithout > 0 ? overallWith / overallWithout : 0;
+    let recommendation = "";
+    if (withVideoN === 0) {
+      recommendation = "No videos sent to this audience yet. Worth testing on follow-ups (#2 onward) to see if it lifts replies.";
+    } else if (withVideoN < 10) {
+      recommendation = `Only ${withVideoN} video message(s) in this audience — sample is too small to call. Send more to get a real read.`;
+    } else if (lift >= 1.2) {
+      recommendation = `Video-attached messages reply at ${(overallWith * 100).toFixed(1)}% vs ${(overallWithout * 100).toFixed(1)}% without — about ${lift.toFixed(1)}× lift on n=${withVideoN}. Worth doubling down.`;
+    } else if (lift <= 0.85) {
+      recommendation = `Video-attached messages reply at ${(overallWith * 100).toFixed(1)}% vs ${(overallWithout * 100).toFixed(1)}% without — under-performing on n=${withVideoN}. Likely selection bias (videos go to harder targets); test by sending video on a randomized first-touch.`;
+    } else {
+      recommendation = `Video and text-only have similar reply rates (${(overallWith * 100).toFixed(1)}% vs ${(overallWithout * 100).toFixed(1)}%). On n=${withVideoN} video sends — keep using where it feels right, no clear lift either way.`;
+    }
+    return {
+      overall: {
+        withVideo: { n: withVideoN, replyRate: withVideoN > 0 ? +(withVideoReplied / withVideoN).toFixed(3) : 0 },
+        without:   { n: withoutN, replyRate: withoutN > 0 ? +(withoutReplied / withoutN).toFixed(3) : 0 },
+      },
+      byMessageNumber,
+      recommendation,
+    };
+  })();
+
+  const totalCold = filteredRows.filter((r) => r.type === "cold").length;
+  const totalFollowUps = filteredRows.filter((r) => r.type === "follow_up").length;
+
+  res.json({
+    scope: {
+      industry: parsed.data.industry,
+      goal: parsed.data.goal ?? "",
+      totalMatched: filteredRows.length,
+      totalCold,
+      totalFollowUps,
+    },
+    firstMessageGroups,
+    followUpGroups,
+    bySeniority,
+    videoImpact,
+    topInsights: (llm.topInsights ?? []).slice(0, 8),
+  });
 });
 
 // -------------------- pinned analyses --------------------
