@@ -649,6 +649,49 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
   }
   if (unique.length === 0) return res.json({ inserted: 0, skipped });
 
+  // Same custom-column routing as the singular POST: when a board uses
+  // user-defined custom columns for Title/Company/LinkedIn/etc., write the
+  // incoming title/company/linkedin/email/phone into those columns too.
+  // Without this, search-result Add-to-board clicks left the visible cells
+  // empty even though the data was passed in.
+  const boardRow = await db
+    .selectFrom("crm_boards")
+    .select("columns")
+    .where("id", "=", board.id)
+    .executeTakeFirst();
+  type Col = { id: string; builtin?: boolean; label?: string; type?: string };
+  const columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
+  const findCustomCol = (type: string, labelHints: string[]): string | null => {
+    const customs = columns.filter((c) => !c.builtin);
+    const byType = customs.find((c) => c.type === type);
+    if (byType) return byType.id;
+    const lc = labelHints.map((h) => h.toLowerCase());
+    const byLabel = customs.find((c) => lc.includes((c.label ?? "").toLowerCase()));
+    return byLabel?.id ?? null;
+  };
+  const targets = {
+    email:    findCustomCol("email", ["email"]),
+    phone:    findCustomCol("phone", ["phone", "mobile"]),
+    linkedin: findCustomCol("link",  ["linkedin"]),
+    title:    findCustomCol("text",  ["title", "role", "position"]),
+    company:  findCustomCol("text",  ["company", "organization", "org"]),
+  };
+  const buildCustomFields = (p: typeof unique[number]): Record<string, string> => {
+    const merged: Record<string, string> = { ...((p.customFields ?? {}) as Record<string, string>) };
+    const writeIfMapped = (val: string | null | undefined, colId: string | null) => {
+      const v = (val ?? "").trim();
+      if (!v || !colId) return;
+      if (merged[colId] && merged[colId].trim().length > 0) return;
+      merged[colId] = v;
+    };
+    writeIfMapped(p.email,    targets.email);
+    writeIfMapped(p.phone,    targets.phone);
+    writeIfMapped(p.linkedin, targets.linkedin);
+    writeIfMapped(p.title,    targets.title);
+    writeIfMapped(p.company,  targets.company);
+    return merged;
+  };
+
   // Batch inserts of 500.
   const userId = req.user!.id;
   let inserted = 0;
@@ -677,7 +720,7 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
           notes: p.notes ?? null,
           message_notes: p.messageNotes ?? null,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          custom_fields: (p.customFields ?? {}) as any,
+          custom_fields: buildCustomFields(p) as any,
         })),
       )
       .execute();
