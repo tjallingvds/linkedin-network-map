@@ -3658,6 +3658,18 @@ export function CRMView({
           )}
         </div>
         <div className="crm-tools">
+          {enriching && (
+            <span className="crm-progress-pill" role="status" aria-live="polite">
+              <span className="crm-spinner" aria-hidden="true" />
+              Getting emails…
+            </span>
+          )}
+          {backgrounding && (
+            <span className="crm-progress-pill" role="status" aria-live="polite">
+              <span className="crm-spinner" aria-hidden="true" />
+              Researching backgrounds…
+            </span>
+          )}
           {classifyingSkill && (
             <span className="crm-progress-pill" role="status" aria-live="polite">
               <span className="crm-spinner" aria-hidden="true" />
