@@ -1098,7 +1098,11 @@ STRATEGY for ${numQueries} queries — archetype-aware coverage:
 
 Return {"queries": [...]} — exactly ${numQueries} queries, each materially different and tied to a specific archetype when archetypes are listed.`,
     query,
-    { maxTokens: 2500, userId, userKeys },
+    // 2500 was too tight on long firm-list briefs — Tavily query strings
+    // packed with OR groups and escaped quotes blow past it mid-second
+    // query and the response truncates inside a string. 6000 tokens fits
+    // 8–10 queries comfortably.
+    { maxTokens: 6000, userId, userKeys },
   );
 
   let searchQueries = (queriesObj.queries ?? []).filter(
