@@ -487,7 +487,7 @@ function AuditReport({ result, onReset }: { result: AuditResult; onReset: () => 
             </div>
             {result.videoImpact.byMessageNumber.length > 0 && (
               <div className="sa-video-chart">
-                <div className="sa-chart-sub">Reply rate by sent-message-number — bars show with-video, line shows overall.</div>
+                <div className="sa-chart-sub">Reply rate by sent-message-number — bars: counterparts whose Nth send was a video. Line: counterparts whose Nth send was text-only. Each n is unique counterparts at that position.</div>
                 <ResponsiveContainer width="100%" height={220}>
                   <BarChart data={result.videoImpact.byMessageNumber.map((b) => ({
                     name: `#${b.messageNumber} (n=${b.n})`,

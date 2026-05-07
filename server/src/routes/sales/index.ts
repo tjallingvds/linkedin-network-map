@@ -1309,9 +1309,11 @@ ${JSON.stringify(promptThreads)}`;
   const firstMessageGroups = foldLongTail(firstMessageGroupsRaw, "cold");
   const followUpGroups = foldLongTail(followUpGroupsRaw, "follow_up");
 
-  // Best cluster per seniority — require n >= MIN_BEST_N so a single 100%
-  // win on n=1 doesn't crowd out a 50%-on-n=12 winner. Ties broken on n.
-  const MIN_BEST_N = 3;
+  // Best cluster per seniority — keep MIN_BEST_N at 1 so the table is
+  // never empty. The n column is shown next to each row so the user can
+  // see sample size and judge for themselves. Tie-break on n keeps
+  // larger-sample winners on top.
+  const MIN_BEST_N = 1;
   const SENIORITY_LABELS: Record<string, string> = {
     c_level: "C-Level", founder: "Founder", head: "Head", director: "Director",
     vp: "VP", partner: "Partner", principal: "Principal", senior_manager: "Senior Manager",
@@ -1350,37 +1352,89 @@ ${JSON.stringify(promptThreads)}`;
   }
   bySeniority.sort((a, b) => b.n - a.n || b.successRate - a.successRate);
 
-  // Video impact — scoped to the FILTERED rows only (used to be over the
-  // entire dataset, which is why the user saw 113 vs 2330 even on a banking
-  // filter).
+  // Video impact — comparing UNIQUE COUNTERPARTS, not message rows. The
+  // earlier row-level tally double-counted any counterpart who got both
+  // a video and a non-video message (their replied=true would land in
+  // both buckets). The right framing is: "of the people we sent at least
+  // one video to, what % replied? vs of the people who only got text-only
+  // messages, what % replied?".
   const videoImpact = (() => {
-    const buckets: Record<number, { n: number; nWithVideo: number; replied: number; repliedWithVideo: number }> = {};
-    let withVideoN = 0, withVideoReplied = 0, withoutN = 0, withoutReplied = 0;
+    // Group filtered rows by counterpart so we can ask per-counterpart
+    // questions ("did they ever get a video?", "did they ever reply?").
+    type Cp = { teamMember: string; counterpartKey: string; replied: boolean; gotVideoAt: Set<number> };
+    const byCp = new Map<string, Cp>();
     for (const r of filteredRows) {
-      const k = r.sentNo ?? 0;
-      buckets[k] ??= { n: 0, nWithVideo: 0, replied: 0, repliedWithVideo: 0 };
-      buckets[k].n += 1;
-      if (r.hasVideo) {
-        buckets[k].nWithVideo += 1;
+      const k = `${r.teamMember}|${r.counterpartKey}`;
+      let cp = byCp.get(k);
+      if (!cp) {
+        cp = {
+          teamMember: r.teamMember,
+          counterpartKey: r.counterpartKey,
+          replied: r.counterpartReplied,
+          gotVideoAt: new Set(),
+        };
+        byCp.set(k, cp);
+      }
+      // counterpartReplied is per-thread; OR semantics across rows.
+      if (r.counterpartReplied) cp.replied = true;
+      if (r.hasVideo && r.sentNo != null) cp.gotVideoAt.add(r.sentNo);
+    }
+
+    // Overall: counterparts who EVER received a video vs those who never did.
+    let withVideoN = 0, withVideoReplied = 0, withoutN = 0, withoutReplied = 0;
+    for (const cp of byCp.values()) {
+      if (cp.gotVideoAt.size > 0) {
         withVideoN += 1;
-        if (r.counterpartReplied) { buckets[k].repliedWithVideo += 1; withVideoReplied += 1; }
+        if (cp.replied) withVideoReplied += 1;
       } else {
         withoutN += 1;
-        if (r.counterpartReplied) withoutReplied += 1;
+        if (cp.replied) withoutReplied += 1;
       }
-      if (r.counterpartReplied) buckets[k].replied += 1;
     }
-    const byMessageNumber = Object.entries(buckets)
+
+    // Per-message-number: of counterparts whose Nth send was a video,
+    // what % replied (to anything, anywhere in the thread)? Compare with
+    // counterparts whose Nth send existed but wasn't a video.
+    type Bucket = { videoN: number; videoReplied: number; nonVideoN: number; nonVideoReplied: number };
+    const perN: Record<number, Bucket> = {};
+    // We need to know each counterpart's Nth message hasVideo flag. Walk
+    // filtered rows, group by (counterpart, sentNo) — there's only one row
+    // per (cp, sentNo).
+    const cpSentRow = new Map<string, Annotated>();
+    for (const r of filteredRows) {
+      if (r.sentNo == null) continue;
+      cpSentRow.set(`${r.teamMember}|${r.counterpartKey}|${r.sentNo}`, r);
+    }
+    for (const r of filteredRows) {
+      if (r.sentNo == null) continue;
+      const k = r.sentNo;
+      perN[k] ??= { videoN: 0, videoReplied: 0, nonVideoN: 0, nonVideoReplied: 0 };
+      const cp = byCp.get(`${r.teamMember}|${r.counterpartKey}`);
+      const cpReplied = cp?.replied ?? false;
+      if (r.hasVideo) {
+        perN[k].videoN += 1;
+        if (cpReplied) perN[k].videoReplied += 1;
+      } else {
+        perN[k].nonVideoN += 1;
+        if (cpReplied) perN[k].nonVideoReplied += 1;
+      }
+    }
+    const byMessageNumber = Object.entries(perN)
       .filter(([n]) => Number(n) > 0 && Number(n) <= 6)
       .map(([n, v]) => ({
         messageNumber: Number(n),
-        n: v.n,
-        withVideo: v.nWithVideo,
-        replyRateWithVideo: v.nWithVideo > 0 ? +(v.repliedWithVideo / v.nWithVideo).toFixed(3) : 0,
-        replyRateOverall: v.n > 0 ? +(v.replied / v.n).toFixed(3) : 0,
+        // Total counterparts who had an Nth message — total = video + non-video.
+        n: v.videoN + v.nonVideoN,
+        withVideo: v.videoN,
+        replyRateWithVideo: v.videoN > 0 ? +(v.videoReplied / v.videoN).toFixed(3) : 0,
+        // "replyRateOverall" is misleading at this point — it's actually
+        // the non-video reply rate for the comparison. Keep the name for
+        // wire compat but render as "Without video at this position".
+        replyRateOverall: v.nonVideoN > 0 ? +(v.nonVideoReplied / v.nonVideoN).toFixed(3) : 0,
       }))
       .sort((a, b) => a.messageNumber - b.messageNumber);
-    // Auto-recommendation. Plain math, no LLM — keeps the audit honest.
+
+    // Auto-recommendation comparing unique-counterpart reply rates.
     const overallWith = withVideoN > 0 ? withVideoReplied / withVideoN : 0;
     const overallWithout = withoutN > 0 ? withoutReplied / withoutN : 0;
     const lift = overallWithout > 0 ? overallWith / overallWithout : 0;
@@ -1388,13 +1442,13 @@ ${JSON.stringify(promptThreads)}`;
     if (withVideoN === 0) {
       recommendation = "No videos sent to this audience yet. Worth testing on follow-ups (#2 onward) to see if it lifts replies.";
     } else if (withVideoN < 10) {
-      recommendation = `Only ${withVideoN} video message(s) in this audience — sample is too small to call. Send more to get a real read.`;
+      recommendation = `Only ${withVideoN} counterpart${withVideoN === 1 ? "" : "s"} in this audience got a video — sample too small. Send more to get a real read.`;
     } else if (lift >= 1.2) {
-      recommendation = `Video-attached messages reply at ${(overallWith * 100).toFixed(1)}% vs ${(overallWithout * 100).toFixed(1)}% without — about ${lift.toFixed(1)}× lift on n=${withVideoN}. Worth doubling down.`;
+      recommendation = `Counterparts who got a video reply at ${(overallWith * 100).toFixed(1)}% (${withVideoReplied}/${withVideoN}) vs ${(overallWithout * 100).toFixed(1)}% for video-free counterparts (${withoutReplied}/${withoutN}) — ${lift.toFixed(1)}× lift. Worth doubling down.`;
     } else if (lift <= 0.85) {
-      recommendation = `Video-attached messages reply at ${(overallWith * 100).toFixed(1)}% vs ${(overallWithout * 100).toFixed(1)}% without — under-performing on n=${withVideoN}. Likely selection bias (videos go to harder targets); test by sending video on a randomized first-touch.`;
+      recommendation = `Counterparts who got a video reply at ${(overallWith * 100).toFixed(1)}% (${withVideoReplied}/${withVideoN}) vs ${(overallWithout * 100).toFixed(1)}% video-free (${withoutReplied}/${withoutN}). Likely selection bias — videos go to harder-to-reach people. Random-assign video on a fresh batch to confirm.`;
     } else {
-      recommendation = `Video and text-only have similar reply rates (${(overallWith * 100).toFixed(1)}% vs ${(overallWithout * 100).toFixed(1)}%). On n=${withVideoN} video sends — keep using where it feels right, no clear lift either way.`;
+      recommendation = `Video and text-only counterparts reply at similar rates (${(overallWith * 100).toFixed(1)}% on n=${withVideoN} vs ${(overallWithout * 100).toFixed(1)}% on n=${withoutN}). No clear lift either way.`;
     }
     return {
       overall: {
