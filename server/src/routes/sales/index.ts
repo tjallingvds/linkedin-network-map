@@ -1250,18 +1250,64 @@ ${JSON.stringify(promptThreads)}`;
     };
   };
 
-  // Drop empty clusters (LLM returned a label but no rowIds, or all the
-  // rowIds resolved to the wrong type). Sort by count desc so the largest /
-  // most informative clusters surface first instead of being buried under
-  // 30 singletons.
-  const firstMessageGroups = (llm.coldClusters ?? [])
+  // Drop clusters that resolved to zero rows (LLM speculated, no actual
+  // matches landed). For the rest: keep clusters with count >= MIN_VISIBLE
+  // as their own card; fold the long tail of n=1/n=2 variants into a
+  // single synthetic "Other variants" cluster so the dashboard isn't a
+  // 30-card avalanche while no data is lost — the user can still see
+  // total count, sender split, and a sample.
+  const MIN_VISIBLE = 3;
+
+  /** Fold clusters with count < MIN_VISIBLE into a single Other-variants
+   *  cluster while keeping the rest as-is. The Other cluster's sample is
+   *  the longest snippet across the long-tail rows so the user gets a
+   *  representative read. */
+  const foldLongTail = <T extends ReturnType<typeof buildColdGroup> | ReturnType<typeof buildFollowUpGroup>>(
+    groups: T[],
+    kind: "cold" | "follow_up",
+  ): T[] => {
+    const big = groups.filter((g) => g.count >= MIN_VISIBLE);
+    const small = groups.filter((g) => g.count > 0 && g.count < MIN_VISIBLE);
+    if (small.length <= 1) {
+      return [...big, ...small].sort((a, b) => b.count - a.count) as T[];
+    }
+    // Combine the underlying rows. We can't refer to the original cluster
+    // rowIds here, but we can rebuild a synthetic group from each cluster's
+    // already-computed metrics. To keep counts and senderSplits accurate,
+    // re-aggregate from the row IDs the LLM gave us.
+    const allRowIds: string[] = [];
+    const variantLabels: string[] = [];
+    for (const g of small) {
+      variantLabels.push(g.label);
+      // Look up the original LLM cluster to get its rowIds — they're stored
+      // by id in the source arrays.
+      const orig =
+        kind === "cold"
+          ? (llm.coldClusters ?? []).find((c) => c.id === g.id)
+          : (llm.followUpClusters ?? []).find((c) => c.id === g.id);
+      if (orig) allRowIds.push(...orig.rowIds);
+    }
+    const builder = kind === "cold" ? buildColdGroup : buildFollowUpGroup;
+    const synthetic = builder({
+      id: kind === "cold" ? "fmg-other" : "fug-other",
+      label: `Other variants (${small.length})`,
+      sampleId: allRowIds[0] ?? "",
+      rowIds: allRowIds,
+    }) as T;
+    // Surface the constituent labels so the user can tell what's in the
+    // long tail at a glance.
+    (synthetic as unknown as { variantLabels: string[] }).variantLabels = variantLabels;
+    return [...big, synthetic].sort((a, b) => b.count - a.count) as T[];
+  };
+
+  const firstMessageGroupsRaw = (llm.coldClusters ?? [])
     .map(buildColdGroup)
-    .filter((g) => g.count > 0)
-    .sort((a, b) => b.count - a.count);
-  const followUpGroups = (llm.followUpClusters ?? [])
+    .filter((g) => g.count > 0);
+  const followUpGroupsRaw = (llm.followUpClusters ?? [])
     .map(buildFollowUpGroup)
-    .filter((g) => g.count > 0)
-    .sort((a, b) => b.count - a.count);
+    .filter((g) => g.count > 0);
+  const firstMessageGroups = foldLongTail(firstMessageGroupsRaw, "cold");
+  const followUpGroups = foldLongTail(followUpGroupsRaw, "follow_up");
 
   // Best cluster per seniority — require n >= MIN_BEST_N so a single 100%
   // win on n=1 doesn't crowd out a 50%-on-n=12 winner. Ties broken on n.

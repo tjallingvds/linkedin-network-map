@@ -42,6 +42,9 @@ interface MessageGroup {
     meanDaysSincePrev?: number | null;
   };
   bySeniority: { bucket: string; n: number; successRate: number }[];
+  /** Set on synthetic "Other variants" groups so the user can see what
+   *  templates were folded in. */
+  variantLabels?: string[];
 }
 
 interface AuditResult {
@@ -549,6 +552,16 @@ function GroupCard({ group, kind }: { group: MessageGroup; kind: "cold" | "follo
         <div className="sa-group-sample">
           <div className="sa-field-label">Sample message</div>
           <div className="sa-sample-text">{group.sampleSnippet}</div>
+          {group.variantLabels && group.variantLabels.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div className="sa-field-label">Folded variants</div>
+              <div className="sa-group-senders">
+                {group.variantLabels.map((v, i) => (
+                  <span key={i} className="sa-sender-chip">{v}</span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
       {group.bySeniority?.length > 0 && (
