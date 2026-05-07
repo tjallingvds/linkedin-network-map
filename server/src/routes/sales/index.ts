@@ -1022,7 +1022,7 @@ INPUT YOU GET
 YOUR JOB
 1. Pick the row IDs that match the INDUSTRY filter (recipient is in the industry per their company/position). Put them in filteredRowIds.
 
-2. Cluster the FILTERED COLD messages (ty='cold') by message content. Aim for VERY HIGH granularity — better to return 30 small clusters than 5 big ones that hide variation. The user wants to spot subtle template differences, not a tidy summary.
+2. Cluster the FILTERED COLD messages (ty='cold') by message content. Aim for HIGH granularity but DON'T invent clusters that have no rows.
 
    Two messages are the SAME cluster ONLY when their bodies are near-verbatim duplicates with only the following swapped:
      - recipient first name / last name / company name / job title.
@@ -1034,9 +1034,14 @@ YOUR JOB
      - A different P.S. / signoff / value-prop sentence.
      - Different mention of the team member's credential (DeepMind Scholar vs Imperial researcher vs Schmidt Futures).
      - One adds a referral or social proof line the other lacks.
-   When in doubt, split rather than merge. A cluster of 1 is fine — the user wants to read it.
 
-3. Cluster the FILTERED FOLLOW-UP messages (ty='follow_up') the same way (ids "fug-1", "fug-2", …). Same strict rule.
+   HARD RULES:
+   - Every cluster you return MUST have at least 1 rowId from filteredRowIds. NEVER emit a cluster with an empty rowIds array. NEVER emit a cluster as "the user might have sent this someday" — only clusters that actually exist in the data.
+   - Singleton clusters (one rowId) are fine ONLY when the message is genuinely a one-off that doesn't fit any other cluster. Don't split a 5-message template into 5 singletons just because of small wording tweaks.
+   - When in doubt, MERGE small variants into a parent cluster rather than splitting hairs. The user wants to spot real templates, not analyse every word.
+   - Aim for ~5-15 clusters total, not 30+. Quality over granularity.
+
+3. Cluster the FILTERED FOLLOW-UP messages (ty='follow_up') the same way (ids "fug-1", "fug-2", …). Same hard rules — no empty clusters, ~5-15 total.
 4. Read the THREADS array (one per recipient-of-our-outreach with up to 6 of their reply snippets) and decide which threads ended in real success. Put those thread keys in successfulThreadKeys. SUCCESS is strictly:
      - The recipient agreed to a call / proposed a time / accepted a meeting, OR
      - A substantive multi-turn back-and-forth on the topic (questions, info shared, real engagement — not just acknowledgements).
@@ -1245,10 +1250,22 @@ ${JSON.stringify(promptThreads)}`;
     };
   };
 
-  const firstMessageGroups = (llm.coldClusters ?? []).map(buildColdGroup);
-  const followUpGroups = (llm.followUpClusters ?? []).map(buildFollowUpGroup);
+  // Drop empty clusters (LLM returned a label but no rowIds, or all the
+  // rowIds resolved to the wrong type). Sort by count desc so the largest /
+  // most informative clusters surface first instead of being buried under
+  // 30 singletons.
+  const firstMessageGroups = (llm.coldClusters ?? [])
+    .map(buildColdGroup)
+    .filter((g) => g.count > 0)
+    .sort((a, b) => b.count - a.count);
+  const followUpGroups = (llm.followUpClusters ?? [])
+    .map(buildFollowUpGroup)
+    .filter((g) => g.count > 0)
+    .sort((a, b) => b.count - a.count);
 
-  // Best cluster per seniority (over the FILTERED cold rows + cold groups).
+  // Best cluster per seniority — require n >= MIN_BEST_N so a single 100%
+  // win on n=1 doesn't crowd out a 50%-on-n=12 winner. Ties broken on n.
+  const MIN_BEST_N = 3;
   const SENIORITY_LABELS: Record<string, string> = {
     c_level: "C-Level", founder: "Founder", head: "Head", director: "Director",
     vp: "VP", partner: "Partner", principal: "Principal", senior_manager: "Senior Manager",
@@ -1256,19 +1273,16 @@ ${JSON.stringify(promptThreads)}`;
     junior: "Junior", intern: "Intern", student: "Student", advisor: "Advisor",
     unknown: "Unknown",
   };
-  const seniorityBuckets = new Map<string, Set<string>>(); // bucket → set of cluster ids
+  const seniorityBuckets = new Map<string, true>();
   for (const g of firstMessageGroups) {
-    for (const s of g.bySeniority) {
-      if (!seniorityBuckets.has(s.bucket)) seniorityBuckets.set(s.bucket, new Set());
-      seniorityBuckets.get(s.bucket)!.add(g.id);
-    }
+    for (const s of g.bySeniority) seniorityBuckets.set(s.bucket, true);
   }
   const bySeniority: Array<{ bucket: string; label: string; bestGroupId: string; bestGroupLabel: string; successRate: number; n: number }> = [];
   for (const [bucket] of seniorityBuckets) {
     let best: { groupId: string; groupLabel: string; rate: number; n: number } | null = null;
     for (const g of firstMessageGroups) {
       const s = g.bySeniority.find((x) => x.bucket === bucket);
-      if (!s || s.n === 0) continue;
+      if (!s || s.n < MIN_BEST_N) continue;
       if (
         !best ||
         s.successRate > best.rate ||
@@ -1288,7 +1302,7 @@ ${JSON.stringify(promptThreads)}`;
       });
     }
   }
-  bySeniority.sort((a, b) => b.successRate - a.successRate);
+  bySeniority.sort((a, b) => b.n - a.n || b.successRate - a.successRate);
 
   // Video impact — scoped to the FILTERED rows only (used to be over the
   // entire dataset, which is why the user saw 113 vs 2330 even on a banking
