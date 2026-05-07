@@ -551,50 +551,34 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
     .where("id", "=", board.id)
     .executeTakeFirst();
   type Col = { id: string; builtin?: boolean; label?: string; type?: string; width?: string };
-  let columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
+  const columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
   const findCustomCol = (type: string, labelHints: string[]): string | null => {
     const customs = columns.filter((c) => !c.builtin);
-    const byType = customs.find((c) => c.type === type);
-    if (byType) return byType.id;
-    const lc = labelHints.map((h) => h.toLowerCase());
-    const byLabel = customs.find((c) => lc.includes((c.label ?? "").toLowerCase()));
-    return byLabel?.id ?? null;
+    const lc = labelHints.map((h) => h.toLowerCase()).filter(Boolean);
+    // 1. Exact label match — most specific.
+    const exact = customs.find((c) => lc.includes((c.label ?? "").toLowerCase()));
+    if (exact) return exact.id;
+    // 2. Substring label match — handles "Company name", "Job title", etc.
+    const partial = customs.find((c) => {
+      const l = (c.label ?? "").toLowerCase();
+      return lc.some((h) => l.includes(h));
+    });
+    if (partial) return partial.id;
+    // 3. Type fallback ONLY when there's exactly ONE custom column of that
+    //    type. Otherwise we'd ambiguously pick one of several text columns
+    //    and write Company values into the Title cell (or vice versa).
+    const sameType = customs.filter((c) => c.type === type);
+    if (sameType.length === 1) return sameType[0]!.id;
+    return null;
   };
-  const slug = (s: string) =>
-    s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "col";
-  const ensureCol = (
-    type: string,
-    label: string,
-    labelHints: string[],
-    width: string,
-    haveData: boolean,
-  ): string | null => {
-    const found = findCustomCol(type, labelHints);
-    if (found) return found;
-    if (!haveData) return null;
-    const id = `c_${slug(label)}_${Math.random().toString(36).slice(2, 7)}`;
-    columns = [...columns, { id, builtin: false, label, type, width }];
-    return id;
-  };
-  const trimmed = (v: string | null | undefined) => (v ?? "").trim();
   const targets = {
-    email:    ensureCol("email", "Email",    ["email"],                          "1fr",  trimmed(p.email).length    > 0),
-    phone:    ensureCol("phone", "Phone",    ["phone", "mobile"],                "140px", trimmed(p.phone).length    > 0),
-    linkedin: ensureCol("link",  "LinkedIn", ["linkedin"],                       "1fr",  trimmed(p.linkedin).length > 0),
-    title:    ensureCol("text",  "Title",    ["title", "role", "position"],      "1.2fr", trimmed(p.title).length    > 0),
-    company:  ensureCol("text",  "Company",  ["company", "organization", "org"], "1.2fr", trimmed(p.company).length  > 0),
-    location: findCustomCol("text", ["location", "city", "based", "based in"]),
+    email:    findCustomCol("email", ["email"]),
+    phone:    findCustomCol("phone", ["phone", "mobile"]),
+    linkedin: findCustomCol("link",  ["linkedin"]),
+    title:    findCustomCol("text",  ["title", "role", "position", "job title"]),
+    company:  findCustomCol("text",  ["company", "organization", "org", "firm", "employer"]),
+    location: findCustomCol("text",  ["location", "city", "based", "based in", "country"]),
   };
-  const columnsChanged = JSON.stringify(columns) !== JSON.stringify(boardRow?.columns ?? []);
-  if (columnsChanged) {
-    await db
-      .updateTable("crm_boards")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .set({ columns: columns as any, updated_at: new Date() as any })
-      .where("id", "=", board.id)
-      .execute();
-  }
   const customMerge: Record<string, string> = { ...((p.customFields ?? {}) as Record<string, string>) };
   const writeIfMapped = (val: string | null | undefined, colId: string | null) => {
     const v = (val ?? "").trim();
@@ -694,53 +678,33 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
     .where("id", "=", board.id)
     .executeTakeFirst();
   type Col = { id: string; builtin?: boolean; label?: string; type?: string; width?: string };
-  let columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
+  const columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
   const findCustomCol = (type: string, labelHints: string[]): string | null => {
     const customs = columns.filter((c) => !c.builtin);
-    const byType = customs.find((c) => c.type === type);
-    if (byType) return byType.id;
-    const lc = labelHints.map((h) => h.toLowerCase());
-    const byLabel = customs.find((c) => lc.includes((c.label ?? "").toLowerCase()));
-    return byLabel?.id ?? null;
-  };
-  const slug = (s: string) =>
-    s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "col";
-  const ensureCol = (
-    type: string,
-    label: string,
-    labelHints: string[],
-    width: string,
-    haveData: boolean,
-  ): string | null => {
-    const found = findCustomCol(type, labelHints);
-    if (found) return found;
-    if (!haveData) return null;
-    const id = `c_${slug(label)}_${Math.random().toString(36).slice(2, 7)}`;
-    columns = [...columns, { id, builtin: false, label, type, width }];
-    return id;
-  };
-  const have = (key: keyof typeof unique[number]): boolean =>
-    unique.some((p) => {
-      const v = (p as Record<string, unknown>)[key];
-      return typeof v === "string" && v.trim().length > 0;
+    const lc = labelHints.map((h) => h.toLowerCase()).filter(Boolean);
+    // 1. Exact label match — most specific.
+    const exact = customs.find((c) => lc.includes((c.label ?? "").toLowerCase()));
+    if (exact) return exact.id;
+    // 2. Substring label match — handles "Company name", "Job title", etc.
+    const partial = customs.find((c) => {
+      const l = (c.label ?? "").toLowerCase();
+      return lc.some((h) => l.includes(h));
     });
-  const targets = {
-    email:    ensureCol("email", "Email",    ["email"],                          "1fr",  have("email")),
-    phone:    ensureCol("phone", "Phone",    ["phone", "mobile"],                "140px", have("phone")),
-    linkedin: ensureCol("link",  "LinkedIn", ["linkedin"],                       "1fr",  have("linkedin")),
-    title:    ensureCol("text",  "Title",    ["title", "role", "position"],      "1.2fr", have("title")),
-    company:  ensureCol("text",  "Company",  ["company", "organization", "org"], "1.2fr", have("company")),
+    if (partial) return partial.id;
+    // 3. Type fallback ONLY when there's exactly ONE custom column of that
+    //    type. Otherwise we'd ambiguously pick one of several text columns
+    //    and write Company values into the Title cell (or vice versa).
+    const sameType = customs.filter((c) => c.type === type);
+    if (sameType.length === 1) return sameType[0]!.id;
+    return null;
   };
-  const columnsChanged = JSON.stringify(columns) !== JSON.stringify(boardRow?.columns ?? []);
-  if (columnsChanged) {
-    await db
-      .updateTable("crm_boards")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .set({ columns: columns as any, updated_at: new Date() as any })
-      .where("id", "=", board.id)
-      .execute();
-  }
+  const targets = {
+    email:    findCustomCol("email", ["email"]),
+    phone:    findCustomCol("phone", ["phone", "mobile"]),
+    linkedin: findCustomCol("link",  ["linkedin"]),
+    title:    findCustomCol("text",  ["title", "role", "position", "job title"]),
+    company:  findCustomCol("text",  ["company", "organization", "org", "firm", "employer"]),
+  };
   const buildCustomFields = (p: typeof unique[number]): Record<string, string> => {
     const merged: Record<string, string> = { ...((p.customFields ?? {}) as Record<string, string>) };
     const writeIfMapped = (val: string | null | undefined, colId: string | null) => {
