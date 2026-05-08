@@ -6,7 +6,8 @@
  * LinkedIn schemas (vary slightly across exports):
  *   Connections.csv: First Name, Last Name, URL, Email Address, Company,
  *                    Position, Connected On
- *   Invitations.csv: From, To, Message, Sent At, Direction
+ *   Invitations.csv: From, To, Sent At, Message, Direction (OUTGOING/INCOMING),
+ *                    inviterProfileUrl, inviteeProfileUrl
  *   messages.csv:    CONVERSATION ID, CONVERSATION TITLE, FROM,
  *                    SENDER PROFILE URL, TO, RECIPIENT PROFILE URLS,
  *                    DATE, SUBJECT, CONTENT, FOLDER
@@ -120,18 +121,42 @@ export function parseLinkedIn(
     return out;
   }
 
-  const iFrom = col("from", "inviter", "sender", "name");
+  // LinkedIn's Invitations.csv lists BOTH directions (invites you sent +
+  // invites you've received). For "people I've reached out to" we only
+  // care about OUTGOING rows. The actual recipient is in `To`, NOT
+  // `From` — From is always the sender (you, on outgoing). Their URL is
+  // in `inviteeProfileUrl`. Older exports may not have direction columns
+  // at all, in which case we treat every row as outgoing.
+  const iFrom = col("from", "inviter", "sender");
+  const iTo = col("to", "invitee", "recipient", "name");
   const iSent = col("sent at", "date", "sent");
+  const iDirection = col("direction");
+  const iInviterUrl = col("inviterprofileurl", "inviter profile url", "inviter url");
+  const iInviteeUrl = col("inviteeprofileurl", "invitee profile url", "invitee url");
   const out: NetworkImportRow[] = [];
   for (const r of data) {
-    const raw = iFrom !== -1 ? r[iFrom]?.trim() ?? "" : "";
-    if (!raw) continue;
-    const parts = raw.split(/\s+/).filter(Boolean);
+    const direction = iDirection !== -1 ? (r[iDirection]?.trim() ?? "").toUpperCase() : "";
+    const isIncoming = direction === "INCOMING";
+    // If we know the direction and it's incoming, skip — those are
+    // invites someone sent to the user, not invites the user sent.
+    if (direction && isIncoming) continue;
+    // Outgoing → recipient lives in To + inviteeProfileUrl. If neither
+    // To nor direction columns exist (very old export shape), fall
+    // back to From so we don't drop everything.
+    const nameRaw = iTo !== -1
+      ? (r[iTo]?.trim() ?? "")
+      : (iFrom !== -1 ? r[iFrom]?.trim() ?? "" : "");
+    if (!nameRaw) continue;
+    const urlRaw = iInviteeUrl !== -1
+      ? (r[iInviteeUrl]?.trim() || undefined)
+      : (iInviterUrl !== -1 ? r[iInviterUrl]?.trim() || undefined : undefined);
+    const parts = nameRaw.split(/\s+/).filter(Boolean);
     const firstName = parts[0] ?? "—";
     const lastName = parts.slice(1).join(" ") || "—";
     out.push({
       firstName,
       lastName,
+      linkedinUrl: urlRaw,
       connectedOn: iSent !== -1 ? r[iSent]?.trim() || undefined : undefined,
       category: "pending_invite",
     });
