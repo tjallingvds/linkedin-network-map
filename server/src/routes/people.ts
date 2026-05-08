@@ -8,11 +8,27 @@
  *   DELETE /api/people/:id
  */
 import { Router } from "express";
+import { sql } from "kysely";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import type { AuthedRequest } from "../auth/session.js";
 
 const router = Router();
+
+/** Normalise a name for cross-source matching (CRM contact name vs
+ *  invitation name). Mirrors the logic used elsewhere in the app. */
+function normaliseName(s: string | null | undefined): string {
+  if (!s) return "";
+  return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+function normaliseLinkedIn(url: string | null | undefined): string {
+  if (!url) return "";
+  return url.toLowerCase().trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\?.*$/, "")
+    .replace(/\/+$/, "");
+}
 
 const personInput = z.object({
   firstName: z.string().min(1),
@@ -68,13 +84,39 @@ router.post("/", async (req: AuthedRequest, res) => {
 });
 
 router.post("/bulk", async (req: AuthedRequest, res) => {
-  const parsed = z.object({ people: z.array(personInput).max(10000) }).safeParse(req.body);
+  const parsed = z.object({
+    people: z.array(personInput).max(10000),
+    /** "invitation" rows are pending connection requests; "connection"
+     *  is a real 1st-degree connection. Optional for back-compat. */
+    kind: z.enum(["invitation", "connection"]).optional(),
+    /** When true, replace the user's existing rows of this kind before
+     *  inserting. Re-importing a fresh export shouldn't double-count. */
+    replace: z.boolean().optional(),
+  }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "invalid_body" });
 
   if (parsed.data.people.length === 0) return res.json({ inserted: 0 });
 
-  // Insert in batches of 500 to keep params under Postgres' limit.
+  // Self-heal so an environment that missed the kind migration doesn't
+  // crash on the first import after deploy.
+  try {
+    await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS kind TEXT`.execute(db);
+  } catch { /* already exists */ }
+
   const userId = req.user!.id;
+  const kind = parsed.data.kind ?? null;
+
+  // When replacing AND we have a kind, scope the wipe to that kind so a
+  // fresh invitations import doesn't blow away connections (and vice versa).
+  if (parsed.data.replace && kind) {
+    await db
+      .deleteFrom("people")
+      .where("user_id", "=", userId)
+      .where("kind", "=", kind)
+      .execute();
+  }
+
+  // Insert in batches of 500 to keep params under Postgres' limit.
   const batches: (typeof parsed.data.people)[] = [];
   for (let i = 0; i < parsed.data.people.length; i += 500) {
     batches.push(parsed.data.people.slice(i, i + 500));
@@ -96,12 +138,36 @@ router.post("/bulk", async (req: AuthedRequest, res) => {
           connected_on: p.connectedOn ?? null,
           category: p.category ?? null,
           industry: p.industry ?? null,
+          kind,
         })),
       )
       .execute();
     inserted += Number(res2[0]?.numInsertedOrUpdatedRows ?? batch.length);
   }
   res.json({ inserted });
+});
+
+/** Lightweight list of people the user has sent an invitation to —
+ *  used by the CRM to surface which contacts still need to be reached
+ *  out to. Returns only what's needed for matching: normalised name +
+ *  normalised linkedin url. */
+router.get("/invitations", async (req: AuthedRequest, res) => {
+  try {
+    await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS kind TEXT`.execute(db);
+  } catch { /* already exists */ }
+
+  const rows = await db
+    .selectFrom("people")
+    .select(["first_name", "last_name", "linkedin_url"])
+    .where("user_id", "=", req.user!.id)
+    .where("kind", "=", "invitation")
+    .execute();
+
+  const invitations = rows.map((r) => ({
+    name: normaliseName(`${r.first_name} ${r.last_name}`.trim()),
+    linkedin: normaliseLinkedIn(r.linkedin_url),
+  }));
+  res.json({ invitations, total: invitations.length });
 });
 
 router.get("/:id", async (req: AuthedRequest, res) => {

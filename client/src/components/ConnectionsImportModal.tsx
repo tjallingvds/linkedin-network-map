@@ -177,10 +177,22 @@ export function ConnectionsImportModal({
           connectedOn: p.connectedOn ?? null,
           category: p.category ?? null,
         })),
+        // Tag the rows so the server can later distinguish a sent
+        // invitation from a real connection — used by the CRM filter
+        // "show only people I haven't connected to yet".
+        kind: kind === "invitations" ? "invitation" as const : "connection" as const,
+        // A fresh export should replace the user's previous rows of
+        // this kind so duplicates don't pile up on re-import.
+        replace: true,
       };
       const res = await api.post<{ inserted: number }>("/api/people/bulk", payload);
       onImported?.(res.inserted);
       onFlash(`Imported ${res.inserted.toLocaleString()} ${kind === "invitations" ? "invites" : "connections"}`);
+      // Tell other parts of the app (the CRM's "Hide invited" filter)
+      // to refresh their invitation cache without a hard reload.
+      if (kind === "invitations") {
+        window.dispatchEvent(new CustomEvent("invitations-imported"));
+      }
       onClose();
     } catch (err) {
       onFlash(`Import failed: ${(err as Error).message}`);

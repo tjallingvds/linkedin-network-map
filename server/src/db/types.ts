@@ -89,6 +89,10 @@ export interface PeopleTable {
   connected_on: string | null;
   category: string | null;
   industry: string | null;
+  /** Distinguishes how the row landed in `people`. "invitation" rows are
+   *  pending connection requests the user has sent; "connection" rows
+   *  are actual 1st-degree connections. Null for legacy data. */
+  kind: string | null;
   enrichment: unknown | null; // JSONB
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;

@@ -3045,6 +3045,13 @@ export function CRMView({
     setInternalActiveId(id);
   };
   const [contacts, setContacts] = useState<CrmContact[]>([]);
+  // Set of normalised name + linkedin slugs the user has already sent a
+  // LinkedIn invite to. Loaded once per session from /api/people/invitations
+  // — populated by importing an Invitations.csv via the Import dialog.
+  // Drives the "show only un-invited" filter pill below.
+  const [invitedNames, setInvitedNames] = useState<Set<string>>(new Set());
+  const [invitedLinkedIns, setInvitedLinkedIns] = useState<Set<string>>(new Set());
+  const [hideInvited, setHideInvited] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -3080,8 +3087,25 @@ export function CRMView({
   // the same result set across views without per-view duplication.
   const filteredContacts = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return contacts;
-    return contacts.filter((c) => {
+    let out = contacts;
+    // Hide already-invited contacts when the toolbar pill is active.
+    // Match by normalised name OR normalised linkedin url — either is
+    // enough to consider a contact "already reached out to".
+    if (hideInvited && (invitedNames.size > 0 || invitedLinkedIns.size > 0)) {
+      out = out.filter((c) => {
+        const n = (c.name ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+        if (n && invitedNames.has(n)) return false;
+        const li = (c.linkedin ?? "").toLowerCase().trim()
+          .replace(/^https?:\/\//, "")
+          .replace(/^www\./, "")
+          .replace(/\?.*$/, "")
+          .replace(/\/+$/, "");
+        if (li && invitedLinkedIns.has(li)) return false;
+        return true;
+      });
+    }
+    if (!q) return out;
+    return out.filter((c) => {
       const haystack = [
         c.name, c.title, c.company, c.email, c.linkedin, c.background,
         ...Object.values((c.customFields ?? {}) as Record<string, string>),
@@ -3091,7 +3115,7 @@ export function CRMView({
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [contacts, search]);
+  }, [contacts, search, hideInvited, invitedNames, invitedLinkedIns]);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -3105,6 +3129,24 @@ export function CRMView({
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFlash]);
+
+  // Load the user's pending invitations so the "Hide invited" filter
+  // can match contacts against them. One fetch per session is enough —
+  // the user re-imports via Import dialog, which calls reloadInvitations.
+  const reloadInvitations = () => {
+    api.get<{ invitations: Array<{ name: string; linkedin: string }> }>("/api/people/invitations")
+      .then((r) => {
+        setInvitedNames(new Set(r.invitations.map((i) => i.name).filter(Boolean)));
+        setInvitedLinkedIns(new Set(r.invitations.map((i) => i.linkedin).filter(Boolean)));
+      })
+      .catch(() => { /* non-fatal — filter just stays empty */ });
+  };
+  useEffect(() => {
+    reloadInvitations();
+    const onImport = () => reloadInvitations();
+    window.addEventListener("invitations-imported", onImport);
+    return () => window.removeEventListener("invitations-imported", onImport);
+  }, []);
 
   // Whenever the active board changes, prime kanban + stages from local
   // caches as a first paint. Columns and row height come from the server
@@ -3656,6 +3698,32 @@ export function CRMView({
               {filteredContacts.length} of {contacts.length}
             </span>
           )}
+          {/* "Hide invited" toggle — surfaces only contacts the user
+              still needs to reach out to. The pill is its own toggle:
+              click to apply, click again to clear. Disabled when no
+              invitations have been imported yet so the user gets a
+              useful tooltip instead of a no-op. */}
+          <button
+            type="button"
+            className={`pill-btn${hideInvited ? " primary" : ""}`}
+            onClick={() => setHideInvited((v) => !v)}
+            disabled={invitedNames.size === 0 && invitedLinkedIns.size === 0}
+            title={
+              invitedNames.size === 0 && invitedLinkedIns.size === 0
+                ? "Import an Invitations.csv first (Actions → Import LinkedIn data)"
+                : hideInvited
+                  ? "Showing only contacts you haven't invited yet — click to clear"
+                  : "Hide contacts you've already invited"
+            }
+          >
+            <IconUsers size={12} />
+            {hideInvited ? "Un-invited only" : "Hide invited"}
+            {hideInvited && (
+              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: "var(--text-mute)" }}>
+                ({filteredContacts.length})
+              </span>
+            )}
+          </button>
         </div>
         <div className="crm-tools">
           {enriching && (
