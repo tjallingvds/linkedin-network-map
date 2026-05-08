@@ -188,10 +188,14 @@ export function ConnectionsImportModal({
       const res = await api.post<{ inserted: number }>("/api/people/bulk", payload);
       onImported?.(res.inserted);
       onFlash(`Imported ${res.inserted.toLocaleString()} ${kind === "invitations" ? "invites" : "connections"}`);
-      // Tell other parts of the app (the CRM's "Hide invited" filter)
-      // to refresh their invitation cache without a hard reload.
+      // Tell other parts of the app (the CRM's "Hide existing" filter)
+      // to refresh their match cache without a hard reload. Both
+      // invitations AND connections feed the same matching set, so
+      // either kind fires its own event.
       if (kind === "invitations") {
         window.dispatchEvent(new CustomEvent("invitations-imported"));
+      } else if (kind === "connections") {
+        window.dispatchEvent(new CustomEvent("connections-imported"));
       }
       onClose();
     } catch (err) {

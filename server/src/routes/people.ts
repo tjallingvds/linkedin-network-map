@@ -147,10 +147,12 @@ router.post("/bulk", async (req: AuthedRequest, res) => {
   res.json({ inserted });
 });
 
-/** Lightweight list of people the user has sent an invitation to —
- *  used by the CRM to surface which contacts still need to be reached
- *  out to. Returns only what's needed for matching: normalised name +
- *  normalised linkedin url. */
+/** Lightweight list of people already in the user's LinkedIn network
+ *  — sent invitations PLUS existing 1st-degree connections. Used by
+ *  the CRM "Hide existing" filter to surface contacts the user still
+ *  needs to reach out to. Returns only normalised name + normalised
+ *  linkedin url so matching is cheap. The legacy /invitations name
+ *  is kept since the response shape is a superset. */
 router.get("/invitations", async (req: AuthedRequest, res) => {
   try {
     await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS kind TEXT`.execute(db);
@@ -158,16 +160,25 @@ router.get("/invitations", async (req: AuthedRequest, res) => {
 
   const rows = await db
     .selectFrom("people")
-    .select(["first_name", "last_name", "linkedin_url"])
+    .select(["first_name", "last_name", "linkedin_url", "kind"])
     .where("user_id", "=", req.user!.id)
-    .where("kind", "=", "invitation")
+    .where((eb) => eb.or([
+      eb("kind", "=", "invitation"),
+      eb("kind", "=", "connection"),
+    ]))
     .execute();
 
   const invitations = rows.map((r) => ({
     name: normaliseName(`${r.first_name} ${r.last_name}`.trim()),
     linkedin: normaliseLinkedIn(r.linkedin_url),
+    kind: r.kind ?? null,
   }));
-  res.json({ invitations, total: invitations.length });
+  res.json({
+    invitations,
+    total: invitations.length,
+    invitedCount: invitations.filter((i) => i.kind === "invitation").length,
+    connectedCount: invitations.filter((i) => i.kind === "connection").length,
+  });
 });
 
 router.get("/:id", async (req: AuthedRequest, res) => {

@@ -3045,12 +3045,15 @@ export function CRMView({
     setInternalActiveId(id);
   };
   const [contacts, setContacts] = useState<CrmContact[]>([]);
-  // Set of normalised name + linkedin slugs the user has already sent a
-  // LinkedIn invite to. Loaded once per session from /api/people/invitations
-  // — populated by importing an Invitations.csv via the Import dialog.
-  // Drives the "show only un-invited" filter pill below.
+  // Set of normalised name + linkedin slugs the user is already in
+  // contact with — covers both pending invitations AND existing
+  // 1st-degree connections. Loaded from /api/people/invitations
+  // (the endpoint returns both since they're matched the same way).
+  // Drives the "Hide existing" filter pill below.
   const [invitedNames, setInvitedNames] = useState<Set<string>>(new Set());
   const [invitedLinkedIns, setInvitedLinkedIns] = useState<Set<string>>(new Set());
+  const [invitedCount, setInvitedCount] = useState(0);
+  const [connectedCount, setConnectedCount] = useState(0);
   const [hideInvited, setHideInvited] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
@@ -3134,18 +3137,29 @@ export function CRMView({
   // can match contacts against them. One fetch per session is enough —
   // the user re-imports via Import dialog, which calls reloadInvitations.
   const reloadInvitations = () => {
-    api.get<{ invitations: Array<{ name: string; linkedin: string }> }>("/api/people/invitations")
+    api.get<{
+      invitations: Array<{ name: string; linkedin: string; kind: string | null }>;
+      invitedCount?: number;
+      connectedCount?: number;
+    }>("/api/people/invitations")
       .then((r) => {
         setInvitedNames(new Set(r.invitations.map((i) => i.name).filter(Boolean)));
         setInvitedLinkedIns(new Set(r.invitations.map((i) => i.linkedin).filter(Boolean)));
+        setInvitedCount(r.invitedCount ?? 0);
+        setConnectedCount(r.connectedCount ?? 0);
       })
       .catch(() => { /* non-fatal — filter just stays empty */ });
   };
   useEffect(() => {
     reloadInvitations();
     const onImport = () => reloadInvitations();
+    // Both flavours of import update the matching set.
     window.addEventListener("invitations-imported", onImport);
-    return () => window.removeEventListener("invitations-imported", onImport);
+    window.addEventListener("connections-imported", onImport);
+    return () => {
+      window.removeEventListener("invitations-imported", onImport);
+      window.removeEventListener("connections-imported", onImport);
+    };
   }, []);
 
   // Whenever the active board changes, prime kanban + stages from local
@@ -3698,11 +3712,11 @@ export function CRMView({
               {filteredContacts.length} of {contacts.length}
             </span>
           )}
-          {/* "Hide invited" toggle — surfaces only contacts the user
-              still needs to reach out to. The pill is its own toggle:
-              click to apply, click again to clear. Disabled when no
-              invitations have been imported yet so the user gets a
-              useful tooltip instead of a no-op. */}
+          {/* "Hide existing" toggle — surfaces only contacts the user
+              isn't already in touch with. Hides anyone who matches a
+              row in the user's invitations OR connections imports.
+              Single click toggles on/off. Disabled until either CSV
+              has been imported, with a useful tooltip. */}
           <button
             type="button"
             className={`pill-btn${hideInvited ? " primary" : ""}`}
@@ -3710,14 +3724,14 @@ export function CRMView({
             disabled={invitedNames.size === 0 && invitedLinkedIns.size === 0}
             title={
               invitedNames.size === 0 && invitedLinkedIns.size === 0
-                ? "Import an Invitations.csv first (Actions → Import LinkedIn data)"
+                ? "Import an Invitations.csv or Connections.csv first (Actions → Import LinkedIn data)"
                 : hideInvited
-                  ? "Showing only contacts you haven't invited yet — click to clear"
-                  : "Hide contacts you've already invited"
+                  ? `Showing only fresh contacts — hiding ${invitedCount} invited + ${connectedCount} connected`
+                  : `Hide ${invitedCount} invited + ${connectedCount} connected contacts`
             }
           >
             <IconUsers size={12} />
-            {hideInvited ? "Un-invited only" : "Hide invited"}
+            {hideInvited ? "Fresh only" : "Hide existing"}
             {hideInvited && (
               <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: "var(--text-mute)" }}>
                 ({filteredContacts.length})
