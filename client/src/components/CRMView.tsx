@@ -3045,16 +3045,19 @@ export function CRMView({
     setInternalActiveId(id);
   };
   const [contacts, setContacts] = useState<CrmContact[]>([]);
-  // Set of normalised name + linkedin slugs the user is already in
-  // contact with — covers both pending invitations AND existing
-  // 1st-degree connections. Loaded from /api/people/invitations
-  // (the endpoint returns both since they're matched the same way).
-  // Drives the "Hide existing" filter pill below.
+  // Two parallel sets — invitations the user has sent, and existing
+  // 1st-degree connections. The CRM toolbar exposes a tri-state filter:
+  //   - "all"        : every contact (default)
+  //   - "fresh"      : hide anyone in either set (people still to reach)
+  //   - "connected"  : show ONLY rows matching the connections set
+  // Loaded from /api/people/invitations which returns both kinds.
   const [invitedNames, setInvitedNames] = useState<Set<string>>(new Set());
   const [invitedLinkedIns, setInvitedLinkedIns] = useState<Set<string>>(new Set());
+  const [connectedNames, setConnectedNames] = useState<Set<string>>(new Set());
+  const [connectedLinkedIns, setConnectedLinkedIns] = useState<Set<string>>(new Set());
   const [invitedCount, setInvitedCount] = useState(0);
   const [connectedCount, setConnectedCount] = useState(0);
-  const [hideInvited, setHideInvited] = useState(false);
+  const [networkFilter, setNetworkFilter] = useState<"all" | "fresh" | "connected">("all");
   const [importOpen, setImportOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -3091,20 +3094,26 @@ export function CRMView({
   const filteredContacts = useMemo(() => {
     const q = search.trim().toLowerCase();
     let out = contacts;
-    // Hide already-invited contacts when the toolbar pill is active.
-    // Match by normalised name OR normalised linkedin url — either is
-    // enough to consider a contact "already reached out to".
-    if (hideInvited && (invitedNames.size > 0 || invitedLinkedIns.size > 0)) {
+    // Network filter — three modes. Match by normalised name OR
+    // normalised linkedin url (either is enough).
+    const normN = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const normL = (s: string) => s.toLowerCase().trim()
+      .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\?.*$/, "").replace(/\/+$/, "");
+    if (networkFilter === "fresh" && (invitedNames.size > 0 || invitedLinkedIns.size > 0)) {
       out = out.filter((c) => {
-        const n = (c.name ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+        const n = normN(c.name ?? "");
         if (n && invitedNames.has(n)) return false;
-        const li = (c.linkedin ?? "").toLowerCase().trim()
-          .replace(/^https?:\/\//, "")
-          .replace(/^www\./, "")
-          .replace(/\?.*$/, "")
-          .replace(/\/+$/, "");
+        const li = normL(c.linkedin ?? "");
         if (li && invitedLinkedIns.has(li)) return false;
         return true;
+      });
+    } else if (networkFilter === "connected" && (connectedNames.size > 0 || connectedLinkedIns.size > 0)) {
+      out = out.filter((c) => {
+        const n = normN(c.name ?? "");
+        if (n && connectedNames.has(n)) return true;
+        const li = normL(c.linkedin ?? "");
+        if (li && connectedLinkedIns.has(li)) return true;
+        return false;
       });
     }
     if (!q) return out;
@@ -3118,7 +3127,7 @@ export function CRMView({
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [contacts, search, hideInvited, invitedNames, invitedLinkedIns]);
+  }, [contacts, search, networkFilter, invitedNames, invitedLinkedIns, connectedNames, connectedLinkedIns]);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -3143,8 +3152,13 @@ export function CRMView({
       connectedCount?: number;
     }>("/api/people/invitations")
       .then((r) => {
+        // Combined set powers "Hide existing" — anyone we've touched.
         setInvitedNames(new Set(r.invitations.map((i) => i.name).filter(Boolean)));
         setInvitedLinkedIns(new Set(r.invitations.map((i) => i.linkedin).filter(Boolean)));
+        // Connections-only subset powers "Connected only".
+        const connRows = r.invitations.filter((i) => i.kind === "connection");
+        setConnectedNames(new Set(connRows.map((i) => i.name).filter(Boolean)));
+        setConnectedLinkedIns(new Set(connRows.map((i) => i.linkedin).filter(Boolean)));
         setInvitedCount(r.invitedCount ?? 0);
         setConnectedCount(r.connectedCount ?? 0);
       })
@@ -3712,27 +3726,48 @@ export function CRMView({
               {filteredContacts.length} of {contacts.length}
             </span>
           )}
-          {/* "Hide existing" toggle — surfaces only contacts the user
-              isn't already in touch with. Hides anyone who matches a
-              row in the user's invitations OR connections imports.
-              Single click toggles on/off. Disabled until either CSV
-              has been imported, with a useful tooltip. */}
+          {/* Network filter — two mutually exclusive pills:
+              "Hide existing" (only people not yet in your network)
+              "Connected only" (people you're already 1st-degree with)
+              Click an active pill again to clear back to "all".
+              Each pill disables itself when the relevant import is empty. */}
           <button
             type="button"
-            className={`pill-btn${hideInvited ? " primary" : ""}`}
-            onClick={() => setHideInvited((v) => !v)}
+            className={`pill-btn${networkFilter === "fresh" ? " primary" : ""}`}
+            onClick={() => setNetworkFilter((v) => (v === "fresh" ? "all" : "fresh"))}
             disabled={invitedNames.size === 0 && invitedLinkedIns.size === 0}
             title={
               invitedNames.size === 0 && invitedLinkedIns.size === 0
                 ? "Import an Invitations.csv or Connections.csv first (Actions → Import LinkedIn data)"
-                : hideInvited
+                : networkFilter === "fresh"
                   ? `Showing only fresh contacts — hiding ${invitedCount} invited + ${connectedCount} connected`
                   : `Hide ${invitedCount} invited + ${connectedCount} connected contacts`
             }
           >
             <IconUsers size={12} />
-            {hideInvited ? "Fresh only" : "Hide existing"}
-            {hideInvited && (
+            {networkFilter === "fresh" ? "Fresh only" : "Hide existing"}
+            {networkFilter === "fresh" && (
+              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: "var(--text-mute)" }}>
+                ({filteredContacts.length})
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            className={`pill-btn${networkFilter === "connected" ? " primary" : ""}`}
+            onClick={() => setNetworkFilter((v) => (v === "connected" ? "all" : "connected"))}
+            disabled={connectedNames.size === 0 && connectedLinkedIns.size === 0}
+            title={
+              connectedNames.size === 0 && connectedLinkedIns.size === 0
+                ? "Import a Connections.csv first (Actions → Import LinkedIn data)"
+                : networkFilter === "connected"
+                  ? `Showing only contacts you're connected to (${connectedCount} in your network)`
+                  : `Show only contacts you're already connected to (${connectedCount} in your network)`
+            }
+          >
+            <IconCheck size={12} />
+            {networkFilter === "connected" ? "Connected only" : "Show connected"}
+            {networkFilter === "connected" && (
               <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: "var(--text-mute)" }}>
                 ({filteredContacts.length})
               </span>
