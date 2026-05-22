@@ -121,6 +121,11 @@ export interface CrmContact {
   opens: number;
   replies: number;
   lastTouch: string | null;
+  /** ISO timestamp of the most recent touch. Manual — stamped by the
+   *  "Sent" / "Received" buttons on the row. */
+  lastTouchAt: string | null;
+  /** Direction of the most recent touch — 'in' (received) or 'out' (sent). */
+  lastTouchDirection: "in" | "out" | null;
   nextStep: string | null;
   source: string | null;
   notes: string | null;
@@ -213,6 +218,10 @@ export type CrmColumnType =
   | "stage"
   | "temp"
   | "person"
+  /** Manual "last message" tracking — timestamp + direction (in/out).
+   *  Stamped by one-click buttons in the cell. Powers follow-up
+   *  staleness signals and the Companies group rollup. */
+  | "touch"
   | "select"; // internal: row-select checkbox
 
 /** Row height in pixels. Min 28, max 200. The legacy enum values map to:

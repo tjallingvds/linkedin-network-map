@@ -103,6 +103,10 @@ function toCamelContact(row: Record<string, unknown>) {
     opens: row.opens,
     replies: row.replies,
     lastTouch: row.last_touch,
+    lastTouchAt: row.last_touch_at instanceof Date
+      ? row.last_touch_at.toISOString()
+      : (row.last_touch_at as string | null) ?? null,
+    lastTouchDirection: (row.last_touch_direction as "in" | "out" | null | undefined) ?? null,
     nextStep: row.next_step,
     source: row.source,
     notes: row.notes,
@@ -422,6 +426,8 @@ const contactInput = z.object({
   opens: z.number().int().min(0).optional(),
   replies: z.number().int().min(0).optional(),
   lastTouch: z.string().nullish(),
+  lastTouchAt: z.string().nullish(),
+  lastTouchDirection: z.enum(["in", "out"]).nullish(),
   nextStep: z.string().nullish(),
   source: z.string().nullish(),
   notes: z.string().nullish(),
@@ -610,6 +616,8 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
       opens: p.opens ?? 0,
       replies: p.replies ?? 0,
       last_touch: p.lastTouch ?? null,
+      last_touch_at: p.lastTouchAt ? new Date(p.lastTouchAt) : null,
+      last_touch_direction: p.lastTouchDirection ?? null,
       next_step: p.nextStep ?? null,
       source: p.source ?? null,
       notes: p.notes ?? null,
@@ -744,6 +752,8 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
           opens: p.opens ?? 0,
           replies: p.replies ?? 0,
           last_touch: p.lastTouch ?? null,
+          last_touch_at: p.lastTouchAt ? new Date(p.lastTouchAt) : null,
+          last_touch_direction: p.lastTouchDirection ?? null,
           next_step: p.nextStep ?? null,
           source: p.source ?? "CSV import",
           notes: p.notes ?? null,
@@ -786,6 +796,14 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
   for (const [k, col] of Object.entries(map)) {
     const v = (body as Record<string, unknown>)[k];
     if (v !== undefined) update[col] = v ?? null;
+  }
+  // last_touch_at is a timestamptz — coerce ISO string → Date so the driver
+  // binds it correctly. Direction is just a text column.
+  if (body.lastTouchAt !== undefined) {
+    update.last_touch_at = body.lastTouchAt ? new Date(body.lastTouchAt) : null;
+  }
+  if (body.lastTouchDirection !== undefined) {
+    update.last_touch_direction = body.lastTouchDirection ?? null;
   }
 
   if (body.customFields !== undefined) {

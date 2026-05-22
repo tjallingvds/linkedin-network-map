@@ -5,7 +5,7 @@
  * Ported from design/project/CRMView.jsx. Board + contact state is persisted
  * server-side; the React tree just reflects it.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CrmBoard, CrmContact, CrmImportRow, CrmStage, CrmTemp,
   CrmColumnDef, CrmColumnType, CrmRowHeight, CrmDropdownOption, CrmDocument, CrmAttachmentMeta,
@@ -37,22 +37,23 @@ export type TableColumnDef = CrmColumnDef & { alwaysVisible?: boolean; numeric?:
 /** Only Person (the avatar+name anchor) is required on the table.
  *  Everything else — including Stage, which the kanban gets from the
  *  board's `stages` JSONB independently — is the user's call. */
-const REQUIRED_COLS: readonly string[] = ["person"];
+const REQUIRED_COLS: readonly string[] = ["person", "lastTouch"];
 
-/** Minimal seed for a fresh board — just the row checkbox, the Person
- *  column (name + avatar; can't be removed), and the Stage column (drives
- *  the kanban). Every other column on the board is something the user
- *  adds explicitly from the "+" menu. The underlying DB still has fields
- *  for email/phone/linkedin/title/company/etc. — Apollo enrichment, CSV
- *  import, and the contact drawer all still use them — but they don't
- *  pollute the table by default. */
+/** Minimal seed for a fresh board — Person (can't be removed), Stage
+ *  (drives the kanban), and Last touch (manual sent/received logging
+ *  that powers follow-up discipline). Every other column on the board
+ *  is something the user adds explicitly from the "+" menu. The
+ *  underlying DB still has fields for email/phone/linkedin/title/
+ *  company/etc. — Apollo enrichment, CSV import, and the contact drawer
+ *  all still use them — but they don't pollute the table by default. */
 function defaultColumns(): CrmColumnDef[] {
   return [
     // Fixed-pixel default widths — using fr units made Person bloat to fill
     // the entire table whenever there were only a few columns, shoving
     // Stage far to the right and making them look unrelated.
-    { id: "person", builtin: true, label: "Person", width: "240px", type: "person" },
-    { id: "stage",  builtin: true, label: "Stage",  width: "140px", type: "stage" },
+    { id: "person",    builtin: true, label: "Person",     width: "240px", type: "person" },
+    { id: "stage",     builtin: true, label: "Stage",      width: "140px", type: "stage" },
+    { id: "lastTouch", builtin: true, label: "Last touch", width: "180px", type: "touch" },
   ];
 }
 
@@ -141,6 +142,19 @@ function reconcileColumns(stored: CrmColumnDef[]): CrmColumnDef[] {
 
 function kanbanFieldsKey(boardId: string) { return `crm.kanbanfields.v1.${boardId}`; }
 function rowHeightKey(boardId: string) { return `crm.rowheight.v1.${boardId}`; }
+function groupByCompanyKey(boardId: string) { return `crm.groupbycompany.v1.${boardId}`; }
+
+function loadGroupByCompany(boardId: string): boolean {
+  if (!boardId) return false;
+  try { return localStorage.getItem(groupByCompanyKey(boardId)) === "1"; } catch { return false; }
+}
+function saveGroupByCompany(boardId: string, on: boolean) {
+  if (!boardId) return;
+  try {
+    if (on) localStorage.setItem(groupByCompanyKey(boardId), "1");
+    else localStorage.removeItem(groupByCompanyKey(boardId));
+  } catch { /* noop */ }
+}
 
 // Legacy localStorage keys — read once on first load to migrate into the
 // server-backed schema, then never touched again.
@@ -400,9 +414,7 @@ function KanbanCard({
         case "source":       return p.source ?? null;
         case "messageNotes": return p.messageNotes ?? null;
         case "notes":        return p.notes ?? null;
-        case "sent":         return p.sent != null ? String(p.sent) : null;
-        case "opens":        return p.opens != null ? String(p.opens) : null;
-        case "replies":      return p.replies != null ? String(p.replies) : null;
+        case "lastTouch":    return p.lastTouchAt ?? null;
         default:             return null;
       }
     }
@@ -470,6 +482,24 @@ function KanbanCard({
       case "longtext": {
         // Truncate to 2 lines on the card to keep the layout tidy.
         return wrap(<span className="kc-field-multi">{raw}</span>);
+      }
+      case "touch": {
+        // raw is the ISO timestamp from readValue. Direction lives on
+        // the contact directly — the card doesn't pass it through
+        // readValue (which is string-only), so we read it here.
+        const dir = p.lastTouchDirection;
+        const rel = formatRelativeTime(raw);
+        if (!rel) return null;
+        const days = daysSince(raw) ?? 0;
+        const stale = dir === "out" && days >= STALE_DAYS;
+        return wrap(
+          <span className={`kc-touch-pill${stale ? " kc-touch-stale" : ""}`}>
+            <span className={`touch-arrow ${dir === "out" ? "touch-out-arrow" : "touch-in-arrow"}`}>
+              {dir === "out" ? "↗" : "↘"}
+            </span>
+            {rel}
+          </span>,
+        );
       }
       default:
         return wrap(raw);
@@ -1108,6 +1138,7 @@ const TYPE_LABELS: Record<CrmColumnType, string> = {
   stage: "Stage",
   temp: "Temp",
   person: "Person",
+  touch: "Last touch",
   select: "Select",
 };
 
@@ -1408,6 +1439,206 @@ function formatDateDisplay(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
   if (!m) return iso;
   return `${m[3]}/${m[2]}/${m[1]}`;
+}
+
+/** "5d ago" / "3h ago" / "just now" — used by the touch cell so the
+ *  follow-up signal is readable at a glance without parsing a date. */
+function formatRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const diffMs = Date.now() - t;
+  if (diffMs < 60_000) return "just now";
+  const min = Math.round(diffMs / 60_000);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  if (day < 30) return `${day}d ago`;
+  const mo = Math.round(day / 30);
+  if (mo < 12) return `${mo}mo ago`;
+  return `${Math.round(mo / 12)}y ago`;
+}
+
+/** Days since the given ISO timestamp. Returns null for null/invalid. */
+function daysSince(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  return Math.floor((Date.now() - t) / 86_400_000);
+}
+
+/** Threshold (in days) past which an unreplied outbound counts as stale.
+ *  Surfaces the "needs follow-up" cue on the row + the Companies rollup. */
+const STALE_DAYS = 5;
+
+/** Aggregate roll-up of one company's contacts — feeds the
+ *  "Group by company" table header row + sort order. */
+interface CompanyGroup {
+  /** Normalized lowercase company name. `__uncat__` for blank company. */
+  key: string;
+  label: string;
+  contacts: CrmContact[];
+  /** Newest touch across every contact in this group. */
+  lastTouchAt: string | null;
+  lastTouchDirection: "in" | "out" | null;
+  /** Index of the warmest stage in the board's stages array. -1 if no one
+   *  has a known stage (every contact's stage id is missing from the
+   *  board's stages list). */
+  warmestStageIdx: number;
+  warmestStageLabel: string | null;
+  warmestStageColor: string | null;
+  /** Any contact has an unanswered outbound > STALE_DAYS old. */
+  isStale: boolean;
+}
+
+function computeCompanyGroups(contacts: CrmContact[], stages: StageDef[]): CompanyGroup[] {
+  const stageIdxById = new Map(stages.map((s, i) => [s.id, i] as const));
+  const groups = new Map<string, CrmContact[]>();
+  for (const c of contacts) {
+    const raw = (c.company ?? "").trim();
+    const key = raw ? raw.toLowerCase() : "__uncat__";
+    const arr = groups.get(key);
+    if (arr) arr.push(c); else groups.set(key, [c]);
+  }
+  const result: CompanyGroup[] = [];
+  for (const [key, list] of groups.entries()) {
+    let lastTouchAt: string | null = null;
+    let lastTouchDirection: "in" | "out" | null = null;
+    let warmestIdx = -1;
+    let isStale = false;
+    for (const c of list) {
+      if (c.lastTouchAt) {
+        if (!lastTouchAt || new Date(c.lastTouchAt).getTime() > new Date(lastTouchAt).getTime()) {
+          lastTouchAt = c.lastTouchAt;
+          lastTouchDirection = c.lastTouchDirection;
+        }
+      }
+      const idx = stageIdxById.get(c.stage) ?? -1;
+      if (idx > warmestIdx) warmestIdx = idx;
+      if (c.lastTouchDirection === "out" && c.lastTouchAt) {
+        const d = daysSince(c.lastTouchAt);
+        if (d != null && d >= STALE_DAYS) isStale = true;
+      }
+    }
+    const label = key === "__uncat__"
+      ? "Uncategorized"
+      : (list[0]?.company?.trim() || "Uncategorized");
+    const warm = warmestIdx >= 0 ? stages[warmestIdx] : null;
+    result.push({
+      key, label, contacts: list,
+      lastTouchAt, lastTouchDirection,
+      warmestStageIdx: warmestIdx,
+      warmestStageLabel: warm?.label ?? null,
+      warmestStageColor: warm?.color ?? null,
+      isStale,
+    });
+  }
+  // Sort priority — stale first (most actionable), then warmest stage
+  // (closer to closed first), then alphabetical. Uncategorized always last
+  // because it's where blank-company contacts land — not a real cohort.
+  result.sort((a, b) => {
+    if (a.key === "__uncat__") return 1;
+    if (b.key === "__uncat__") return -1;
+    if (a.isStale !== b.isStale) return a.isStale ? -1 : 1;
+    if (a.warmestStageIdx !== b.warmestStageIdx) return b.warmestStageIdx - a.warmestStageIdx;
+    return a.label.localeCompare(b.label);
+  });
+  return result;
+}
+
+/** Touch cell — one-click "Sent" / "Received" buttons when empty;
+ *  relative time + direction arrow when set, with a popover to update
+ *  (re-stamp now, or backdate via a date input, or clear). */
+function TouchCell({
+  at, direction, onChange,
+}: {
+  at: string | null;
+  direction: "in" | "out" | null;
+  onChange: (patch: { lastTouchAt: string | null; lastTouchDirection: "in" | "out" | null }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const stamp = (dir: "in" | "out") => {
+    onChange({ lastTouchAt: new Date().toISOString(), lastTouchDirection: dir });
+    setOpen(false);
+  };
+  const backdate = (dateStr: string, dir: "in" | "out") => {
+    if (!dateStr) return;
+    // Normalize "YYYY-MM-DD" to noon UTC so it doesn't drift across timezones.
+    const iso = new Date(`${dateStr}T12:00:00Z`).toISOString();
+    onChange({ lastTouchAt: iso, lastTouchDirection: dir });
+    setOpen(false);
+  };
+  const clear = () => {
+    onChange({ lastTouchAt: null, lastTouchDirection: null });
+    setOpen(false);
+  };
+
+  if (!at || !direction) {
+    return (
+      <div className="touch-cell" onClick={(e) => e.stopPropagation()}>
+        <button className="touch-btn touch-out" onClick={() => stamp("out")} title="Mark as Sent now">
+          <span className="touch-arrow">↗</span>Sent
+        </button>
+        <button className="touch-btn touch-in" onClick={() => stamp("in")} title="Mark as Received now">
+          <span className="touch-arrow">↘</span>Received
+        </button>
+      </div>
+    );
+  }
+
+  const days = daysSince(at) ?? 0;
+  const stale = direction === "out" && days >= STALE_DAYS;
+  const relTime = formatRelativeTime(at);
+  return (
+    <div className="touch-cell" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className={`touch-display${stale ? " touch-stale" : ""}`}
+        onClick={() => setOpen((o) => !o)}
+        title={`Last touch: ${relTime} (${direction === "out" ? "you sent" : "you received"})`}
+      >
+        <span className={`touch-arrow ${direction === "out" ? "touch-out-arrow" : "touch-in-arrow"}`}>
+          {direction === "out" ? "↗" : "↘"}
+        </span>
+        <span className="touch-text">{relTime}</span>
+        {stale && <span className="touch-stale-dot" aria-label="needs follow-up" />}
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={() => setOpen(false)} />
+          <div className="board-menu touch-menu">
+            <button className="bm-item" onClick={() => stamp("out")}>
+              <span className="touch-arrow touch-out-arrow">↗</span>
+              <span style={{ flex: 1 }}>Mark Sent now</span>
+            </button>
+            <button className="bm-item" onClick={() => stamp("in")}>
+              <span className="touch-arrow touch-in-arrow">↘</span>
+              <span style={{ flex: 1 }}>Mark Received now</span>
+            </button>
+            <div className="bm-sep" />
+            <div className="touch-backdate">
+              <span className="bm-label" style={{ padding: 0 }}>Backdate</span>
+              <input
+                type="date"
+                className="ed-input"
+                defaultValue={at.slice(0, 10)}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                  // Direction stays whatever it currently is.
+                  if (e.target.value) backdate(e.target.value, direction);
+                }}
+              />
+            </div>
+            <div className="bm-sep" />
+            <button className="bm-item" onClick={clear}>
+              <IconClose size={11} /><span>Clear</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 function DropdownCellEditor({
@@ -2000,6 +2231,7 @@ function AddColumnButton({
 
 function TableView({
   contacts, onOpen, onPatch, columns, onColumnsChange, stages, rowHeight, onRowHeightChange, onOpenPage,
+  groupByCompany,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
@@ -2014,6 +2246,9 @@ function TableView({
   /** Persist a new row height (px). Drag-resize from the header bottom
    *  edge calls this on pointer release. */
   onRowHeightChange: (next: CrmRowHeight) => void;
+  /** Companies view — when true, rows are grouped under aggregate
+   *  company header rows ordered by stale-then-warmest. */
+  groupByCompany: boolean;
 }) {
   const visibleCols = useMemo(() => columns.filter((c) => !c.hidden), [columns]);
 
@@ -2138,6 +2373,22 @@ function TableView({
 
   const isNumeric = (col: CrmColumnDef) => NUMERIC_TYPES.includes(col.type);
 
+  // ---- Companies grouping ----
+  const companyGroups = useMemo(
+    () => (groupByCompany ? computeCompanyGroups(contacts, stages) : []),
+    [groupByCompany, contacts, stages],
+  );
+  // Collapsed company keys. Ephemeral — resets on remount, which is fine
+  // for a view toggle most users leave on once they turn it on.
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const toggleGroup = (key: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+
   const renderCell = (col: CrmColumnDef, p: CrmContact, i: number) => {
     if (!col.builtin) {
       const val = (p.customFields ?? {})[col.id] ?? "";
@@ -2198,9 +2449,13 @@ function TableView({
       );
       case "stage":   return <StageCell stage={p.stage} stages={stages} onChange={(v) => onPatch(p.id, { stage: v })} />;
       case "temp":    return <TempCell  temp={p.temp}   onChange={(v) => onPatch(p.id, { temp: v })} />;
-      case "sent":    return <NumberCellEditor value={p.sent}    onSave={(n) => onPatch(p.id, { sent: n })} />;
-      case "opens":   return <NumberCellEditor value={p.opens}   onSave={(n) => onPatch(p.id, { opens: n })} />;
-      case "replies": return <NumberCellEditor value={p.replies} onSave={(n) => onPatch(p.id, { replies: n })} />;
+      case "lastTouch": return (
+        <TouchCell
+          at={p.lastTouchAt}
+          direction={p.lastTouchDirection}
+          onChange={(patch) => onPatch(p.id, patch)}
+        />
+      );
       case "nextStep":return <EditableCell value={p.nextStep} onSave={(v) => onPatch(p.id, { nextStep: v })} />;
       case "source":  return <span className="src-chip">{p.source ?? ""}</span>;
       case "messageNotes": return <LongTextCellEditor value={p.messageNotes} onSave={(v) => onPatch(p.id, { messageNotes: v })} />;
@@ -2238,22 +2493,71 @@ function TableView({
               board-wide row height. */}
           <span className="row-resize" onPointerDown={startRowResize} title="Drag to resize rows" />
         </div>
-        {contacts.map((p, i) => (
-          <div
-            key={p.id}
-            className="tbl-row"
-            onClick={() => onOpen(p)}
-            style={{ gridTemplateColumns: gridTemplate }}
-          >
-            {visibleCols.map((c) => (
-              <div key={c.id} className={`tbl-cell${isNumeric(c) ? " c-num" : ""}${c.id === "person" ? " c-name" : ""}`}>
-                {renderCell(c, p, i)}
-              </div>
-            ))}
-            <div className="tbl-cell" />
-            <div className="tbl-cell tbl-tail" />
-          </div>
-        ))}
+        {(() => {
+          const renderRow = (p: CrmContact, i: number) => (
+            <div
+              key={p.id}
+              className="tbl-row"
+              onClick={() => onOpen(p)}
+              style={{ gridTemplateColumns: gridTemplate }}
+            >
+              {visibleCols.map((c) => (
+                <div key={c.id} className={`tbl-cell${isNumeric(c) ? " c-num" : ""}${c.id === "person" ? " c-name" : ""}`}>
+                  {renderCell(c, p, i)}
+                </div>
+              ))}
+              <div className="tbl-cell" />
+              <div className="tbl-cell tbl-tail" />
+            </div>
+          );
+          if (!groupByCompany) return contacts.map(renderRow);
+          let runningIdx = 0;
+          return companyGroups.map((group) => {
+            const collapsed = collapsedGroups.has(group.key);
+            return (
+              <Fragment key={group.key}>
+                <div
+                  className={`tbl-group-head${group.isStale ? " tbl-group-stale" : ""}`}
+                  onClick={() => toggleGroup(group.key)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={!collapsed}
+                >
+                  <span className="tgh-chev">{collapsed ? "▶" : "▼"}</span>
+                  <span className="tgh-name">{group.label}</span>
+                  <span className="tgh-count">
+                    {group.contacts.length} {group.contacts.length === 1 ? "contact" : "contacts"}
+                  </span>
+                  {group.lastTouchAt && group.lastTouchDirection && (
+                    <span className="tgh-touch">
+                      <span className={`touch-arrow ${group.lastTouchDirection === "out" ? "touch-out-arrow" : "touch-in-arrow"}`}>
+                        {group.lastTouchDirection === "out" ? "↗" : "↘"}
+                      </span>
+                      {formatRelativeTime(group.lastTouchAt)}
+                    </span>
+                  )}
+                  {group.warmestStageLabel && (
+                    <span
+                      className="tgh-stage tbl-stage"
+                      style={{
+                        "--stage-color": group.warmestStageColor ?? "var(--text-mute)",
+                        "--stage-tint": tintFor(group.warmestStageColor ?? "oklch(0.7 0.04 280)"),
+                      } as React.CSSProperties}
+                    >
+                      {group.warmestStageLabel}
+                    </span>
+                  )}
+                  {group.isStale && <span className="tgh-stale-pill">Needs follow-up</span>}
+                </div>
+                {!collapsed && group.contacts.map((p) => {
+                  const row = renderRow(p, runningIdx);
+                  runningIdx += 1;
+                  return row;
+                })}
+              </Fragment>
+            );
+          });
+        })()}
         {contacts.length === 0 && (
           <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-mute)", fontSize: 13 }}>
             No contacts yet. Click <strong>Import CSV</strong> to paste your spreadsheet, or <strong>Add contact</strong> to create one.
@@ -2898,9 +3202,13 @@ export function CRMDrawer({
           onSave={(v) => onPatch(contact.id, { linkedin: normalizeLinkedInInput(v) ?? v })}
         />
       );
-      case "sent":         return <NumberCellEditor value={contact.sent}    onSave={(n) => onPatch(contact.id, { sent: n })} />;
-      case "opens":        return <NumberCellEditor value={contact.opens}   onSave={(n) => onPatch(contact.id, { opens: n })} />;
-      case "replies":      return <NumberCellEditor value={contact.replies} onSave={(n) => onPatch(contact.id, { replies: n })} />;
+      case "lastTouch": return (
+        <TouchCell
+          at={contact.lastTouchAt}
+          direction={contact.lastTouchDirection}
+          onChange={(patch) => onPatch(contact.id, patch)}
+        />
+      );
       case "nextStep":     return <EditableCell value={contact.nextStep} onSave={(v) => onPatch(contact.id, { nextStep: v })} />;
       case "source":       return <EditableCell value={contact.source} onSave={(v) => onPatch(contact.id, { source: v })} />;
       case "messageNotes": return <LongTextCellEditor value={contact.messageNotes} onSave={(v) => onPatch(contact.id, { messageNotes: v })} />;
@@ -3082,6 +3390,10 @@ export function CRMView({
   const [rowHeight, setRowHeight] = useState<CrmRowHeight>(DEFAULT_ROW_HEIGHT);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
   const [stages, setStages] = useState<StageDef[]>(DEFAULT_STAGES);
+  // Companies view — when on, the table groups contacts by company under
+  // an aggregate header row showing count + last-touch + warmest stage.
+  // Per-board so each board remembers its preferred view.
+  const [groupByCompany, setGroupByCompany] = useState<boolean>(false);
   // Derived backward-compat shapes for callsites that haven't been
   // refactored to consume the full schema (KanbanCard, CRMDrawer, etc).
   const customCols = useMemo(() => customColsFromSchema(columns), [columns]);
@@ -3186,6 +3498,7 @@ export function CRMView({
     setRowHeight(loadRowHeightCached(activeId));
     setKanbanFields(loadKanbanFields(activeId));
     setStages(loadStages(activeId));
+    setGroupByCompany(loadGroupByCompany(activeId));
   }, [activeId]);
 
   // Callback refs — `onFlash` and `onBoardsChange` are re-created on every
@@ -3820,6 +4133,19 @@ export function CRMView({
                     columns={columns}
                   />
                 )}
+                {viewMode === "table" && (
+                  <button
+                    className={`pill-btn${groupByCompany ? " primary" : ""}`}
+                    onClick={() => {
+                      const next = !groupByCompany;
+                      setGroupByCompany(next);
+                      saveGroupByCompany(activeId, next);
+                    }}
+                    title="Group rows by company with an aggregate header row above each group"
+                  >
+                    <IconUsers size={12} />{groupByCompany ? "Grouped by company" : "Group by company"}
+                  </button>
+                )}
                 {/* Direct actions — close Actions before (or alongside) their
                     state change so there's no overlap with the modal's
                     entrance animation. */}
@@ -3903,6 +4229,7 @@ export function CRMView({
           rowHeight={rowHeight}
           onRowHeightChange={saveRowHeight}
           onOpenPage={openPage}
+          groupByCompany={groupByCompany}
         />
       )}
 

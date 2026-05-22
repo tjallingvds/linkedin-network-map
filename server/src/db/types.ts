@@ -159,6 +159,10 @@ export interface CrmContactsTable {
   opens: Generated<number>;
   replies: Generated<number>;
   last_touch: string | null;
+  /** ISO timestamp of the most recent touch (sent or received). Manual. */
+  last_touch_at: Timestamp | null;
+  /** Direction of the most recent touch — 'in' (we received) or 'out' (we sent). */
+  last_touch_direction: string | null;
   next_step: string | null;
   source: string | null;
   notes: string | null;

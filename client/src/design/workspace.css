@@ -3031,3 +3031,141 @@ button:focus-visible { outline-offset: 3px; }
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: 12px; margin-bottom: 10px;
 }
+
+/* ---------- Last-touch cell ---------- */
+/* Empty state: two compact inline buttons (Sent / Received).
+   Filled state: a clickable pill showing direction + relative time. */
+.touch-cell {
+  position: relative;
+  display: flex; align-items: center; gap: 4px;
+  width: 100%; min-width: 0;
+}
+.touch-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 7px;
+  font-size: 11px; font-weight: 500;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--shell);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.touch-btn:hover { background: var(--panel-2); border-color: var(--hairline-strong); color: var(--text); }
+.touch-btn.touch-out:hover { color: oklch(0.55 0.14 240); border-color: oklch(0.7 0.10 240); }
+.touch-btn.touch-in:hover  { color: oklch(0.55 0.14 150); border-color: oklch(0.65 0.14 150); }
+.touch-arrow {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11.5px; font-weight: 600;
+  line-height: 1;
+}
+.touch-out-arrow { color: oklch(0.55 0.14 240); }
+.touch-in-arrow  { color: oklch(0.55 0.14 150); }
+.touch-display {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px;
+  font-size: 11.5px; font-weight: 500;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--shell);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.touch-display:hover { background: var(--panel-2); border-color: var(--hairline-strong); }
+.touch-display.touch-stale {
+  border-color: oklch(0.7 0.16 25);
+  background: oklch(0.97 0.04 25);
+  color: oklch(0.45 0.16 25);
+}
+.touch-stale-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: oklch(0.62 0.18 25);
+  flex-shrink: 0;
+}
+.touch-text { white-space: nowrap; }
+.touch-menu {
+  position: absolute;
+  top: calc(100% + 4px); left: 0;
+  min-width: 200px;
+}
+.touch-backdate {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 10px 8px;
+}
+.touch-backdate .ed-input { width: 100%; font-size: 12px; }
+
+/* ---------- Companies group header row ---------- */
+/* Sits above each company's people rows in the grouped-by-company table.
+   Spans the full table width (block-level, ignores the grid columns). */
+.tbl-group-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+  /* Span the full grid width (the .tbl wrapper sizes to max-content of
+     its columns), so the header stretches across all columns of its
+     group's rows below. */
+  width: 100%;
+  box-sizing: border-box;
+}
+.tbl-group-head:hover { background: var(--shell); }
+.tbl-group-head.tbl-group-stale {
+  background: oklch(0.97 0.04 25);
+  border-color: oklch(0.85 0.10 25);
+}
+.tgh-chev {
+  font-size: 10px; color: var(--text-mute);
+  width: 12px; display: inline-block; flex-shrink: 0;
+}
+.tgh-name {
+  font-weight: 600; color: var(--text);
+  font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 280px;
+}
+.tgh-count {
+  font-family: 'Geist Mono', monospace;
+  font-size: 11px; color: var(--text-mute);
+  padding: 1px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--shell);
+}
+.tgh-touch {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11.5px; color: var(--text-dim);
+}
+.tgh-stage {
+  font-size: 11px;
+}
+.tgh-stale-pill {
+  margin-left: auto;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+  background: oklch(0.62 0.18 25);
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Kanban-card variant — same pill but smaller, suited for card density. */
+.kc-touch-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 7px;
+  font-size: 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--shell);
+  color: var(--text);
+}
+.kc-touch-pill.kc-touch-stale {
+  border-color: oklch(0.7 0.16 25);
+  background: oklch(0.97 0.04 25);
+  color: oklch(0.45 0.16 25);
+}
