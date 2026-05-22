@@ -1492,14 +1492,47 @@ interface CompanyGroup {
   isStale: boolean;
 }
 
-function computeCompanyGroups(contacts: CrmContact[], stages: StageDef[]): CompanyGroup[] {
+/** Resolve a contact's company name, preferring a user-added "Company"
+ *  custom column when present. The built-in `c.company` field is the
+ *  fallback — it's where CSV imports + Apollo enrichment write, but a
+ *  user maintaining their own custom column expects that column's value
+ *  to be authoritative for grouping. */
+function readCompany(c: CrmContact, customCompanyColId: string | null): string {
+  if (customCompanyColId) {
+    const v = (c.customFields ?? {})[customCompanyColId];
+    if (v && v.trim()) return v.trim();
+  }
+  return (c.company ?? "").trim();
+}
+
+function findCompanyColumnId(columns: CrmColumnDef[]): string | null {
+  // Case-insensitive exact match on a non-builtin column labelled "Company".
+  // Only the user's own column wins — built-ins / required cols don't qualify.
+  const col = columns.find(
+    (c) => !c.builtin && (c.label ?? "").trim().toLowerCase() === "company",
+  );
+  return col ? col.id : null;
+}
+
+function computeCompanyGroups(
+  contacts: CrmContact[],
+  stages: StageDef[],
+  columns: CrmColumnDef[],
+): CompanyGroup[] {
   const stageIdxById = new Map(stages.map((s, i) => [s.id, i] as const));
+  const customCompanyColId = findCompanyColumnId(columns);
   const groups = new Map<string, CrmContact[]>();
+  // Keep the original casing of the first contact in a group as the
+  // display label — we lower-case only for the grouping key.
+  const displayLabel = new Map<string, string>();
   for (const c of contacts) {
-    const raw = (c.company ?? "").trim();
+    const raw = readCompany(c, customCompanyColId);
     const key = raw ? raw.toLowerCase() : "__uncat__";
     const arr = groups.get(key);
-    if (arr) arr.push(c); else groups.set(key, [c]);
+    if (arr) arr.push(c); else {
+      groups.set(key, [c]);
+      if (raw) displayLabel.set(key, raw);
+    }
   }
   const result: CompanyGroup[] = [];
   for (const [key, list] of groups.entries()) {
@@ -1523,7 +1556,7 @@ function computeCompanyGroups(contacts: CrmContact[], stages: StageDef[]): Compa
     }
     const label = key === "__uncat__"
       ? "Uncategorized"
-      : (list[0]?.company?.trim() || "Uncategorized");
+      : (displayLabel.get(key) || "Uncategorized");
     const warm = warmestIdx >= 0 ? stages[warmestIdx] : null;
     result.push({
       key, label, contacts: list,
@@ -2375,8 +2408,8 @@ function TableView({
 
   // ---- Companies grouping ----
   const companyGroups = useMemo(
-    () => (groupByCompany ? computeCompanyGroups(contacts, stages) : []),
-    [groupByCompany, contacts, stages],
+    () => (groupByCompany ? computeCompanyGroups(contacts, stages, columns) : []),
+    [groupByCompany, contacts, stages, columns],
   );
   // Collapsed company keys. Ephemeral — resets on remount, which is fine
   // for a view toggle most users leave on once they turn it on.
