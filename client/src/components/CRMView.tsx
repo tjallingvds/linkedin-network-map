@@ -5,7 +5,7 @@
  * Ported from design/project/CRMView.jsx. Board + contact state is persisted
  * server-side; the React tree just reflects it.
  */
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CrmBoard, CrmContact, CrmImportRow, CrmStage, CrmTemp,
   CrmColumnDef, CrmColumnType, CrmRowHeight, CrmDropdownOption, CrmDocument, CrmAttachmentMeta,
@@ -2303,9 +2303,22 @@ function TableView({
   const startResize = (colId: string, startX: number, startW: number) => {
     // Cancel any in-flight resize before starting a new one.
     resizeCleanupRef.current?.();
-    const onMove = (ev: PointerEvent) => {
-      const next = Math.max(60, Math.round(startW + (ev.clientX - startX)));
+    // rAF coalesce — pointermove fires up to 1000Hz on some hardware;
+    // setState on every event chokes weak CPUs because each one triggers
+    // a grid-template-columns recalc + full table reflow. One update per
+    // animation frame is plenty for smooth drag feedback.
+    let pending = false;
+    let lastX = startX;
+    const flush = () => {
+      pending = false;
+      const next = Math.max(60, Math.round(startW + (lastX - startX)));
       setLiveWidth({ id: colId, px: next });
+    };
+    const onMove = (ev: PointerEvent) => {
+      lastX = ev.clientX;
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(flush);
     };
     const onUp = (ev: PointerEvent) => {
       cleanup();
@@ -2345,9 +2358,20 @@ function TableView({
     rowResizeCleanupRef.current?.();
     const startY = e.clientY;
     const startH = rowHeight;
+    // rAF coalesce — same reasoning as column resize. Every row's height
+    // var updates on each setState, so on a 500-row table this is the
+    // single most expensive interaction in the app on slow CPUs.
+    let pending = false;
+    let lastY = startY;
+    const flush = () => {
+      pending = false;
+      setLiveRowH(clampRowHeight(startH + (lastY - startY)));
+    };
     const onMove = (ev: PointerEvent) => {
-      const next = clampRowHeight(startH + (ev.clientY - startY));
-      setLiveRowH(next);
+      lastY = ev.clientY;
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(flush);
     };
     const onUp = (ev: PointerEvent) => {
       cleanup();
@@ -3419,6 +3443,11 @@ export function CRMView({
   const [classifyingSkill, setClassifyingSkill] = useState(false);
   const [classifyingCountry, setClassifyingCountry] = useState(false);
   const [search, setSearch] = useState("");
+  // Deferred for filtering — the input itself stays controlled by `search`
+  // (so typing is always instant), but the table/kanban filter recomputes
+  // against the deferred value. On slow CPUs this is the difference
+  // between the textbox feeling stuck and the textbox feeling snappy.
+  const deferredSearch = useDeferredValue(search);
   const [columns, setColumns] = useState<CrmColumnDef[]>(defaultColumns);
   const [rowHeight, setRowHeight] = useState<CrmRowHeight>(DEFAULT_ROW_HEIGHT);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
@@ -3432,28 +3461,25 @@ export function CRMView({
   const customCols = useMemo(() => customColsFromSchema(columns), [columns]);
   const visibleCols = useMemo(() => visibleColIds(columns), [columns]);
 
-  // Toolbar search — filters across name, title, company, email, linkedin, AND
-  // every custom-field cell value. Case-insensitive substring match. Both the
-  // table and kanban views consume the filtered list, so the search reflects
-  // the same result set across views without per-view duplication.
-  const filteredContacts = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let out = contacts;
-    // Network filter — three modes. Match by normalised name OR
-    // normalised linkedin url (either is enough).
+  // Toolbar filters. Split into two stages so that typing in the search
+  // box doesn't re-run the (more expensive) network filter:
+  //   networkFiltered → search-filtered
+  // Each stage only recomputes when its own inputs change.
+  const networkFiltered = useMemo(() => {
     const normN = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     const normL = (s: string) => s.toLowerCase().trim()
       .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\?.*$/, "").replace(/\/+$/, "");
     if (networkFilter === "fresh" && (invitedNames.size > 0 || invitedLinkedIns.size > 0)) {
-      out = out.filter((c) => {
+      return contacts.filter((c) => {
         const n = normN(c.name ?? "");
         if (n && invitedNames.has(n)) return false;
         const li = normL(c.linkedin ?? "");
         if (li && invitedLinkedIns.has(li)) return false;
         return true;
       });
-    } else if (networkFilter === "connected" && (connectedNames.size > 0 || connectedLinkedIns.size > 0)) {
-      out = out.filter((c) => {
+    }
+    if (networkFilter === "connected" && (connectedNames.size > 0 || connectedLinkedIns.size > 0)) {
+      return contacts.filter((c) => {
         const n = normN(c.name ?? "");
         if (n && connectedNames.has(n)) return true;
         const li = normL(c.linkedin ?? "");
@@ -3461,8 +3487,16 @@ export function CRMView({
         return false;
       });
     }
-    if (!q) return out;
-    return out.filter((c) => {
+    return contacts;
+  }, [contacts, networkFilter, invitedNames, invitedLinkedIns, connectedNames, connectedLinkedIns]);
+
+  // Search-stage filter — consumes the deferred query, so the input itself
+  // stays snappy on slow CPUs even when the table is large. The deps are
+  // narrow: just the network-filtered list + the search string.
+  const filteredContacts = useMemo(() => {
+    const q = deferredSearch.trim().toLowerCase();
+    if (!q) return networkFiltered;
+    return networkFiltered.filter((c) => {
       const haystack = [
         c.name, c.title, c.company, c.email, c.linkedin, c.background,
         ...Object.values((c.customFields ?? {}) as Record<string, string>),
@@ -3472,7 +3506,7 @@ export function CRMView({
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [contacts, search, networkFilter, invitedNames, invitedLinkedIns, connectedNames, connectedLinkedIns]);
+  }, [networkFiltered, deferredSearch]);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -3558,9 +3592,27 @@ export function CRMView({
     setContacts([]);
 
     let stopped = false;
+    // Fingerprint of the last accepted payload. Lets us skip setContacts
+    // (and the cascade of re-renders that follows) when SSE / focus /
+    // poll fires but the server actually has nothing new — common on
+    // shared boards where someone else's activity triggers an event but
+    // didn't change a row this client cares about.
+    let lastFingerprint: string | null = null;
+    const fingerprintOf = (list: CrmContact[]) => {
+      // Sort by id so order changes don't trigger a refresh. updatedAt
+      // on every row is enough — the server bumps it on every write.
+      const ids = list.map((c) => `${c.id}:${c.updatedAt}`).sort();
+      return `${list.length}|${ids.join(",")}`;
+    };
     const loadContacts = () => {
       api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`)
-        .then((r) => { if (!stopped) setContacts(r.contacts); })
+        .then((r) => {
+          if (stopped) return;
+          const fp = fingerprintOf(r.contacts);
+          if (fp === lastFingerprint) return;
+          lastFingerprint = fp;
+          setContacts(r.contacts);
+        })
         .catch((e) => { if (!stopped) onFlashRef.current(`Load contacts failed: ${e.message}`); });
     };
     const loadBoards = () => {
