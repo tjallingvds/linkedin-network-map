@@ -147,37 +147,57 @@ router.post("/bulk", async (req: AuthedRequest, res) => {
   res.json({ inserted });
 });
 
-/** Lightweight list of people already in the user's LinkedIn network
- *  — sent invitations PLUS existing 1st-degree connections. Used by
- *  the CRM "Hide existing" filter to surface contacts the user still
- *  needs to reach out to. Returns only normalised name + normalised
- *  linkedin url so matching is cheap. The legacy /invitations name
- *  is kept since the response shape is a superset. */
+/** Lightweight list of people the user is mid-conversation with —
+ *  sent invitations PLUS people they've sent a LinkedIn message to.
+ *  Powers the CRM "Connected & new" filter, which hides anyone in
+ *  this in-progress middle so the user sees connections + brand-new
+ *  contacts. 1st-degree connections are also returned so the client
+ *  can show counts, but they're tagged "connection" and the client
+ *  excludes them from the hide set. Returns normalised name + url
+ *  so matching is cheap. */
 router.get("/invitations", async (req: AuthedRequest, res) => {
   try {
     await sql`ALTER TABLE people ADD COLUMN IF NOT EXISTS kind TEXT`.execute(db);
   } catch { /* already exists */ }
 
-  const rows = await db
+  const userId = req.user!.id;
+
+  const peopleRows = await db
     .selectFrom("people")
     .select(["first_name", "last_name", "linkedin_url", "kind"])
-    .where("user_id", "=", req.user!.id)
+    .where("user_id", "=", userId)
     .where((eb) => eb.or([
       eb("kind", "=", "invitation"),
       eb("kind", "=", "connection"),
     ]))
     .execute();
 
-  const invitations = rows.map((r) => ({
-    name: normaliseName(`${r.first_name} ${r.last_name}`.trim()),
-    linkedin: normaliseLinkedIn(r.linkedin_url),
-    kind: r.kind ?? null,
-  }));
+  const messageRows = await db
+    .selectFrom("message_log")
+    .select(["counterpart_name_normalized", "counterpart_linkedin_normalized"])
+    .where("user_id", "=", userId)
+    .where("direction", "=", "sent")
+    .execute();
+
+  const invitations = [
+    ...peopleRows.map((r) => ({
+      name: normaliseName(`${r.first_name} ${r.last_name}`.trim()),
+      linkedin: normaliseLinkedIn(r.linkedin_url),
+      kind: r.kind ?? null,
+    })),
+    ...messageRows.map((r) => ({
+      name: r.counterpart_name_normalized ?? "",
+      linkedin: r.counterpart_linkedin_normalized ?? "",
+      kind: "messaged" as const,
+    })),
+  ];
+
   res.json({
     invitations,
     total: invitations.length,
     invitedCount: invitations.filter((i) => i.kind === "invitation").length,
     connectedCount: invitations.filter((i) => i.kind === "connection").length,
+    messagedCount: invitations.filter((i) => i.kind === "messaged").length,
   });
 });
 

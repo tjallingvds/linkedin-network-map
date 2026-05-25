@@ -162,6 +162,9 @@ export function ConnectionsImportModal({
           `Imported ${res.inserted.toLocaleString()} messages` +
             (sent > 0 ? ` — ${sent.toLocaleString()} sent by you` : ""),
         );
+        // The CRM's "Connected & new" filter folds messaged-sent people
+        // into its hide set — let it refresh without a hard reload.
+        window.dispatchEvent(new CustomEvent("messages-imported"));
         onClose();
         return;
       }
@@ -188,10 +191,8 @@ export function ConnectionsImportModal({
       const res = await api.post<{ inserted: number }>("/api/people/bulk", payload);
       onImported?.(res.inserted);
       onFlash(`Imported ${res.inserted.toLocaleString()} ${kind === "invitations" ? "invites" : "connections"}`);
-      // Tell other parts of the app (the CRM's "Hide existing" filter)
-      // to refresh their match cache without a hard reload. Both
-      // invitations AND connections feed the same matching set, so
-      // either kind fires its own event.
+      // Tell other parts of the app (the CRM's "Connected & new" filter)
+      // to refresh their match cache without a hard reload.
       if (kind === "invitations") {
         window.dispatchEvent(new CustomEvent("invitations-imported"));
       } else if (kind === "connections") {

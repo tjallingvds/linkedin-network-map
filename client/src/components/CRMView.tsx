@@ -3410,19 +3410,20 @@ export function CRMView({
     setInternalActiveId(id);
   };
   const [contacts, setContacts] = useState<CrmContact[]>([]);
-  // Two parallel sets — invitations the user has sent, and existing
-  // 1st-degree connections. The CRM toolbar exposes a tri-state filter:
-  //   - "all"        : every contact (default)
-  //   - "fresh"      : hide anyone in either set (people still to reach)
-  //   - "connected"  : show ONLY rows matching the connections set
-  // Loaded from /api/people/invitations which returns both kinds.
+  // People in the "in-progress middle" — sent invitations the user
+  // is waiting on AND people they've already messaged via LinkedIn.
+  // The toolbar exposes a binary filter:
+  //   - "all"   : every contact (default)
+  //   - "fresh" : hide anyone in the in-progress set — surfaces 1st-degree
+  //               connections + brand-new contacts ("Connected & new").
+  // Loaded from /api/people/invitations which now returns invitations +
+  // connections + messaged-sent rows; connections are excluded from the
+  // hide set so they stay visible.
   const [invitedNames, setInvitedNames] = useState<Set<string>>(new Set());
   const [invitedLinkedIns, setInvitedLinkedIns] = useState<Set<string>>(new Set());
-  const [connectedNames, setConnectedNames] = useState<Set<string>>(new Set());
-  const [connectedLinkedIns, setConnectedLinkedIns] = useState<Set<string>>(new Set());
   const [invitedCount, setInvitedCount] = useState(0);
-  const [connectedCount, setConnectedCount] = useState(0);
-  const [networkFilter, setNetworkFilter] = useState<"all" | "fresh" | "connected">("all");
+  const [messagedCount, setMessagedCount] = useState(0);
+  const [networkFilter, setNetworkFilter] = useState<"all" | "fresh">("all");
   const [importOpen, setImportOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -3478,17 +3479,8 @@ export function CRMView({
         return true;
       });
     }
-    if (networkFilter === "connected" && (connectedNames.size > 0 || connectedLinkedIns.size > 0)) {
-      return contacts.filter((c) => {
-        const n = normN(c.name ?? "");
-        if (n && connectedNames.has(n)) return true;
-        const li = normL(c.linkedin ?? "");
-        if (li && connectedLinkedIns.has(li)) return true;
-        return false;
-      });
-    }
     return contacts;
-  }, [contacts, networkFilter, invitedNames, invitedLinkedIns, connectedNames, connectedLinkedIns]);
+  }, [contacts, networkFilter, invitedNames, invitedLinkedIns]);
 
   // Search-stage filter — consumes the deferred query, so the input itself
   // stays snappy on slow CPUs even when the table is large. The deps are
@@ -3521,37 +3513,37 @@ export function CRMView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFlash]);
 
-  // Load the user's pending invitations so the "Hide invited" filter
-  // can match contacts against them. One fetch per session is enough —
-  // the user re-imports via Import dialog, which calls reloadInvitations.
+  // Load the user's in-progress contacts (sent invitations + people
+  // they've messaged) so the "Connected & new" filter can hide them.
+  // 1st-degree connections come back tagged but are excluded — we want
+  // them visible. One fetch per session; import dialogs fire events
+  // that re-trigger this.
   const reloadInvitations = () => {
     api.get<{
       invitations: Array<{ name: string; linkedin: string; kind: string | null }>;
       invitedCount?: number;
-      connectedCount?: number;
+      messagedCount?: number;
     }>("/api/people/invitations")
       .then((r) => {
-        // Combined set powers "Hide existing" — anyone we've touched.
-        setInvitedNames(new Set(r.invitations.map((i) => i.name).filter(Boolean)));
-        setInvitedLinkedIns(new Set(r.invitations.map((i) => i.linkedin).filter(Boolean)));
-        // Connections-only subset powers "Connected only".
-        const connRows = r.invitations.filter((i) => i.kind === "connection");
-        setConnectedNames(new Set(connRows.map((i) => i.name).filter(Boolean)));
-        setConnectedLinkedIns(new Set(connRows.map((i) => i.linkedin).filter(Boolean)));
+        const hideRows = r.invitations.filter((i) => i.kind === "invitation" || i.kind === "messaged");
+        setInvitedNames(new Set(hideRows.map((i) => i.name).filter(Boolean)));
+        setInvitedLinkedIns(new Set(hideRows.map((i) => i.linkedin).filter(Boolean)));
         setInvitedCount(r.invitedCount ?? 0);
-        setConnectedCount(r.connectedCount ?? 0);
+        setMessagedCount(r.messagedCount ?? 0);
       })
       .catch(() => { /* non-fatal — filter just stays empty */ });
   };
   useEffect(() => {
     reloadInvitations();
     const onImport = () => reloadInvitations();
-    // Both flavours of import update the matching set.
+    // Any of the three CSV imports updates the matching set.
     window.addEventListener("invitations-imported", onImport);
     window.addEventListener("connections-imported", onImport);
+    window.addEventListener("messages-imported", onImport);
     return () => {
       window.removeEventListener("invitations-imported", onImport);
       window.removeEventListener("connections-imported", onImport);
+      window.removeEventListener("messages-imported", onImport);
     };
   }, []);
 
@@ -4124,11 +4116,10 @@ export function CRMView({
               {filteredContacts.length} of {contacts.length}
             </span>
           )}
-          {/* Network filter — two mutually exclusive pills:
-              "Hide existing" (only people not yet in your network)
-              "Connected only" (people you're already 1st-degree with)
-              Click an active pill again to clear back to "all".
-              Each pill disables itself when the relevant import is empty. */}
+          {/* "Connected & new" — hides in-progress contacts (invitations
+              sent + people messaged), leaving 1st-degree connections and
+              brand-new contacts. Click an active pill to clear. Disabled
+              until the user has imported at least one of the relevant CSVs. */}
           <button
             type="button"
             className={`pill-btn${networkFilter === "fresh" ? " primary" : ""}`}
@@ -4136,36 +4127,15 @@ export function CRMView({
             disabled={invitedNames.size === 0 && invitedLinkedIns.size === 0}
             title={
               invitedNames.size === 0 && invitedLinkedIns.size === 0
-                ? "Import an Invitations.csv or Connections.csv first (Actions → Import LinkedIn data)"
+                ? "Import an Invitations.csv or messages.csv first (Actions → Import LinkedIn data)"
                 : networkFilter === "fresh"
-                  ? `Showing only fresh contacts — hiding ${invitedCount} invited + ${connectedCount} connected`
-                  : `Hide ${invitedCount} invited + ${connectedCount} connected contacts`
+                  ? `Hiding ${invitedCount} pending invites + ${messagedCount} people you've messaged`
+                  : `Hide ${invitedCount} pending invites + ${messagedCount} people you've messaged`
             }
           >
             <IconUsers size={12} />
-            {networkFilter === "fresh" ? "Fresh only" : "Hide existing"}
+            Connected &amp; new
             {networkFilter === "fresh" && (
-              <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: "var(--text-mute)" }}>
-                ({filteredContacts.length})
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            className={`pill-btn${networkFilter === "connected" ? " primary" : ""}`}
-            onClick={() => setNetworkFilter((v) => (v === "connected" ? "all" : "connected"))}
-            disabled={connectedNames.size === 0 && connectedLinkedIns.size === 0}
-            title={
-              connectedNames.size === 0 && connectedLinkedIns.size === 0
-                ? "Import a Connections.csv first (Actions → Import LinkedIn data)"
-                : networkFilter === "connected"
-                  ? `Showing only contacts you're connected to (${connectedCount} in your network)`
-                  : `Show only contacts you're already connected to (${connectedCount} in your network)`
-            }
-          >
-            <IconCheck size={12} />
-            {networkFilter === "connected" ? "Connected only" : "Show connected"}
-            {networkFilter === "connected" && (
               <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 10.5, color: "var(--text-mute)" }}>
                 ({filteredContacts.length})
               </span>
