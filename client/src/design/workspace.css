@@ -3142,7 +3142,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .ov-row {
   display: grid;
-  grid-template-columns: 32px 1fr auto 220px;
+  grid-template-columns: 32px 1fr auto auto 220px;
   align-items: center; gap: 12px;
   padding: 8px 12px;
   background: var(--shell);
@@ -3173,6 +3173,29 @@ button:focus-visible { outline-offset: 3px; }
   border: 1px solid;
   white-space: nowrap;
 }
+/* Hour-precision waiting timer on each "Open messages" row. Two tint
+   states so users can triage at a glance: warm (8h–23h), hot (≥ 24h). */
+.ov-timer {
+  font-family: 'Geist Mono', monospace;
+  font-size: 10.5px; font-weight: 500;
+  padding: 2px 8px; border-radius: 999px;
+  white-space: nowrap;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  border: 1px solid var(--hairline);
+}
+.ov-timer-warm {
+  background: oklch(0.97 0.04 70);
+  color: oklch(0.5 0.14 70);
+  border-color: oklch(0.75 0.10 70);
+}
+.ov-timer-hot {
+  background: oklch(0.97 0.04 25);
+  color: oklch(0.45 0.16 25);
+  border-color: oklch(0.7 0.16 25);
+}
+/* Empty grid cell so follow-up rows align with open-messages rows. */
+.ov-timer-spacer { width: 0; }
 .ov-touch { display: flex; justify-content: flex-end; }
 
 /* ---------- Companies group header row ---------- */

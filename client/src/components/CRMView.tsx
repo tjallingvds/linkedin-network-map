@@ -1468,6 +1468,16 @@ function daysSince(iso: string | null | undefined): number | null {
   return Math.floor((Date.now() - t) / 86_400_000);
 }
 
+/** Hours since the given ISO timestamp. Returns null for null/invalid.
+ *  Used by Overview's "open messages" timer so threshold + label match
+ *  at hour precision — "9h waiting" is more actionable than "<1d". */
+function hoursSince(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  return Math.floor((Date.now() - t) / 3_600_000);
+}
+
 /** Threshold (in days) past which an unreplied outbound counts as stale.
  *  Surfaces the "needs follow-up" cue on the row + the Companies rollup. */
 const STALE_DAYS = 5;
@@ -1690,16 +1700,17 @@ function TouchCell({
 
 /** "Overview" view — surfaces two attention-needed buckets from the
  *  user's pipeline so they don't have to scan the whole table:
- *    - "Needs reply": last touch was inbound (you received) and it's
- *      been ≥ 1 day with no response. The person is waiting on you.
- *    - "Follow up":   stage matches the LLM-resolved "contacted" stage
- *      AND last touch was outbound AND ≥ 4 days have passed. Time to
- *      nudge. The follow-up stage is auto-detected per board (a small
- *      LLM call maps custom stage labels back to the canonical
- *      "reached out, awaiting reply" phase).
+ *    - "Open messages": last touch was inbound (you received) and
+ *      it's been ≥ 8 hours with no response. Each row carries an
+ *      hours-precision "Xh waiting" timer.
+ *    - "Follow up":     stage matches the LLM-resolved "contacted"
+ *      stage AND last touch was outbound AND ≥ 4 days have passed.
+ *      The follow-up stage is auto-detected per board (a small LLM
+ *      call maps custom stage labels back to the canonical "reached
+ *      out, awaiting reply" phase).
  *  Each row exposes the same single-click Sent / Received stamps so
  *  the user can act + clear the row inline. */
-const OVERVIEW_NEEDS_REPLY_DAYS = 1;
+const OVERVIEW_NEEDS_REPLY_HOURS = 8;
 const OVERVIEW_FOLLOWUP_DAYS = 4;
 
 function OverviewView({
@@ -1719,14 +1730,14 @@ function OverviewView({
     const needsReply: CrmContact[] = [];
     const followUp: CrmContact[] = [];
     for (const c of contacts) {
-      const d = daysSince(c.lastTouchAt);
-      if (d == null) continue;
-      if (c.lastTouchDirection === "in" && d >= OVERVIEW_NEEDS_REPLY_DAYS) {
+      const h = hoursSince(c.lastTouchAt);
+      if (h == null) continue;
+      if (c.lastTouchDirection === "in" && h >= OVERVIEW_NEEDS_REPLY_HOURS) {
         needsReply.push(c);
       } else if (
         followUpStageId &&
         c.lastTouchDirection === "out" &&
-        d >= OVERVIEW_FOLLOWUP_DAYS &&
+        h >= OVERVIEW_FOLLOWUP_DAYS * 24 &&
         c.stage === followUpStageId
       ) {
         followUp.push(c);
@@ -1746,8 +1757,20 @@ function OverviewView({
     return m;
   }, [stages]);
 
-  const renderRow = (c: CrmContact, idx: number) => {
+  const renderRow = (
+    c: CrmContact,
+    idx: number,
+    kind: "needsReply" | "followUp",
+  ) => {
     const stage = stageById.get(c.stage);
+    const h = hoursSince(c.lastTouchAt) ?? 0;
+    // Hours-precision timer up to 48h, then day-precision so a 5-day-stale
+    // row doesn't read "120h" — that's harder to parse than "5d".
+    const timerLabel = h < 48 ? `${h}h waiting` : `${Math.floor(h / 24)}d waiting`;
+    // Urgency tint: redder the longer it sits. Tuned for the 8h+ threshold
+    // — anything past 24h reads as fire-engine red.
+    const urgencyClass =
+      h >= 24 ? "ov-timer-hot" : h >= OVERVIEW_NEEDS_REPLY_HOURS ? "ov-timer-warm" : "";
     return (
       <div key={c.id} className="ov-row" onClick={() => onOpen(c)}>
         <div className="ov-avatar" style={{ background: avatarGrad(c.positionIdx ?? idx) }}>
@@ -1759,6 +1782,13 @@ function OverviewView({
             {[c.title, c.company].filter(Boolean).join(" · ") || "—"}
           </div>
         </div>
+        {/* Placeholder span keeps the grid columns aligned across both
+            row kinds — the timer is content-only for "Open messages". */}
+        <span className={kind === "needsReply" ? `ov-timer ${urgencyClass}` : "ov-timer-spacer"}
+          title={kind === "needsReply" ? `Received ${h}h ago` : undefined}
+        >
+          {kind === "needsReply" && <>⏱ {timerLabel}</>}
+        </span>
         {stage && (
           <span
             className="ov-stage-chip"
@@ -1782,16 +1812,18 @@ function OverviewView({
     <div className="ov-wrap">
       <section className="ov-section">
         <header className="ov-head">
-          <h3 className="ov-title">Needs reply</h3>
+          <h3 className="ov-title">Open messages</h3>
           <span className="ov-count">{needsReply.length}</span>
           <span className="ov-hint">
-            You received a message and haven't replied in {OVERVIEW_NEEDS_REPLY_DAYS}+ day{OVERVIEW_NEEDS_REPLY_DAYS === 1 ? "" : "s"}.
+            Inbound messages you haven't replied to in {OVERVIEW_NEEDS_REPLY_HOURS}+ hours.
           </span>
         </header>
         {needsReply.length === 0 ? (
           <div className="ov-empty">All caught up — no inbound messages waiting on you.</div>
         ) : (
-          <div className="ov-list">{needsReply.map(renderRow)}</div>
+          <div className="ov-list">
+            {needsReply.map((c, i) => renderRow(c, i, "needsReply"))}
+          </div>
         )}
       </section>
 
@@ -1810,7 +1842,9 @@ function OverviewView({
             {followUpStageId ? "No follow-ups due." : "Add a stage like \"Contacted\" or \"Reached out\" to surface follow-ups."}
           </div>
         ) : (
-          <div className="ov-list">{followUp.map(renderRow)}</div>
+          <div className="ov-list">
+            {followUp.map((c, i) => renderRow(c, i, "followUp"))}
+          </div>
         )}
       </section>
     </div>
