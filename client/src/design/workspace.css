@@ -3194,8 +3194,6 @@ button:focus-visible { outline-offset: 3px; }
   color: oklch(0.45 0.16 25);
   border-color: oklch(0.7 0.16 25);
 }
-/* Empty grid cell so follow-up rows align with open-messages rows. */
-.ov-timer-spacer { width: 0; }
 .ov-touch { display: flex; justify-content: flex-end; }
 
 /* ---------- Companies group header row ---------- */

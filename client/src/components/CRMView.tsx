@@ -1700,31 +1700,25 @@ function TouchCell({
 
 /** "Overview" view — surfaces two attention-needed buckets from the
  *  user's pipeline so they don't have to scan the whole table:
- *    - "Open messages": last touch was inbound (you received) and
- *      it's been ≥ 8 hours with no response. Each row carries an
- *      hours-precision "Xh waiting" timer.
- *    - "Follow up":     stage matches the LLM-resolved "contacted"
- *      stage AND last touch was outbound AND ≥ 4 days have passed.
- *      The follow-up stage is auto-detected per board (a small LLM
- *      call maps custom stage labels back to the canonical "reached
- *      out, awaiting reply" phase).
+ *    - "Open messages": every inbound touch (you received) the user
+ *      hasn't responded to. No time threshold — incoming messages
+ *      are always actionable. Each row carries a "Xm / Xh / Xd
+ *      waiting" timer that prefers minute precision under an hour.
+ *    - "Follow up":     outbound touches ≥ 4 days old. Threshold is
+ *      purely time-based; we don't try to filter by stage because
+ *      "I sent it, no reply, time to nudge" is the universal signal
+ *      regardless of where the contact sits in the pipeline.
  *  Each row exposes the same single-click Sent / Received stamps so
  *  the user can act + clear the row inline. */
-const OVERVIEW_NEEDS_REPLY_HOURS = 8;
 const OVERVIEW_FOLLOWUP_DAYS = 4;
 
 function OverviewView({
-  contacts, onOpen, onPatch, stages, followUpStageId,
+  contacts, onOpen, onPatch, stages,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   stages: StageDef[];
-  /** The stage that means "I've reached out, waiting on a reply." Null
-   *  when the LLM resolver couldn't map any user-defined stage to it,
-   *  in which case the follow-up bucket simply hides — better than
-   *  surfacing the wrong contacts. */
-  followUpStageId: string | null;
 }) {
   const { needsReply, followUp } = useMemo(() => {
     const needsReply: CrmContact[] = [];
@@ -1732,13 +1726,13 @@ function OverviewView({
     for (const c of contacts) {
       const h = hoursSince(c.lastTouchAt);
       if (h == null) continue;
-      if (c.lastTouchDirection === "in" && h >= OVERVIEW_NEEDS_REPLY_HOURS) {
+      // Inbound — always surface. The user wants to see every message
+      // waiting on a reply, no matter how recently it arrived.
+      if (c.lastTouchDirection === "in") {
         needsReply.push(c);
       } else if (
-        followUpStageId &&
         c.lastTouchDirection === "out" &&
-        h >= OVERVIEW_FOLLOWUP_DAYS * 24 &&
-        c.stage === followUpStageId
+        h >= OVERVIEW_FOLLOWUP_DAYS * 24
       ) {
         followUp.push(c);
       }
@@ -1757,20 +1751,21 @@ function OverviewView({
     return m;
   }, [stages]);
 
-  const renderRow = (
-    c: CrmContact,
-    idx: number,
-    kind: "needsReply" | "followUp",
-  ) => {
+  const renderRow = (c: CrmContact, idx: number) => {
     const stage = stageById.get(c.stage);
-    const h = hoursSince(c.lastTouchAt) ?? 0;
-    // Hours-precision timer up to 48h, then day-precision so a 5-day-stale
-    // row doesn't read "120h" — that's harder to parse than "5d".
-    const timerLabel = h < 48 ? `${h}h waiting` : `${Math.floor(h / 24)}d waiting`;
-    // Urgency tint: redder the longer it sits. Tuned for the 8h+ threshold
-    // — anything past 24h reads as fire-engine red.
-    const urgencyClass =
-      h >= 24 ? "ov-timer-hot" : h >= OVERVIEW_NEEDS_REPLY_HOURS ? "ov-timer-warm" : "";
+    const ms = c.lastTouchAt ? Date.now() - new Date(c.lastTouchAt).getTime() : 0;
+    const minutes = Math.max(0, Math.floor(ms / 60_000));
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    // Pick the coarsest unit that still tells the truth: minutes under
+    // an hour, hours up to 2 days, days after that. Keeps the chip
+    // narrow so it doesn't fight the stage chip for row space.
+    const timerLabel =
+      minutes < 60 ? `${minutes}m waiting` :
+      hours < 48 ? `${hours}h waiting` :
+      `${days}d waiting`;
+    // Urgency tint scales with wait time. Warm at 8h+, hot at 24h+.
+    const urgencyClass = hours >= 24 ? "ov-timer-hot" : hours >= 8 ? "ov-timer-warm" : "";
     return (
       <div key={c.id} className="ov-row" onClick={() => onOpen(c)}>
         <div className="ov-avatar" style={{ background: avatarGrad(c.positionIdx ?? idx) }}>
@@ -1782,12 +1777,15 @@ function OverviewView({
             {[c.title, c.company].filter(Boolean).join(" · ") || "—"}
           </div>
         </div>
-        {/* Placeholder span keeps the grid columns aligned across both
-            row kinds — the timer is content-only for "Open messages". */}
-        <span className={kind === "needsReply" ? `ov-timer ${urgencyClass}` : "ov-timer-spacer"}
-          title={kind === "needsReply" ? `Received ${h}h ago` : undefined}
+        <span
+          className={`ov-timer ${urgencyClass}`}
+          title={
+            c.lastTouchDirection === "in"
+              ? `Received ${timerLabel.replace(" waiting", "")} ago`
+              : `Sent ${timerLabel.replace(" waiting", "")} ago`
+          }
         >
-          {kind === "needsReply" && <>⏱ {timerLabel}</>}
+          ⏱ {timerLabel}
         </span>
         {stage && (
           <span
@@ -1815,15 +1813,13 @@ function OverviewView({
           <h3 className="ov-title">Open messages</h3>
           <span className="ov-count">{needsReply.length}</span>
           <span className="ov-hint">
-            Inbound messages you haven't replied to in {OVERVIEW_NEEDS_REPLY_HOURS}+ hours.
+            Inbound messages you haven't responded to yet — sorted oldest first.
           </span>
         </header>
         {needsReply.length === 0 ? (
           <div className="ov-empty">All caught up — no inbound messages waiting on you.</div>
         ) : (
-          <div className="ov-list">
-            {needsReply.map((c, i) => renderRow(c, i, "needsReply"))}
-          </div>
+          <div className="ov-list">{needsReply.map(renderRow)}</div>
         )}
       </section>
 
@@ -1832,18 +1828,14 @@ function OverviewView({
           <h3 className="ov-title">Follow up</h3>
           <span className="ov-count">{followUp.length}</span>
           <span className="ov-hint">
-            {followUpStageId
-              ? `Sent ≥ ${OVERVIEW_FOLLOWUP_DAYS} days ago, still in "${stageById.get(followUpStageId)?.label ?? followUpStageId}" — time to nudge.`
-              : `No stage on this board looks like a "reached out, awaiting reply" phase, so this bucket is empty.`}
+            Outbound messages ≥ {OVERVIEW_FOLLOWUP_DAYS} days old with no reply yet — time to nudge.
           </span>
         </header>
         {followUp.length === 0 ? (
-          <div className="ov-empty">
-            {followUpStageId ? "No follow-ups due." : "Add a stage like \"Contacted\" or \"Reached out\" to surface follow-ups."}
-          </div>
+          <div className="ov-empty">No follow-ups due.</div>
         ) : (
           <div className="ov-list">
-            {followUp.map((c, i) => renderRow(c, i, "followUp"))}
+            {followUp.map(renderRow)}
           </div>
         )}
       </section>
@@ -3630,11 +3622,6 @@ export function CRMView({
   const [rowHeight, setRowHeight] = useState<CrmRowHeight>(DEFAULT_ROW_HEIGHT);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
   const [stages, setStages] = useState<StageDef[]>(DEFAULT_STAGES);
-  // Which user-defined stage means "I've reached out, awaiting reply"?
-  // Resolved per board by a small LLM call on the server (with id /
-  // label heuristics first). Cached in localStorage against a hash of
-  // the stage labels so a rename triggers a re-resolve.
-  const [followUpStageId, setFollowUpStageId] = useState<string | null>(null);
   // Companies view — when on, the table groups contacts by company under
   // an aggregate header row showing count + last-touch + warmest stage.
   // Per-board so each board remembers its preferred view.
@@ -3741,45 +3728,6 @@ export function CRMView({
     setStages(loadStages(activeId));
     setGroupByCompany(loadGroupByCompany(activeId));
   }, [activeId]);
-
-  // Resolve the "follow-up" stage (the user-defined stage that means
-  // "reached out, awaiting reply") per board. Cached in localStorage
-  // against a fingerprint of the stages so we only ping the LLM when
-  // labels actually change. Only runs when the Overview tab is open,
-  // so users who never use it pay nothing.
-  useEffect(() => {
-    if (!activeId || viewMode !== "overview" || stages.length === 0) return;
-    const fp = stages.map((s) => `${s.id}:${s.label}`).join("|");
-    const cacheKey = `crm.overview.contactedStageId.v1.${activeId}`;
-    try {
-      const cached = JSON.parse(localStorage.getItem(cacheKey) ?? "null") as
-        | { fp: string; id: string | null } | null;
-      if (cached && cached.fp === fp) {
-        setFollowUpStageId(cached.id);
-        return;
-      }
-    } catch { /* corrupt cache — fall through to re-resolve */ }
-    // Cheap synchronous heuristic first, mirrors the server's pre-LLM
-    // check — so on a default board we don't even flash an empty bucket.
-    const byId = stages.find((s) => s.id === "contacted");
-    const byLabel = stages.find((s) => s.label.trim().toLowerCase() === "contacted");
-    const quick = byId?.id ?? byLabel?.id ?? null;
-    if (quick) {
-      setFollowUpStageId(quick);
-      try { localStorage.setItem(cacheKey, JSON.stringify({ fp, id: quick })); } catch { /* full disk */ }
-      return;
-    }
-    // Ask the server to map custom labels back to the canonical stage.
-    let cancelled = false;
-    api.post<{ contactedStageId: string | null }>(`/api/crm/boards/${activeId}/resolve-overview-stages`, {})
-      .then((r) => {
-        if (cancelled) return;
-        setFollowUpStageId(r.contactedStageId);
-        try { localStorage.setItem(cacheKey, JSON.stringify({ fp, id: r.contactedStageId })); } catch { /* full disk */ }
-      })
-      .catch(() => { if (!cancelled) setFollowUpStageId(null); });
-    return () => { cancelled = true; };
-  }, [activeId, viewMode, stages]);
 
   // Callback refs — `onFlash` and `onBoardsChange` are re-created on every
   // parent render (plain arrow functions), so listing them as effect deps
@@ -4518,7 +4466,6 @@ export function CRMView({
           onOpen={setOpenContact}
           onPatch={patchContact}
           stages={stages}
-          followUpStageId={followUpStageId}
         />
       )}
 
