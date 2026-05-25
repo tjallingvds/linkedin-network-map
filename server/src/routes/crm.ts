@@ -361,6 +361,70 @@ router.patch("/boards/:id", async (req: AuthedRequest, res) => {
   });
 });
 
+/**
+ * Resolve which user-defined stage means "I've contacted them, awaiting
+ * response" — drives the Overview view's Follow-up bucket. The user can
+ * rename / replace the default "Contacted" stage, so the Overview tab
+ * needs a robust mapping rather than a hardcoded id. One small LLM
+ * classification per board; the client caches the result against a
+ * checksum of the stage labels so we only re-call when stages change.
+ *
+ * Response: { contactedStageId: string | null }
+ *   - null when there's no plausible match (e.g. a board that never had
+ *     a "reached out, waiting" phase). The client falls back to "no
+ *     follow-up bucket" in that case.
+ */
+router.post("/boards/:boardId/resolve-overview-stages", async (req: AuthedRequest, res) => {
+  const board = await ensureBoard(req.user!.id, req.params.boardId);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+
+  const boardRow = await db
+    .selectFrom("crm_boards")
+    .select("stages")
+    .where("id", "=", req.params.boardId)
+    .executeTakeFirst();
+  type Stage = { id: string; label: string };
+  const stages: Stage[] = Array.isArray(boardRow?.stages) ? (boardRow!.stages as Stage[]) : [];
+  if (stages.length === 0) return res.json({ contactedStageId: null });
+
+  // Cheap heuristic first — exact id / label match catches default boards
+  // without a network round-trip. Only fall through to the LLM when the
+  // user has materially renamed things.
+  const byId = stages.find((s) => s.id === "contacted");
+  if (byId) return res.json({ contactedStageId: byId.id });
+  const byLabel = stages.find((s) => (s.label ?? "").trim().toLowerCase() === "contacted");
+  if (byLabel) return res.json({ contactedStageId: byLabel.id });
+
+  const userKeys = extractUserKeys(req);
+  const provider = availableProviders(userKeys)[0];
+  if (!provider) {
+    // No LLM available — degrade gracefully. Client will hide the
+    // follow-up bucket rather than show a bad match.
+    return res.json({ contactedStageId: null });
+  }
+
+  try {
+    const system =
+      "You map sales/CRM pipeline stage labels to the canonical stage that means " +
+      "\"I have reached out to this person but they have not yet responded\" — " +
+      "the in-flight outreach phase between first contact and a reply. " +
+      "Return the id of the single best match, or null if no stage fits.";
+    const userPrompt =
+      `Stages on this board (id → label):\n` +
+      stages.map((s) => `  ${s.id} → ${s.label}`).join("\n") +
+      `\n\nReturn JSON: {"id": "<chosen-stage-id>" | null, "reason": "<one short clause>"}`;
+    const out = await aiJson<{ id: string | null; reason?: string }>(
+      provider, system, userPrompt,
+      { maxTokens: 200, userId: req.user!.id, userKeys },
+    );
+    const chosen = out?.id && stages.find((s) => s.id === out.id) ? out.id : null;
+    res.json({ contactedStageId: chosen });
+  } catch (err) {
+    console.warn("[resolve-overview-stages] aiJson failed:", (err as Error).message);
+    res.json({ contactedStageId: null });
+  }
+});
+
 router.delete("/boards/:id", async (req: AuthedRequest, res) => {
   const r = await db
     .deleteFrom("crm_boards")

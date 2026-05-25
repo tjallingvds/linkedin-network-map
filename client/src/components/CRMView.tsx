@@ -1692,21 +1692,28 @@ function TouchCell({
  *  user's pipeline so they don't have to scan the whole table:
  *    - "Needs reply": last touch was inbound (you received) and it's
  *      been ≥ 1 day with no response. The person is waiting on you.
- *    - "Follow up":   stage === "contacted" AND last touch was outbound
- *      AND ≥ 4 days have passed. Time to nudge.
+ *    - "Follow up":   stage matches the LLM-resolved "contacted" stage
+ *      AND last touch was outbound AND ≥ 4 days have passed. Time to
+ *      nudge. The follow-up stage is auto-detected per board (a small
+ *      LLM call maps custom stage labels back to the canonical
+ *      "reached out, awaiting reply" phase).
  *  Each row exposes the same single-click Sent / Received stamps so
  *  the user can act + clear the row inline. */
 const OVERVIEW_NEEDS_REPLY_DAYS = 1;
 const OVERVIEW_FOLLOWUP_DAYS = 4;
-const OVERVIEW_FOLLOWUP_STAGE_ID = "contacted";
 
 function OverviewView({
-  contacts, onOpen, onPatch, stages,
+  contacts, onOpen, onPatch, stages, followUpStageId,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   stages: StageDef[];
+  /** The stage that means "I've reached out, waiting on a reply." Null
+   *  when the LLM resolver couldn't map any user-defined stage to it,
+   *  in which case the follow-up bucket simply hides — better than
+   *  surfacing the wrong contacts. */
+  followUpStageId: string | null;
 }) {
   const { needsReply, followUp } = useMemo(() => {
     const needsReply: CrmContact[] = [];
@@ -1717,9 +1724,10 @@ function OverviewView({
       if (c.lastTouchDirection === "in" && d >= OVERVIEW_NEEDS_REPLY_DAYS) {
         needsReply.push(c);
       } else if (
+        followUpStageId &&
         c.lastTouchDirection === "out" &&
         d >= OVERVIEW_FOLLOWUP_DAYS &&
-        c.stage === OVERVIEW_FOLLOWUP_STAGE_ID
+        c.stage === followUpStageId
       ) {
         followUp.push(c);
       }
@@ -1792,11 +1800,15 @@ function OverviewView({
           <h3 className="ov-title">Follow up</h3>
           <span className="ov-count">{followUp.length}</span>
           <span className="ov-hint">
-            Sent ≥ {OVERVIEW_FOLLOWUP_DAYS} days ago, still in "Contacted" — time to nudge.
+            {followUpStageId
+              ? `Sent ≥ ${OVERVIEW_FOLLOWUP_DAYS} days ago, still in "${stageById.get(followUpStageId)?.label ?? followUpStageId}" — time to nudge.`
+              : `No stage on this board looks like a "reached out, awaiting reply" phase, so this bucket is empty.`}
           </span>
         </header>
         {followUp.length === 0 ? (
-          <div className="ov-empty">No follow-ups due.</div>
+          <div className="ov-empty">
+            {followUpStageId ? "No follow-ups due." : "Add a stage like \"Contacted\" or \"Reached out\" to surface follow-ups."}
+          </div>
         ) : (
           <div className="ov-list">{followUp.map(renderRow)}</div>
         )}
@@ -3584,6 +3596,11 @@ export function CRMView({
   const [rowHeight, setRowHeight] = useState<CrmRowHeight>(DEFAULT_ROW_HEIGHT);
   const [kanbanFields, setKanbanFields] = useState<string[]>(KANBAN_DEFAULT);
   const [stages, setStages] = useState<StageDef[]>(DEFAULT_STAGES);
+  // Which user-defined stage means "I've reached out, awaiting reply"?
+  // Resolved per board by a small LLM call on the server (with id /
+  // label heuristics first). Cached in localStorage against a hash of
+  // the stage labels so a rename triggers a re-resolve.
+  const [followUpStageId, setFollowUpStageId] = useState<string | null>(null);
   // Companies view — when on, the table groups contacts by company under
   // an aggregate header row showing count + last-touch + warmest stage.
   // Per-board so each board remembers its preferred view.
@@ -3690,6 +3707,45 @@ export function CRMView({
     setStages(loadStages(activeId));
     setGroupByCompany(loadGroupByCompany(activeId));
   }, [activeId]);
+
+  // Resolve the "follow-up" stage (the user-defined stage that means
+  // "reached out, awaiting reply") per board. Cached in localStorage
+  // against a fingerprint of the stages so we only ping the LLM when
+  // labels actually change. Only runs when the Overview tab is open,
+  // so users who never use it pay nothing.
+  useEffect(() => {
+    if (!activeId || viewMode !== "overview" || stages.length === 0) return;
+    const fp = stages.map((s) => `${s.id}:${s.label}`).join("|");
+    const cacheKey = `crm.overview.contactedStageId.v1.${activeId}`;
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) ?? "null") as
+        | { fp: string; id: string | null } | null;
+      if (cached && cached.fp === fp) {
+        setFollowUpStageId(cached.id);
+        return;
+      }
+    } catch { /* corrupt cache — fall through to re-resolve */ }
+    // Cheap synchronous heuristic first, mirrors the server's pre-LLM
+    // check — so on a default board we don't even flash an empty bucket.
+    const byId = stages.find((s) => s.id === "contacted");
+    const byLabel = stages.find((s) => s.label.trim().toLowerCase() === "contacted");
+    const quick = byId?.id ?? byLabel?.id ?? null;
+    if (quick) {
+      setFollowUpStageId(quick);
+      try { localStorage.setItem(cacheKey, JSON.stringify({ fp, id: quick })); } catch { /* full disk */ }
+      return;
+    }
+    // Ask the server to map custom labels back to the canonical stage.
+    let cancelled = false;
+    api.post<{ contactedStageId: string | null }>(`/api/crm/boards/${activeId}/resolve-overview-stages`, {})
+      .then((r) => {
+        if (cancelled) return;
+        setFollowUpStageId(r.contactedStageId);
+        try { localStorage.setItem(cacheKey, JSON.stringify({ fp, id: r.contactedStageId })); } catch { /* full disk */ }
+      })
+      .catch(() => { if (!cancelled) setFollowUpStageId(null); });
+    return () => { cancelled = true; };
+  }, [activeId, viewMode, stages]);
 
   // Callback refs — `onFlash` and `onBoardsChange` are re-created on every
   // parent render (plain arrow functions), so listing them as effect deps
@@ -4428,6 +4484,7 @@ export function CRMView({
           onOpen={setOpenContact}
           onPatch={patchContact}
           stages={stages}
+          followUpStageId={followUpStageId}
         />
       )}
 
