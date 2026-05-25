@@ -3084,6 +3084,18 @@ button:focus-visible { outline-offset: 3px; }
   flex-shrink: 0;
 }
 .touch-text { white-space: nowrap; }
+/* Filled state: time pill + two compact arrow buttons.
+   The mini buttons are arrow-only so all three fit comfortably in
+   the default ~180px column without truncating the relative-time. */
+.touch-cell-filled { gap: 3px; flex-wrap: nowrap; }
+.touch-cell-filled .touch-display { flex: 1 1 auto; min-width: 0; }
+.touch-cell-filled .touch-text { overflow: hidden; text-overflow: ellipsis; }
+.touch-btn-mini {
+  padding: 3px 6px;
+  flex: 0 0 auto;
+  min-width: 22px;
+  justify-content: center;
+}
 .touch-menu {
   position: absolute;
   top: calc(100% + 4px); left: 0;
@@ -3094,6 +3106,74 @@ button:focus-visible { outline-offset: 3px; }
   padding: 6px 10px 8px;
 }
 .touch-backdate .ed-input { width: 100%; font-size: 12px; }
+
+/* ---------- Overview view ----------
+   Surfaces "Needs reply" + "Follow up" buckets so users don't have to
+   scan the whole pipeline to find what's waiting on them. */
+.ov-wrap {
+  display: flex; flex-direction: column; gap: 24px;
+  padding: 20px 24px 32px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.ov-section {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.ov-head {
+  display: flex; align-items: baseline; gap: 10px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--hairline);
+}
+.ov-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.ov-count {
+  font-family: 'Geist Mono', monospace; font-size: 11px;
+  padding: 1px 8px; border-radius: 999px;
+  background: var(--panel-2); color: var(--text-dim);
+  border: 1px solid var(--hairline);
+}
+.ov-hint {
+  font-size: 11.5px; color: var(--text-mute); margin-left: 4px;
+}
+.ov-empty {
+  padding: 14px 12px; color: var(--text-mute); font-size: 12.5px;
+  background: var(--panel); border: 1px dashed var(--hairline); border-radius: 8px;
+}
+.ov-list {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.ov-row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto 220px;
+  align-items: center; gap: 12px;
+  padding: 8px 12px;
+  background: var(--shell);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+.ov-row:hover { background: var(--panel-2); border-color: var(--hairline-strong); }
+.ov-avatar {
+  width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 600; color: white;
+  flex-shrink: 0;
+}
+.ov-meta { min-width: 0; }
+.ov-name {
+  font-size: 13px; font-weight: 500; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ov-sub {
+  font-size: 11.5px; color: var(--text-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ov-stage-chip {
+  font-size: 10.5px; font-weight: 500;
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.ov-touch { display: flex; justify-content: flex-end; }
 
 /* ---------- Companies group header row ---------- */
 /* Sits above each company's people rows in the grouped-by-company table.

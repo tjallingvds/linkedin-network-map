@@ -172,7 +172,7 @@ export function DiscoverPage() {
   const [lastProspects, setLastProspects] = useState<Prospect[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [appMode, setAppMode] = useState<"discover" | "crm">("discover");
-  const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table">("kanban");
+  const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table" | "overview">("kanban");
   const [activeBoardId, setActiveBoardId] = useState<string>("");
   const [view, setView] = useState<"hero" | "thread">("hero");
   const [thread, setThread] = useState<ThreadEntry[]>([]);

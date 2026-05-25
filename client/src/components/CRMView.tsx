@@ -1607,29 +1607,34 @@ function TouchCell({
     setOpen(false);
   };
 
+  // Empty state — just the two stamp buttons, single-click logs.
   if (!at || !direction) {
     return (
       <div className="touch-cell" onClick={(e) => e.stopPropagation()}>
-        <button className="touch-btn touch-out" onClick={() => stamp("out")} title="Mark as Sent now">
+        <button className="touch-btn touch-out" onClick={() => stamp("out")} title="Log Sent now">
           <span className="touch-arrow">↗</span>Sent
         </button>
-        <button className="touch-btn touch-in" onClick={() => stamp("in")} title="Mark as Received now">
+        <button className="touch-btn touch-in" onClick={() => stamp("in")} title="Log Received now">
           <span className="touch-arrow">↘</span>Received
         </button>
       </div>
     );
   }
 
+  // Touched state — keep the two stamp buttons surfaced as one-click
+  // re-log actions (clicking either updates the timestamp + direction
+  // immediately). The relative-time pill stays as the surface for
+  // advanced ops (backdate / clear) via the popover.
   const days = daysSince(at) ?? 0;
   const stale = direction === "out" && days >= STALE_DAYS;
   const relTime = formatRelativeTime(at);
   return (
-    <div className="touch-cell" onClick={(e) => e.stopPropagation()}>
+    <div className="touch-cell touch-cell-filled" onClick={(e) => e.stopPropagation()}>
       <button
         type="button"
         className={`touch-display${stale ? " touch-stale" : ""}`}
         onClick={() => setOpen((o) => !o)}
-        title={`Last touch: ${relTime} (${direction === "out" ? "you sent" : "you received"})`}
+        title={`Last touch: ${relTime} (${direction === "out" ? "you sent" : "you received"}) — click for backdate / clear`}
       >
         <span className={`touch-arrow ${direction === "out" ? "touch-out-arrow" : "touch-in-arrow"}`}>
           {direction === "out" ? "↗" : "↘"}
@@ -1637,21 +1642,30 @@ function TouchCell({
         <span className="touch-text">{relTime}</span>
         {stale && <span className="touch-stale-dot" aria-label="needs follow-up" />}
       </button>
+      <button
+        type="button"
+        className="touch-btn touch-btn-mini touch-out"
+        onClick={() => stamp("out")}
+        title="Log Sent now"
+        aria-label="Log Sent now"
+      >
+        <span className="touch-arrow">↗</span>
+      </button>
+      <button
+        type="button"
+        className="touch-btn touch-btn-mini touch-in"
+        onClick={() => stamp("in")}
+        title="Log Received now"
+        aria-label="Log Received now"
+      >
+        <span className="touch-arrow">↘</span>
+      </button>
       {open && (
         <>
           <div className="board-menu-bg" onClick={() => setOpen(false)} />
           <div className="board-menu touch-menu">
-            <button className="bm-item" onClick={() => stamp("out")}>
-              <span className="touch-arrow touch-out-arrow">↗</span>
-              <span style={{ flex: 1 }}>Mark Sent now</span>
-            </button>
-            <button className="bm-item" onClick={() => stamp("in")}>
-              <span className="touch-arrow touch-in-arrow">↘</span>
-              <span style={{ flex: 1 }}>Mark Received now</span>
-            </button>
-            <div className="bm-sep" />
+            <div className="bm-label">Backdate</div>
             <div className="touch-backdate">
-              <span className="bm-label" style={{ padding: 0 }}>Backdate</span>
               <input
                 type="date"
                 className="ed-input"
@@ -1670,6 +1684,123 @@ function TouchCell({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** "Overview" view — surfaces two attention-needed buckets from the
+ *  user's pipeline so they don't have to scan the whole table:
+ *    - "Needs reply": last touch was inbound (you received) and it's
+ *      been ≥ 1 day with no response. The person is waiting on you.
+ *    - "Follow up":   stage === "contacted" AND last touch was outbound
+ *      AND ≥ 4 days have passed. Time to nudge.
+ *  Each row exposes the same single-click Sent / Received stamps so
+ *  the user can act + clear the row inline. */
+const OVERVIEW_NEEDS_REPLY_DAYS = 1;
+const OVERVIEW_FOLLOWUP_DAYS = 4;
+const OVERVIEW_FOLLOWUP_STAGE_ID = "contacted";
+
+function OverviewView({
+  contacts, onOpen, onPatch, stages,
+}: {
+  contacts: CrmContact[];
+  onOpen: (c: CrmContact) => void;
+  onPatch: (id: string, patch: Partial<CrmContact>) => void;
+  stages: StageDef[];
+}) {
+  const { needsReply, followUp } = useMemo(() => {
+    const needsReply: CrmContact[] = [];
+    const followUp: CrmContact[] = [];
+    for (const c of contacts) {
+      const d = daysSince(c.lastTouchAt);
+      if (d == null) continue;
+      if (c.lastTouchDirection === "in" && d >= OVERVIEW_NEEDS_REPLY_DAYS) {
+        needsReply.push(c);
+      } else if (
+        c.lastTouchDirection === "out" &&
+        d >= OVERVIEW_FOLLOWUP_DAYS &&
+        c.stage === OVERVIEW_FOLLOWUP_STAGE_ID
+      ) {
+        followUp.push(c);
+      }
+    }
+    // Oldest first — most stale work surfaces at the top.
+    const byStaleness = (a: CrmContact, b: CrmContact) =>
+      (new Date(a.lastTouchAt ?? 0).getTime()) - (new Date(b.lastTouchAt ?? 0).getTime());
+    needsReply.sort(byStaleness);
+    followUp.sort(byStaleness);
+    return { needsReply, followUp };
+  }, [contacts]);
+
+  const stageById = useMemo(() => {
+    const m = new Map<string, StageDef>();
+    for (const s of stages) m.set(s.id, s);
+    return m;
+  }, [stages]);
+
+  const renderRow = (c: CrmContact, idx: number) => {
+    const stage = stageById.get(c.stage);
+    return (
+      <div key={c.id} className="ov-row" onClick={() => onOpen(c)}>
+        <div className="ov-avatar" style={{ background: avatarGrad(c.positionIdx ?? idx) }}>
+          {initials(c.name)}
+        </div>
+        <div className="ov-meta">
+          <div className="ov-name">{c.name || "Unnamed"}</div>
+          <div className="ov-sub">
+            {[c.title, c.company].filter(Boolean).join(" · ") || "—"}
+          </div>
+        </div>
+        {stage && (
+          <span
+            className="ov-stage-chip"
+            style={{ background: stage.tint, color: stage.color, borderColor: stage.color }}
+          >
+            {stage.label}
+          </span>
+        )}
+        <div className="ov-touch" onClick={(e) => e.stopPropagation()}>
+          <TouchCell
+            at={c.lastTouchAt}
+            direction={c.lastTouchDirection}
+            onChange={(patch) => onPatch(c.id, patch)}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="ov-wrap">
+      <section className="ov-section">
+        <header className="ov-head">
+          <h3 className="ov-title">Needs reply</h3>
+          <span className="ov-count">{needsReply.length}</span>
+          <span className="ov-hint">
+            You received a message and haven't replied in {OVERVIEW_NEEDS_REPLY_DAYS}+ day{OVERVIEW_NEEDS_REPLY_DAYS === 1 ? "" : "s"}.
+          </span>
+        </header>
+        {needsReply.length === 0 ? (
+          <div className="ov-empty">All caught up — no inbound messages waiting on you.</div>
+        ) : (
+          <div className="ov-list">{needsReply.map(renderRow)}</div>
+        )}
+      </section>
+
+      <section className="ov-section">
+        <header className="ov-head">
+          <h3 className="ov-title">Follow up</h3>
+          <span className="ov-count">{followUp.length}</span>
+          <span className="ov-hint">
+            Sent ≥ {OVERVIEW_FOLLOWUP_DAYS} days ago, still in "Contacted" — time to nudge.
+          </span>
+        </header>
+        {followUp.length === 0 ? (
+          <div className="ov-empty">No follow-ups due.</div>
+        ) : (
+          <div className="ov-list">{followUp.map(renderRow)}</div>
+        )}
+      </section>
     </div>
   );
 }
@@ -3392,8 +3523,8 @@ export function CRMView({
   viewMode, setViewMode, onFlash,
   activeBoardId, onActiveBoardChange, onBoardsChange,
 }: {
-  viewMode: "kanban" | "table";
-  setViewMode: (v: "kanban" | "table") => void;
+  viewMode: "kanban" | "table" | "overview";
+  setViewMode: (v: "kanban" | "table" | "overview") => void;
   onFlash: (msg: string) => void;
   /** Optional controlled active board — when provided, changes bubble up via onActiveBoardChange. */
   activeBoardId?: string;
@@ -4084,6 +4215,9 @@ export function CRMView({
       <div className="crm-toolbar">
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <div className="view-toggle">
+            <button className={viewMode === "overview" ? "active" : ""} onClick={() => setViewMode("overview")} title="Things needing your attention">
+              <IconSparkle size={12} />Overview
+            </button>
             <button className={viewMode === "kanban" ? "active" : ""} onClick={() => setViewMode("kanban")}>
               <IconList size={12} style={{ transform: "rotate(90deg)" }} />Board
             </button>
@@ -4261,7 +4395,7 @@ export function CRMView({
         </div>
       </div>
 
-      {viewMode === "kanban" ? (
+      {viewMode === "kanban" && (
         <KanbanBoard
           contacts={filteredContacts}
           onOpen={setOpenContact}
@@ -4273,7 +4407,8 @@ export function CRMView({
           onStagesChange={persistStages}
           onReassign={reassignStage}
         />
-      ) : (
+      )}
+      {viewMode === "table" && (
         <TableView
           contacts={filteredContacts}
           onOpen={setOpenContact}
@@ -4285,6 +4420,14 @@ export function CRMView({
           onRowHeightChange={saveRowHeight}
           onOpenPage={openPage}
           groupByCompany={groupByCompany}
+        />
+      )}
+      {viewMode === "overview" && (
+        <OverviewView
+          contacts={filteredContacts}
+          onOpen={setOpenContact}
+          onPatch={patchContact}
+          stages={stages}
         />
       )}
 
