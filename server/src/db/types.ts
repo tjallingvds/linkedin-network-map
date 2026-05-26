@@ -164,6 +164,9 @@ export interface CrmContactsTable {
   /** Direction of the most recent touch — 'in' (we received) or 'out' (we sent). */
   last_touch_direction: string | null;
   next_step: string | null;
+  /** Hard deadline tied to next_step ("send him the deck by Friday").
+   *  Null when the user hasn't promised anything time-bound. */
+  next_step_due_at: Timestamp | null;
   source: string | null;
   notes: string | null;
   message_notes: string | null;

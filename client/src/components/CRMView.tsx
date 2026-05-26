@@ -1435,6 +1435,94 @@ function DateCellEditor({
   );
 }
 
+/** Next-step cell — the promise text plus a hard deadline date.
+ *  Both edit independently and patch back together; the deadline
+ *  surfaces in the Overview "Deadlines" section so the user
+ *  doesn't have to scan the table for things they owe. */
+function NextStepCell({
+  text, dueAt, onChange,
+}: {
+  text: string | null | undefined;
+  dueAt: string | null | undefined;
+  onChange: (patch: { nextStep?: string | null; nextStepDueAt?: string | null }) => void;
+}) {
+  const [editingText, setEditingText] = useState(false);
+  const [editingDate, setEditingDate] = useState(false);
+  const textRef = useRef<HTMLInputElement>(null);
+  const dateRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (editingText) textRef.current?.focus(); }, [editingText]);
+  useEffect(() => { if (editingDate) dateRef.current?.focus(); }, [editingDate]);
+
+  // Overdue / due-soon tint on the date pill — same urgency cues as
+  // the Overview timer so the table reads at a glance.
+  const dueClass = (() => {
+    if (!dueAt) return "";
+    const d = new Date(dueAt).getTime();
+    if (!Number.isFinite(d)) return "";
+    const ms = d - Date.now();
+    if (ms < 0) return "nx-due-overdue";
+    if (ms < 2 * 86_400_000) return "nx-due-soon";
+    return "";
+  })();
+  const dueDisplay = dueAt ? formatDateDisplay(dueAt) : "";
+
+  return (
+    <div className="nx-cell" onClick={(e) => e.stopPropagation()}>
+      {editingText ? (
+        <input
+          ref={textRef}
+          type="text"
+          className="ed-input nx-text-input"
+          defaultValue={text ?? ""}
+          placeholder="Promise / next step"
+          onBlur={(e) => {
+            setEditingText(false);
+            if (e.target.value !== (text ?? "")) onChange({ nextStep: e.target.value || null });
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Escape") setEditingText(false);
+          }}
+        />
+      ) : (
+        <span
+          className="nx-text"
+          onClick={(e) => { e.stopPropagation(); setEditingText(true); }}
+        >
+          {text || <em style={{ color: "var(--text-mute)" }}>+ promise</em>}
+        </span>
+      )}
+      {editingDate ? (
+        <input
+          ref={dateRef}
+          type="date"
+          className="ed-input nx-date-input"
+          defaultValue={dueAt ? dueAt.slice(0, 10) : ""}
+          onBlur={(e) => {
+            setEditingDate(false);
+            // Normalize to noon UTC so the date doesn't drift across timezones.
+            const next = e.target.value ? new Date(`${e.target.value}T12:00:00Z`).toISOString() : null;
+            if (next !== (dueAt ?? null)) onChange({ nextStepDueAt: next });
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Escape") setEditingDate(false);
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          className={`nx-due ${dueClass}`}
+          onClick={() => setEditingDate(true)}
+          title={dueAt ? `Due ${dueDisplay} — click to change` : "Set deadline"}
+        >
+          {dueAt ? `📅 ${dueDisplay}` : "📅 set"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function formatDateDisplay(iso: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
   if (!m) return iso;
@@ -1720,29 +1808,37 @@ function OverviewView({
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   stages: StageDef[];
 }) {
-  const { needsReply, followUp } = useMemo(() => {
+  const { needsReply, followUp, deadlines } = useMemo(() => {
     const needsReply: CrmContact[] = [];
     const followUp: CrmContact[] = [];
+    const deadlines: CrmContact[] = [];
     for (const c of contacts) {
       const h = hoursSince(c.lastTouchAt);
-      if (h == null) continue;
       // Inbound — always surface. The user wants to see every message
       // waiting on a reply, no matter how recently it arrived.
-      if (c.lastTouchDirection === "in") {
+      if (h != null && c.lastTouchDirection === "in") {
         needsReply.push(c);
       } else if (
+        h != null &&
         c.lastTouchDirection === "out" &&
         h >= OVERVIEW_FOLLOWUP_DAYS * 24
       ) {
         followUp.push(c);
       }
+      // Hard deadlines are independent of touch state — a promise is a
+      // promise whether the conversation is hot or cold.
+      if (c.nextStepDueAt) deadlines.push(c);
     }
-    // Oldest first — most stale work surfaces at the top.
+    // Oldest first for touch buckets — most stale work surfaces at top.
     const byStaleness = (a: CrmContact, b: CrmContact) =>
       (new Date(a.lastTouchAt ?? 0).getTime()) - (new Date(b.lastTouchAt ?? 0).getTime());
+    // Deadlines sort soonest-first (overdue → today → next week → later).
+    const byDueAt = (a: CrmContact, b: CrmContact) =>
+      (new Date(a.nextStepDueAt ?? 0).getTime()) - (new Date(b.nextStepDueAt ?? 0).getTime());
     needsReply.sort(byStaleness);
     followUp.sort(byStaleness);
-    return { needsReply, followUp };
+    deadlines.sort(byDueAt);
+    return { needsReply, followUp, deadlines };
   }, [contacts]);
 
   const stageById = useMemo(() => {
@@ -1806,8 +1902,79 @@ function OverviewView({
     );
   };
 
+  const renderDeadlineRow = (c: CrmContact, idx: number) => {
+    const dueMs = c.nextStepDueAt ? new Date(c.nextStepDueAt).getTime() : 0;
+    const diffMs = dueMs - Date.now();
+    const diffDays = Math.round(diffMs / 86_400_000);
+    let chip = "";
+    let chipClass = "ov-timer";
+    if (diffMs < 0) {
+      // Overdue — count days late, capped at 90 for layout.
+      const late = Math.min(90, Math.abs(diffDays));
+      chip = late === 0 ? "Overdue today" : `Overdue ${late}d`;
+      chipClass = "ov-timer ov-timer-hot";
+    } else if (diffDays === 0) {
+      chip = "Due today";
+      chipClass = "ov-timer ov-timer-warm";
+    } else if (diffDays <= 2) {
+      chip = `Due in ${diffDays}d`;
+      chipClass = "ov-timer ov-timer-warm";
+    } else {
+      chip = `Due in ${diffDays}d`;
+    }
+    return (
+      <div key={c.id} className="ov-row ov-row-deadline" onClick={() => onOpen(c)}>
+        <div className="ov-avatar" style={{ background: avatarGrad(c.positionIdx ?? idx) }}>
+          {initials(c.name)}
+        </div>
+        <div className="ov-meta">
+          <div className="ov-name">{c.name || "Unnamed"}</div>
+          <div className="ov-sub ov-promise">
+            {c.nextStep || <em style={{ color: "var(--text-mute)" }}>(no description)</em>}
+          </div>
+        </div>
+        <span className={chipClass} title={c.nextStepDueAt ? `Due ${formatDateDisplay(c.nextStepDueAt)}` : ""}>
+          ⏰ {chip}
+        </span>
+        <button
+          type="button"
+          className="ov-done"
+          onClick={(e) => {
+            e.stopPropagation();
+            // Mark done: clear both the promise text and the due date.
+            // (Cheap MVP — no separate "completed" log. The user can
+            //  re-add it if needed.)
+            onPatch(c.id, { nextStep: null, nextStepDueAt: null });
+          }}
+          title="Mark as done — clears the promise + deadline"
+          aria-label="Mark done"
+        >
+          ✓ Done
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div className="ov-wrap">
+      {/* Deadlines first — hard promises trump anything else. */}
+      <section className="ov-section">
+        <header className="ov-head">
+          <h3 className="ov-title">Deadlines</h3>
+          <span className="ov-count">{deadlines.length}</span>
+          <span className="ov-hint">
+            Promises with a hard date. Overdue first, then by due date.
+          </span>
+        </header>
+        {deadlines.length === 0 ? (
+          <div className="ov-empty">
+            No deadlines set. Add one from any contact's Next step cell — pick a date next to the promise text.
+          </div>
+        ) : (
+          <div className="ov-list">{deadlines.map(renderDeadlineRow)}</div>
+        )}
+      </section>
+
       <section className="ov-section">
         <header className="ov-head">
           <h3 className="ov-title">Open messages</h3>
@@ -2682,7 +2849,13 @@ function TableView({
           onChange={(patch) => onPatch(p.id, patch)}
         />
       );
-      case "nextStep":return <EditableCell value={p.nextStep} onSave={(v) => onPatch(p.id, { nextStep: v })} />;
+      case "nextStep":return (
+        <NextStepCell
+          text={p.nextStep}
+          dueAt={p.nextStepDueAt}
+          onChange={(patch) => onPatch(p.id, patch)}
+        />
+      );
       case "source":  return <span className="src-chip">{p.source ?? ""}</span>;
       case "messageNotes": return <LongTextCellEditor value={p.messageNotes} onSave={(v) => onPatch(p.id, { messageNotes: v })} />;
       case "notes":   return <LongTextCellEditor value={p.notes} onSave={(v) => onPatch(p.id, { notes: v })} />;
@@ -3435,7 +3608,13 @@ export function CRMDrawer({
           onChange={(patch) => onPatch(contact.id, patch)}
         />
       );
-      case "nextStep":     return <EditableCell value={contact.nextStep} onSave={(v) => onPatch(contact.id, { nextStep: v })} />;
+      case "nextStep":     return (
+        <NextStepCell
+          text={contact.nextStep}
+          dueAt={contact.nextStepDueAt}
+          onChange={(patch) => onPatch(contact.id, patch)}
+        />
+      );
       case "source":       return <EditableCell value={contact.source} onSave={(v) => onPatch(contact.id, { source: v })} />;
       case "messageNotes": return <LongTextCellEditor value={contact.messageNotes} onSave={(v) => onPatch(contact.id, { messageNotes: v })} />;
       case "notes":        return <LongTextCellEditor value={contact.notes} onSave={(v) => onPatch(contact.id, { notes: v })} />;

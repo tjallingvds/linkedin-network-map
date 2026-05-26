@@ -108,6 +108,9 @@ function toCamelContact(row: Record<string, unknown>) {
       : (row.last_touch_at as string | null) ?? null,
     lastTouchDirection: (row.last_touch_direction as "in" | "out" | null | undefined) ?? null,
     nextStep: row.next_step,
+    nextStepDueAt: row.next_step_due_at instanceof Date
+      ? row.next_step_due_at.toISOString()
+      : (row.next_step_due_at as string | null) ?? null,
     source: row.source,
     notes: row.notes,
     messageNotes: row.message_notes ?? null,
@@ -429,6 +432,7 @@ const contactInput = z.object({
   lastTouchAt: z.string().nullish(),
   lastTouchDirection: z.enum(["in", "out"]).nullish(),
   nextStep: z.string().nullish(),
+  nextStepDueAt: z.string().nullish(),
   source: z.string().nullish(),
   notes: z.string().nullish(),
   messageNotes: z.string().nullish(),
@@ -444,6 +448,14 @@ const contactInput = z.object({
 router.get("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
   const board = await ensureBoard(req.user!.id, req.params.boardId);
   if (!board) return res.status(404).json({ error: "board_not_found" });
+
+  // Self-heal so a deploy that missed the next_step_due_at migration
+  // doesn't crash the first read. Cheap idempotent DDL.
+  try {
+    await sql`ALTER TABLE crm_contacts ADD COLUMN IF NOT EXISTS next_step_due_at TIMESTAMPTZ`.execute(db);
+  } catch (err) {
+    console.warn("[contacts] ensure next_step_due_at failed:", (err as Error).message);
+  }
 
   // Auto-dedup sweep on board load. Two rows are duplicates if they share
   // a normalised LinkedIn URL OR (both have no LinkedIn AND share a
@@ -797,13 +809,17 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
     const v = (body as Record<string, unknown>)[k];
     if (v !== undefined) update[col] = v ?? null;
   }
-  // last_touch_at is a timestamptz — coerce ISO string → Date so the driver
-  // binds it correctly. Direction is just a text column.
+  // last_touch_at + next_step_due_at are timestamptz — coerce ISO string
+  // → Date so the driver binds them correctly. Direction is just a
+  // text column.
   if (body.lastTouchAt !== undefined) {
     update.last_touch_at = body.lastTouchAt ? new Date(body.lastTouchAt) : null;
   }
   if (body.lastTouchDirection !== undefined) {
     update.last_touch_direction = body.lastTouchDirection ?? null;
+  }
+  if (body.nextStepDueAt !== undefined) {
+    update.next_step_due_at = body.nextStepDueAt ? new Date(body.nextStepDueAt) : null;
   }
 
   if (body.customFields !== undefined) {

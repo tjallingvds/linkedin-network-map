@@ -3196,6 +3196,67 @@ button:focus-visible { outline-offset: 3px; }
 }
 .ov-touch { display: flex; justify-content: flex-end; }
 
+/* ---------- Next-step cell (promise text + hard deadline) ---------- */
+.nx-cell {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; min-width: 0;
+}
+.nx-text {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 2px 4px; border-radius: 4px;
+  cursor: text; font-size: 12.5px; color: var(--text);
+}
+.nx-text:hover { background: var(--panel-2); }
+.nx-text-input { flex: 1 1 auto; min-width: 0; }
+.nx-date-input { width: 140px; flex-shrink: 0; }
+.nx-due {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 7px;
+  font-size: 11px; font-weight: 500;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--shell);
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms, border-color 120ms;
+}
+.nx-due:hover { background: var(--panel-2); border-color: var(--hairline-strong); color: var(--text); }
+.nx-due-soon {
+  background: oklch(0.97 0.04 70);
+  color: oklch(0.5 0.14 70);
+  border-color: oklch(0.75 0.10 70);
+}
+.nx-due-overdue {
+  background: oklch(0.97 0.04 25);
+  color: oklch(0.45 0.16 25);
+  border-color: oklch(0.7 0.16 25);
+}
+
+/* ---------- Deadline row in Overview ---------- */
+.ov-row-deadline { grid-template-columns: 32px 1fr auto auto auto; }
+.ov-promise {
+  color: var(--text);
+  font-style: normal;
+}
+.ov-done {
+  flex: 0 0 auto;
+  font-size: 11px; font-weight: 500;
+  padding: 4px 10px; border-radius: 6px;
+  border: 1px solid var(--hairline);
+  background: var(--shell);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.ov-done:hover {
+  background: oklch(0.96 0.06 150);
+  color: oklch(0.45 0.14 150);
+  border-color: oklch(0.65 0.14 150);
+}
+
 /* ---------- Companies group header row ---------- */
 /* Sits above each company's people rows in the grouped-by-company table.
    Spans the full table width (block-level, ignores the grid columns). */

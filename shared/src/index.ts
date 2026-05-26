@@ -127,6 +127,12 @@ export interface CrmContact {
   /** Direction of the most recent touch — 'in' (received) or 'out' (sent). */
   lastTouchDirection: "in" | "out" | null;
   nextStep: string | null;
+  /** Hard deadline tied to nextStep — ISO timestamp of the date the
+   *  user promised to deliver ("send him the deck by Friday").
+   *  Surfaces in the Overview "Deadlines" section with overdue +
+   *  due-soon countdowns. Optional for back-compat with older
+   *  clients that haven't deployed the schema bump. */
+  nextStepDueAt?: string | null;
   source: string | null;
   notes: string | null;
   /** Free-form "what to personalize" hook for outreach. */
