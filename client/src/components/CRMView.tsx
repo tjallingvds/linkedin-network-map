@@ -1808,6 +1808,50 @@ function OverviewView({
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   stages: StageDef[];
 }) {
+  // Inline "add deadline" form state — picker + promise + date. Kept
+  // local to Overview so the section is the one place to manage every
+  // deadline (no need to hunt for the contact in the table first).
+  const [addOpen, setAddOpen] = useState(false);
+  const [addContactId, setAddContactId] = useState<string>("");
+  const [addText, setAddText] = useState("");
+  const [addDueAt, setAddDueAt] = useState("");
+  const [addQuery, setAddQuery] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const selectedAddContact = useMemo(
+    () => contacts.find((c) => c.id === addContactId) ?? null,
+    [contacts, addContactId],
+  );
+
+  const pickerMatches = useMemo(() => {
+    const q = addQuery.trim().toLowerCase();
+    const base = q
+      ? contacts.filter((c) =>
+          [c.name, c.title, c.company, c.email].some((v) => (v ?? "").toLowerCase().includes(q)),
+        )
+      : contacts;
+    return base.slice(0, 12);
+  }, [contacts, addQuery]);
+
+  const resetAddForm = () => {
+    setAddOpen(false);
+    setAddContactId("");
+    setAddText("");
+    setAddDueAt("");
+    setAddQuery("");
+    setPickerOpen(false);
+  };
+
+  const saveNewDeadline = () => {
+    if (!addContactId || (!addText.trim() && !addDueAt)) return;
+    onPatch(addContactId, {
+      nextStep: addText.trim() || null,
+      // Same noon-UTC normalization as TouchCell's backdate input.
+      nextStepDueAt: addDueAt ? new Date(`${addDueAt}T12:00:00Z`).toISOString() : null,
+    });
+    resetAddForm();
+  };
+
   const { needsReply, followUp, deadlines } = useMemo(() => {
     const needsReply: CrmContact[] = [];
     const followUp: CrmContact[] = [];
@@ -1923,14 +1967,32 @@ function OverviewView({
       chip = `Due in ${diffDays}d`;
     }
     return (
-      <div key={c.id} className="ov-row ov-row-deadline" onClick={() => onOpen(c)}>
-        <div className="ov-avatar" style={{ background: avatarGrad(c.positionIdx ?? idx) }}>
+      <div key={c.id} className="ov-row ov-row-deadline">
+        <div
+          className="ov-avatar"
+          style={{ background: avatarGrad(c.positionIdx ?? idx), cursor: "pointer" }}
+          onClick={() => onOpen(c)}
+          title="Open contact"
+        >
           {initials(c.name)}
         </div>
         <div className="ov-meta">
-          <div className="ov-name">{c.name || "Unnamed"}</div>
-          <div className="ov-sub ov-promise">
-            {c.nextStep || <em style={{ color: "var(--text-mute)" }}>(no description)</em>}
+          <div
+            className="ov-name"
+            onClick={() => onOpen(c)}
+            style={{ cursor: "pointer" }}
+            title="Open contact"
+          >
+            {c.name || "Unnamed"}
+          </div>
+          {/* Inline-editable promise + date — the Overview is the one
+              place to manage deadlines without bouncing to the table. */}
+          <div className="ov-promise-row" onClick={(e) => e.stopPropagation()}>
+            <NextStepCell
+              text={c.nextStep}
+              dueAt={c.nextStepDueAt}
+              onChange={(patch) => onPatch(c.id, patch)}
+            />
           </div>
         </div>
         <span className={chipClass} title={c.nextStepDueAt ? `Due ${formatDateDisplay(c.nextStepDueAt)}` : ""}>
@@ -1965,10 +2027,130 @@ function OverviewView({
           <span className="ov-hint">
             Promises with a hard date. Overdue first, then by due date.
           </span>
+          <button
+            type="button"
+            className="pill-btn primary ov-add-btn"
+            onClick={() => setAddOpen((v) => !v)}
+            title="Add a new deadline"
+          >
+            <IconNewChat size={11} />
+            {addOpen ? "Close" : "Add deadline"}
+          </button>
         </header>
+        {addOpen && (
+          <div className="ov-add-form">
+            {/* Contact picker — searchable. Picks from the same set the
+                buckets render so the user's network filter applies
+                uniformly. */}
+            <div className="ov-add-picker">
+              {selectedAddContact ? (
+                <div className="ov-add-chip">
+                  <div
+                    className="ov-avatar"
+                    style={{ background: avatarGrad(selectedAddContact.positionIdx ?? 0), width: 22, height: 22, fontSize: 9 }}
+                  >
+                    {initials(selectedAddContact.name)}
+                  </div>
+                  <span>{selectedAddContact.name}</span>
+                  <button
+                    type="button"
+                    className="ov-add-clear"
+                    onClick={() => { setAddContactId(""); setAddQuery(""); setPickerOpen(true); }}
+                    aria-label="Change contact"
+                  >
+                    <IconClose size={10} />
+                  </button>
+                </div>
+              ) : (
+                <div className="ov-add-search">
+                  <input
+                    type="text"
+                    className="ed-input"
+                    placeholder="Find a contact…"
+                    value={addQuery}
+                    onChange={(e) => { setAddQuery(e.target.value); setPickerOpen(true); }}
+                    onFocus={() => setPickerOpen(true)}
+                    autoFocus
+                  />
+                  {pickerOpen && pickerMatches.length > 0 && (
+                    <>
+                      <div className="board-menu-bg" onClick={() => setPickerOpen(false)} />
+                      <div className="board-menu ov-add-results">
+                        {pickerMatches.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            className="bm-item ov-add-result"
+                            onClick={() => {
+                              setAddContactId(c.id);
+                              setAddQuery("");
+                              setPickerOpen(false);
+                              // Pre-fill from existing values so an edit-add
+                              // flow is one click + tweak.
+                              setAddText(c.nextStep ?? "");
+                              setAddDueAt(c.nextStepDueAt ? c.nextStepDueAt.slice(0, 10) : "");
+                            }}
+                          >
+                            <div
+                              className="ov-avatar"
+                              style={{ background: avatarGrad(c.positionIdx ?? 0), width: 22, height: 22, fontSize: 9 }}
+                            >
+                              {initials(c.name)}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 12.5, color: "var(--text)" }}>{c.name || "Unnamed"}</div>
+                              <div style={{ fontSize: 11, color: "var(--text-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {[c.title, c.company].filter(Boolean).join(" · ") || "—"}
+                              </div>
+                            </div>
+                            {c.nextStepDueAt && (
+                              <span className="ov-timer" style={{ fontSize: 10 }}>
+                                has deadline
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <input
+              type="text"
+              className="ed-input ov-add-text"
+              placeholder="What did you promise?"
+              value={addText}
+              onChange={(e) => setAddText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") saveNewDeadline(); }}
+            />
+            <input
+              type="date"
+              className="ed-input ov-add-date"
+              value={addDueAt}
+              onChange={(e) => setAddDueAt(e.target.value)}
+            />
+            <button
+              type="button"
+              className="pill-btn primary"
+              onClick={saveNewDeadline}
+              disabled={!addContactId || (!addText.trim() && !addDueAt)}
+              title={!addContactId ? "Pick a contact first" : !addText.trim() && !addDueAt ? "Add a description or a date" : "Save"}
+            >
+              <IconCheck size={11} />Save
+            </button>
+            <button
+              type="button"
+              className="pill-btn"
+              onClick={resetAddForm}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
         {deadlines.length === 0 ? (
           <div className="ov-empty">
-            No deadlines set. Add one from any contact's Next step cell — pick a date next to the promise text.
+            No deadlines set. Click "Add deadline" above, or open any contact's Next step cell in the table.
           </div>
         ) : (
           <div className="ov-list">{deadlines.map(renderDeadlineRow)}</div>

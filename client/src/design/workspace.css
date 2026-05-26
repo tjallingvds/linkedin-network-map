@@ -3236,11 +3236,67 @@ button:focus-visible { outline-offset: 3px; }
 }
 
 /* ---------- Deadline row in Overview ---------- */
-.ov-row-deadline { grid-template-columns: 32px 1fr auto auto auto; }
+.ov-row-deadline {
+  grid-template-columns: 32px 1fr auto auto;
+  cursor: default;
+}
+.ov-row-deadline:hover { background: var(--shell); border-color: var(--hairline); }
 .ov-promise {
   color: var(--text);
   font-style: normal;
 }
+.ov-promise-row {
+  /* The inline NextStepCell handles its own click semantics; this just
+     constrains the width so the promise text doesn't push the chips out. */
+  width: 100%; min-width: 0; margin-top: 2px;
+}
+
+/* ---------- Overview: add-deadline form ---------- */
+.ov-add-btn { margin-left: auto; }
+.ov-add-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.2fr) 2fr 150px auto auto;
+  gap: 8px; align-items: center;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+}
+.ov-add-picker { position: relative; min-width: 0; }
+.ov-add-search { position: relative; }
+.ov-add-search .ed-input { width: 100%; }
+.ov-add-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px 4px 4px;
+  background: var(--shell);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  font-size: 12.5px;
+  max-width: 100%;
+}
+.ov-add-chip span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-width: 0;
+}
+.ov-add-clear {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  border: none; background: transparent;
+  color: var(--text-mute);
+  cursor: pointer; border-radius: 50%;
+}
+.ov-add-clear:hover { background: var(--panel-2); color: var(--text); }
+.ov-add-results {
+  top: calc(100% + 4px); left: 0;
+  width: 100%; min-width: 280px;
+  max-height: 320px; overflow-y: auto;
+}
+.ov-add-result {
+  display: flex; align-items: center; gap: 8px;
+  text-align: left;
+}
+.ov-add-text { width: 100%; }
+.ov-add-date { width: 100%; }
 .ov-done {
   flex: 0 0 auto;
   font-size: 11px; font-weight: 500;
