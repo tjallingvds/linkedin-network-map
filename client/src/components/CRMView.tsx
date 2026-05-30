@@ -1897,21 +1897,20 @@ function OverviewView({
     const minutes = Math.max(0, Math.floor(ms / 60_000));
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
-    // Pick the coarsest unit that still tells the truth: minutes under
-    // an hour, hours up to 2 days, days after that. Keeps the chip
-    // narrow so it doesn't fight the stage chip for row space.
-    const durationLabel =
-      minutes < 60 ? `${minutes}m` :
-      hours < 48 ? `${hours}h` :
-      `${days}d`;
+    // Pick the unit that fits the bucket:
+    //   inbound → minutes / hours / days  (we surface immediately, so
+    //     sub-hour items need fine precision)
+    //   outbound → days only  (Follow up only includes rows ≥ 4 days
+    //     old, so anything finer is noise)
+    const durationLabel = c.lastTouchDirection === "in"
+      ? (minutes < 60 ? `${minutes}m` : hours < 48 ? `${hours}h` : `${days}d`)
+      : `${days}d`;
     // Verb depends on direction:
-    //   inbound  → "X waiting"  (they sent, the user owes a reply)
-    //   outbound → "no reply in X"  (the user sent, they went silent)
-    // The old "waiting" label read wrong for follow-ups since the
-    // contact isn't really waiting — they ghosted.
+    //   inbound  → "X waiting"      (they sent, the user owes a reply)
+    //   outbound → "no reply for X" (the user sent, they went silent)
     const timerLabel = c.lastTouchDirection === "in"
       ? `${durationLabel} waiting`
-      : `no reply in ${durationLabel}`;
+      : `no reply for ${durationLabel}`;
     // Urgency tint scales with wait time. Warm at 8h+, hot at 24h+.
     const urgencyClass = hours >= 24 ? "ov-timer-hot" : hours >= 8 ? "ov-timer-warm" : "";
     return (
