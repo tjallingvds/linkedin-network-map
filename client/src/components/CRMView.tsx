@@ -1900,10 +1900,18 @@ function OverviewView({
     // Pick the coarsest unit that still tells the truth: minutes under
     // an hour, hours up to 2 days, days after that. Keeps the chip
     // narrow so it doesn't fight the stage chip for row space.
-    const timerLabel =
-      minutes < 60 ? `${minutes}m waiting` :
-      hours < 48 ? `${hours}h waiting` :
-      `${days}d waiting`;
+    const durationLabel =
+      minutes < 60 ? `${minutes}m` :
+      hours < 48 ? `${hours}h` :
+      `${days}d`;
+    // Verb depends on direction:
+    //   inbound  → "X waiting"  (they sent, the user owes a reply)
+    //   outbound → "no reply in X"  (the user sent, they went silent)
+    // The old "waiting" label read wrong for follow-ups since the
+    // contact isn't really waiting — they ghosted.
+    const timerLabel = c.lastTouchDirection === "in"
+      ? `${durationLabel} waiting`
+      : `no reply in ${durationLabel}`;
     // Urgency tint scales with wait time. Warm at 8h+, hot at 24h+.
     const urgencyClass = hours >= 24 ? "ov-timer-hot" : hours >= 8 ? "ov-timer-warm" : "";
     return (
@@ -1921,8 +1929,8 @@ function OverviewView({
           className={`ov-timer ${urgencyClass}`}
           title={
             c.lastTouchDirection === "in"
-              ? `Received ${timerLabel.replace(" waiting", "")} ago`
-              : `Sent ${timerLabel.replace(" waiting", "")} ago`
+              ? `Received ${durationLabel} ago`
+              : `Sent ${durationLabel} ago`
           }
         >
           ⏱ {timerLabel}
