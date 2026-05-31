@@ -3958,6 +3958,12 @@ export function CRMView({
   // hide set so they stay visible.
   const [invitedNames, setInvitedNames] = useState<Set<string>>(new Set());
   const [invitedLinkedIns, setInvitedLinkedIns] = useState<Set<string>>(new Set());
+  // 1st-degree connections (from Connections.csv). When this set is
+  // non-empty the "fresh" filter becomes inclusive: keep a contact only
+  // if they're a known connection AND not in the hide set. Empty (no
+  // Connections.csv imported) → fall back to the subtractive behaviour.
+  const [connectedNames, setConnectedNames] = useState<Set<string>>(new Set());
+  const [connectedLinkedIns, setConnectedLinkedIns] = useState<Set<string>>(new Set());
   const [invitedCount, setInvitedCount] = useState(0);
   const [messagedCount, setMessagedCount] = useState(0);
   const [networkFilter, setNetworkFilter] = useState<"all" | "fresh">("all");
@@ -4007,17 +4013,28 @@ export function CRMView({
     const normN = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     const normL = (s: string) => s.toLowerCase().trim()
       .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\?.*$/, "").replace(/\/+$/, "");
-    if (networkFilter === "fresh" && (invitedNames.size > 0 || invitedLinkedIns.size > 0)) {
+    const hasHideSet = invitedNames.size > 0 || invitedLinkedIns.size > 0;
+    const hasConnSet = connectedNames.size > 0 || connectedLinkedIns.size > 0;
+    if (networkFilter === "fresh" && (hasHideSet || hasConnSet)) {
       return contacts.filter((c) => {
         const n = normN(c.name ?? "");
-        if (n && invitedNames.has(n)) return false;
         const li = normL(c.linkedin ?? "");
+        // Inclusive mode: when we know the user's connections, the contact
+        // must actually be one of them — this drops non-connections that
+        // the old subtractive filter let through.
+        if (hasConnSet) {
+          const isConnected =
+            (n && connectedNames.has(n)) || (li && connectedLinkedIns.has(li));
+          if (!isConnected) return false;
+        }
+        // ...and in either mode, hide anyone already invited or messaged.
+        if (n && invitedNames.has(n)) return false;
         if (li && invitedLinkedIns.has(li)) return false;
         return true;
       });
     }
     return contacts;
-  }, [contacts, networkFilter, invitedNames, invitedLinkedIns]);
+  }, [contacts, networkFilter, invitedNames, invitedLinkedIns, connectedNames, connectedLinkedIns]);
 
   // Search-stage filter — consumes the deferred query, so the input itself
   // stays snappy on slow CPUs even when the table is large. The deps are
@@ -4065,6 +4082,9 @@ export function CRMView({
         const hideRows = r.invitations.filter((i) => i.kind === "invitation" || i.kind === "messaged");
         setInvitedNames(new Set(hideRows.map((i) => i.name).filter(Boolean)));
         setInvitedLinkedIns(new Set(hideRows.map((i) => i.linkedin).filter(Boolean)));
+        const connRows = r.invitations.filter((i) => i.kind === "connection");
+        setConnectedNames(new Set(connRows.map((i) => i.name).filter(Boolean)));
+        setConnectedLinkedIns(new Set(connRows.map((i) => i.linkedin).filter(Boolean)));
         setInvitedCount(r.invitedCount ?? 0);
         setMessagedCount(r.messagedCount ?? 0);
       })
@@ -4664,13 +4684,19 @@ export function CRMView({
             type="button"
             className={`pill-btn${networkFilter === "fresh" ? " primary" : ""}`}
             onClick={() => setNetworkFilter((v) => (v === "fresh" ? "all" : "fresh"))}
-            disabled={invitedNames.size === 0 && invitedLinkedIns.size === 0}
+            disabled={
+              invitedNames.size === 0 && invitedLinkedIns.size === 0 &&
+              connectedNames.size === 0 && connectedLinkedIns.size === 0
+            }
             title={
-              invitedNames.size === 0 && invitedLinkedIns.size === 0
-                ? "Import an Invitations.csv or messages.csv first (Actions → Import LinkedIn data)"
-                : networkFilter === "fresh"
-                  ? `Hiding ${invitedCount} pending invites + ${messagedCount} people you've messaged`
-                  : `Hide ${invitedCount} pending invites + ${messagedCount} people you've messaged`
+              invitedNames.size === 0 && invitedLinkedIns.size === 0 &&
+              connectedNames.size === 0 && connectedLinkedIns.size === 0
+                ? "Import a Connections.csv first (Actions → Import LinkedIn data)"
+                : connectedNames.size > 0 || connectedLinkedIns.size > 0
+                  ? `Show only 1st-degree connections you haven't messaged yet (hides ${invitedCount} pending invites + ${messagedCount} messaged)`
+                  : networkFilter === "fresh"
+                    ? `Hiding ${invitedCount} pending invites + ${messagedCount} people you've messaged`
+                    : `Hide ${invitedCount} pending invites + ${messagedCount} people you've messaged`
             }
           >
             <IconUsers size={12} />
