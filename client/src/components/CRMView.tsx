@@ -15,7 +15,7 @@ import { useModal } from "./Modal";
 import { initials, avatarGrad } from "../design/mockProspects";
 import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
-  IconSend, IconMail, IconSparkle, IconLinkedIn, IconUsers, IconSearch,
+  IconSend, IconMail, IconSparkle, IconLinkedIn, IconUsers, IconSearch, IconFilter,
 } from "../design/icons";
 import { ExternalCleanupModal } from "./ExternalCleanupModal";
 
@@ -643,6 +643,69 @@ function KanbanFieldsMenu({
                 <div className="bm-sep" />
                 <button className="bm-item" onClick={reset}>
                   <IconArrowR size={13} /><span>Hide all</span>
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Dropdown that filters the table to a subset of stages. An empty
+ *  selection means "all stages" (no filter). Mirrors the kanban columns
+ *  as a multi-select so the table can be narrowed the same way the board
+ *  is read column-by-column. */
+function StageFilterMenu({
+  stages, value, onChange,
+}: {
+  stages: StageDef[];
+  value: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const toggle = (id: string) => {
+    const next = new Set(value);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    onChange(next);
+  };
+  const active = value.size > 0;
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        type="button"
+        className={`pill-btn${active ? " primary" : ""}`}
+        onClick={() => setOpen((o) => !o)}
+        title="Filter rows by stage"
+      >
+        <IconFilter size={12} />
+        {active ? `Filters (${value.size})` : "Filters"}
+      </button>
+      {open && (
+        <>
+          <div className="board-menu-bg" onClick={() => setOpen(false)} />
+          <div className="board-menu" style={{ minWidth: 200, left: 0, right: "auto" }}>
+            <div className="bm-label">Show stages</div>
+            {stages.map((s) => {
+              const on = value.has(s.id);
+              return (
+                <button key={s.id} className="bm-item" onClick={() => toggle(s.id)}>
+                  <ColCheckbox on={on} />
+                  <span
+                    className="tbl-stage"
+                    style={{ "--stage-color": s.color, "--stage-tint": s.tint, flex: 1, textAlign: "left" } as React.CSSProperties}
+                  >
+                    {s.label}
+                  </span>
+                </button>
+              );
+            })}
+            {active && (
+              <>
+                <div className="bm-sep" />
+                <button className="bm-item" onClick={() => onChange(new Set())}>
+                  <IconArrowR size={13} /><span>Show all</span>
                 </button>
               </>
             )}
@@ -3967,6 +4030,8 @@ export function CRMView({
   const [invitedCount, setInvitedCount] = useState(0);
   const [messagedCount, setMessagedCount] = useState(0);
   const [networkFilter, setNetworkFilter] = useState<"all" | "fresh">("all");
+  // Table stage filter — a set of stage ids to keep. Empty = show all.
+  const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
   const [importOpen, setImportOpen] = useState(false);
   const [cleanupOpen, setCleanupOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -4036,13 +4101,21 @@ export function CRMView({
     return contacts;
   }, [contacts, networkFilter, invitedNames, invitedLinkedIns, connectedNames, connectedLinkedIns]);
 
+  // Stage filter — keep only contacts in the selected stages. Empty set
+  // means no filter. Sits between the network filter and search so each
+  // stage of the pipeline recomputes only when its own inputs change.
+  const stageFiltered = useMemo(() => {
+    if (stageFilter.size === 0) return networkFiltered;
+    return networkFiltered.filter((c) => stageFilter.has(c.stage));
+  }, [networkFiltered, stageFilter]);
+
   // Search-stage filter — consumes the deferred query, so the input itself
   // stays snappy on slow CPUs even when the table is large. The deps are
-  // narrow: just the network-filtered list + the search string.
+  // narrow: just the stage-filtered list + the search string.
   const filteredContacts = useMemo(() => {
     const q = deferredSearch.trim().toLowerCase();
-    if (!q) return networkFiltered;
-    return networkFiltered.filter((c) => {
+    if (!q) return stageFiltered;
+    return stageFiltered.filter((c) => {
       const haystack = [
         c.name, c.title, c.company, c.email, c.linkedin, c.background,
         ...Object.values((c.customFields ?? {}) as Record<string, string>),
@@ -4052,7 +4125,7 @@ export function CRMView({
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [networkFiltered, deferredSearch]);
+  }, [stageFiltered, deferredSearch]);
 
   // Load boards + auto-select the first one.
   useEffect(() => {
@@ -4115,6 +4188,9 @@ export function CRMView({
     setKanbanFields(loadKanbanFields(activeId));
     setStages(loadStages(activeId));
     setGroupByCompany(loadGroupByCompany(activeId));
+    // Stage ids differ per board — clear the filter so a carried-over
+    // selection doesn't hide every row on the board we just opened.
+    setStageFilter(new Set());
   }, [activeId]);
 
   // Callback refs — `onFlash` and `onBoardsChange` are re-created on every
@@ -4707,6 +4783,11 @@ export function CRMView({
               </span>
             )}
           </button>
+          {/* Stage filter — table view only; the kanban already reads
+              stage-by-stage as columns, so a stage filter there is redundant. */}
+          {viewMode === "table" && (
+            <StageFilterMenu stages={stages} value={stageFilter} onChange={setStageFilter} />
+          )}
         </div>
         <div className="crm-tools">
           {enriching && (
