@@ -7,41 +7,38 @@ import { sql, type Kysely } from "kysely";
  * visible conversation is the active root→leaf path. Existing chats are
  * backfilled into a single linear chain (each row's parent = the previous
  * row by created_at) so they render unchanged as one branch.
+ *
+ * All statements are idempotent (IF [NOT] EXISTS): migrations run on
+ * container boot, and an earlier broken version of this migration could have
+ * left a partially-applied state, so a clean retry must not error.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function up(db: Kysely<any>): Promise<void> {
-  await db.schema
-    .alterTable("messages")
-    .addColumn("parent_id", "uuid", (c) => c.references("messages.id").onDelete("cascade"))
-    .execute();
-
-  await db.schema
-    .createIndex("messages_parent_id_idx")
-    .on("messages")
-    .column("parent_id")
-    .execute();
+  await sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES messages(id) ON DELETE CASCADE`.execute(db);
+  await sql`CREATE INDEX IF NOT EXISTS messages_parent_id_idx ON messages(parent_id)`.execute(db);
 
   // Backfill: within each chat, link rows in created_at order so the first
-  // message has parent_id = null and every later one points at its
-  // predecessor. A correlated subquery picks the immediately-earlier row in
-  // the same chat (ties broken by id so it's deterministic).
+  // message keeps parent_id = null and every later one points at its
+  // predecessor. A LAG() window function in a CTE computes each row's
+  // predecessor; a standard UPDATE…FROM join writes it. (The earlier version
+  // used `UPDATE … FROM LATERAL (…)` referencing the UPDATE target table,
+  // which Postgres rejects.)
   await sql`
+    WITH ordered AS (
+      SELECT id, LAG(id) OVER (PARTITION BY chat_id ORDER BY created_at, id) AS prev_id
+      FROM messages
+    )
     UPDATE messages m
-    SET parent_id = prev.id
-    FROM LATERAL (
-      SELECT p.id
-      FROM messages p
-      WHERE p.chat_id = m.chat_id
-        AND (p.created_at, p.id) < (m.created_at, m.id)
-      ORDER BY p.created_at DESC, p.id DESC
-      LIMIT 1
-    ) AS prev
-    WHERE m.parent_id IS NULL
+    SET parent_id = o.prev_id
+    FROM ordered o
+    WHERE o.id = m.id
+      AND o.prev_id IS NOT NULL
+      AND m.parent_id IS NULL
   `.execute(db);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function down(db: Kysely<any>): Promise<void> {
-  await db.schema.dropIndex("messages_parent_id_idx").execute();
-  await db.schema.alterTable("messages").dropColumn("parent_id").execute();
+  await sql`DROP INDEX IF EXISTS messages_parent_id_idx`.execute(db);
+  await sql`ALTER TABLE messages DROP COLUMN IF EXISTS parent_id`.execute(db);
 }
