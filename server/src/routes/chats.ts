@@ -19,7 +19,7 @@ import { runFollowup } from "../ai/modes/followup.js";
 import { runDiscoverMore } from "../ai/modes/discover-more.js";
 import { extractUserKeys } from "../ai/user-keys.js";
 import { aiJson, isLlmQuotaError, isLlmAuthError } from "../ai/json.js";
-import { isTavilyQuotaError, isTavilyAuthError } from "../ai/tavily.js";
+import { isTavilyQuotaError, isTavilyAuthError, isTavilyKeyMissingError, isWebSearchFailedError } from "../ai/tavily.js";
 
 const router = Router();
 
@@ -407,6 +407,20 @@ function renderUpstreamError(err: unknown): string | null {
       err.byok
         ? "Your Tavily key was rejected as invalid. Re-paste it in <strong>Settings → API keys</strong> — make sure there are no stray spaces or smart quotes."
         : "The server's Tavily key is invalid or revoked. Add your own Tavily key in <strong>Settings → API keys</strong> as a workaround, then ping the team to fix the shared one.",
+    );
+  }
+  if (isTavilyKeyMissingError(err)) {
+    return wrapErrCard(
+      "tavily-missing",
+      "No web-search key configured",
+      "Web search runs on <strong>Tavily</strong>, which is separate from your LLM (DeepSeek) key — topping up DeepSeek won't enable search. Add a Tavily key in <strong>Settings → API keys</strong> (get one free at <a href=\"https://app.tavily.com/\" target=\"_blank\" rel=\"noreferrer\">tavily.com</a>), then re-run.",
+    );
+  }
+  if (isWebSearchFailedError(err)) {
+    return wrapErrCard(
+      "web-search-failed",
+      "Web search failed",
+      "Every search query errored out before returning results — this is a transient web-search failure, <strong>not</strong> an empty result set, so the firms/titles in your brief are fine. Wait a moment and re-run; if it keeps happening, check the server logs.",
     );
   }
   if (isLlmQuotaError(err)) {

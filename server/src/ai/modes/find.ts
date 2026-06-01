@@ -26,7 +26,11 @@
 import type { AiProvider, CompletionResult, Prospect, ProspectSignal } from "@app/shared";
 import { env } from "../../env.js";
 import { aiJson } from "../json.js";
-import { tavilySearch, type TavilyResult, isTavilyQuotaError, isTavilyAuthError } from "../tavily.js";
+import {
+  tavilySearch, type TavilyResult,
+  isTavilyQuotaError, isTavilyAuthError,
+  hasTavilyKey, TavilyKeyMissingError, WebSearchFailedError,
+} from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
 import { looksLikeCrmRead, runCrmRead } from "./crm-read.js";
 import { looksLikeDecisionMakerMap, runDecisionMakers } from "./decision-makers.js";
@@ -288,15 +292,33 @@ export async function runFind(
           allPeople.map((p) => p.name).join(", ")
         }${alreadyShownNames.length ? "; Also already shown earlier: " + alreadyShownNames.slice(0, 40).join(", ") : ""}. Do NOT return these again.)`;
 
-    const { people: roundPeople, funnel: roundFunnel, rejectedByArchetype, rejectedBySeniority } = await handleDiscovery({
-      provider,
-      query: roundQuery,
-      targetCount: remaining,
-      extractionHint: extractCtx,
-      parsed,
-      userId,
-      userKeys,
-    });
+    let roundResult: HandleDiscoveryResult;
+    try {
+      roundResult = await handleDiscovery({
+        provider,
+        query: roundQuery,
+        targetCount: remaining,
+        extractionHint: extractCtx,
+        parsed,
+        userId,
+        userKeys,
+      });
+    } catch (e) {
+      // A web-search failure / credit error on a LATER round must not nuke
+      // the people earlier rounds already found — returning a partial list
+      // beats erroring out the whole request. Only let it propagate (to the
+      // friendly chat card) when we have nothing to show yet.
+      if (
+        (isTavilyQuotaError(e) || isTavilyAuthError(e) ||
+          e instanceof TavilyKeyMissingError || e instanceof WebSearchFailedError) &&
+        allPeople.length > 0
+      ) {
+        console.warn(`[find] round ${round + 1} web-search error, keeping ${allPeople.length} prior results: ${(e as Error).message}`);
+        break;
+      }
+      throw e;
+    }
+    const { people: roundPeople, funnel: roundFunnel, rejectedByArchetype, rejectedBySeniority } = roundResult;
     // Accumulate rejected candidates with name-level dedup so the fallback
     // pool doesn't grow with duplicate entries across rounds.
     for (const r of rejectedByArchetype) {
@@ -1026,6 +1048,12 @@ async function parallelDiscovery(args: {
 }): Promise<Candidate[]> {
   const { provider, query, targetCount, extractionHint, parsed, userId, userKeys } = args;
 
+  // Fail fast before spending LLM tokens on query generation: if no Tavily
+  // key is configured, every search below would throw and (historically)
+  // get swallowed into a misleading "Found 0 — firms too obscure". Surface
+  // the real cause instead.
+  if (!hasTavilyKey(userKeys)) throw new TavilyKeyMissingError();
+
   // Query budget is driven by THREE factors, not just targetCount:
   //   - baseline throughput (one query returns up to 20 URLs, so
   //     targetCount/5 covers a superset after dedup + grounding + gate);
@@ -1124,7 +1152,13 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
   // Legacy: maxPerQuery = targetCount > 30 ? 20 : 10
   const maxPerQuery = targetCount > 30 ? 20 : 10;
 
-  const searchPromises = searchQueries.map(async (sq): Promise<TavilyResult[]> => {
+  // Per-query outcome — distinguishes a query that RAN and returned zero
+  // hits from one that ERRORED (transient 5xx / timeout / network). A query
+  // that errors returns { results: [], error } rather than swallowing the
+  // failure into an empty list, so the aggregation below can tell "the web
+  // legitimately had nothing" apart from "the search itself fell over".
+  type QueryOutcome = { results: TavilyResult[]; error: Error | null };
+  const searchPromises = searchQueries.map(async (sq): Promise<QueryOutcome> => {
     const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, " ").trim();
     try {
       // 1. Advanced + include_domains: linkedin.com
@@ -1135,38 +1169,56 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
         userId,
         userKeys,
       });
-      if (linked.length > 0) return linked;
+      if (linked.length > 0) return { results: linked, error: null };
       // 2. Advanced + "LinkedIn profile" suffix, open web
-      return await tavilySearch(`${cleanQuery} LinkedIn profile`, {
+      const open = await tavilySearch(`${cleanQuery} LinkedIn profile`, {
         depth: "advanced",
         maxResults: maxPerQuery,
         userId,
         userKeys,
       });
+      return { results: open, error: null };
     } catch (e) {
-      // Quota/auth errors must NOT be silently swallowed — without this,
-      // a Tavily 432 "out of credits" turns into "Found 0 — try a more
-      // specific brief", which is wildly misleading. Re-throw so the
-      // chat handler can surface a clear "you're out of credits" card.
-      if (isTavilyQuotaError(e) || isTavilyAuthError(e)) throw e;
+      // Quota/auth/missing-key errors must NOT be silently swallowed —
+      // without this, a Tavily 432 "out of credits" turns into "Found 0 —
+      // try a more specific brief", which is wildly misleading. Re-throw so
+      // the chat handler can surface a clear, actionable card.
+      if (isTavilyQuotaError(e) || isTavilyAuthError(e) || e instanceof TavilyKeyMissingError) throw e;
       // 3. Basic fallback for everything else (transient 5xx, timeouts).
       try {
-        return await tavilySearch(cleanQuery, {
+        const basic = await tavilySearch(cleanQuery, {
           depth: "basic",
           maxResults: 10,
           userId,
           userKeys,
         });
+        return { results: basic, error: null };
       } catch (e2) {
-        if (isTavilyQuotaError(e2) || isTavilyAuthError(e2)) throw e2;
-        return [];
+        if (isTavilyQuotaError(e2) || isTavilyAuthError(e2) || e2 instanceof TavilyKeyMissingError) throw e2;
+        // Both attempts failed for a transient reason — record the error so
+        // the aggregation can tell whether EVERY query died (search failure)
+        // vs this one query coming up empty.
+        console.warn(`[find] tavily query failed: "${cleanQuery.slice(0, 80)}" → ${(e2 as Error).message}`);
+        return { results: [], error: e2 as Error };
       }
     }
   });
 
-  const allSearchResults = await Promise.all(searchPromises);
-  const allResults = allSearchResults.flat();
-  if (allResults.length === 0) return [];
+  const outcomes = await Promise.all(searchPromises);
+  const erroredQueries = outcomes.filter((o) => o.error);
+  const allResults = outcomes.flatMap((o) => o.results);
+
+  // If EVERY query errored, the web search didn't run — it fell over. Throw
+  // a typed error so the user sees "search failed, try again" instead of the
+  // misleading "firms too obscure" funnel diagnostic. (A mix of errors and
+  // genuine-empty results falls through to the normal empty handling.)
+  if (allResults.length === 0 && erroredQueries.length === searchQueries.length && searchQueries.length > 0) {
+    throw new WebSearchFailedError(erroredQueries[0]!.error!.message);
+  }
+  if (allResults.length === 0) {
+    console.log(`[find] parallel: ${searchQueries.length} queries → 0 raw (web search ran, genuinely no results)`);
+    return [];
+  }
 
   // Dedupe by URL
   const seenUrls = new Set<string>();
@@ -1826,8 +1878,7 @@ function looksTargeted(s: string): boolean {
 }
 
 function assertKeys(provider: AiProvider, userKeys?: UserKeys) {
-  const tavily = userKeys?.tavily ?? env.TAVILY_API_KEY;
-  if (!tavily) throw new Error("Tavily key missing — add it in Settings → API keys to enable web search.");
+  if (!hasTavilyKey(userKeys)) throw new TavilyKeyMissingError();
   const llm =
     provider === "openai" ? (userKeys?.openai ?? env.OPENAI_API_KEY) :
     provider === "anthropic" ? (userKeys?.anthropic ?? env.ANTHROPIC_API_KEY) :

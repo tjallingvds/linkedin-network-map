@@ -20,7 +20,7 @@
 import type { AiProvider, CompletionResult } from "@app/shared";
 import { env } from "../../env.js";
 import { aiJson } from "../json.js";
-import { tavilySearch, type TavilyResult, isTavilyQuotaError, isTavilyAuthError } from "../tavily.js";
+import { tavilySearch, type TavilyResult, isTavilyQuotaError, isTavilyAuthError, hasTavilyKey, TavilyKeyMissingError } from "../tavily.js";
 import type { UserKeys } from "../user-keys.js";
 
 interface ParsedTarget {
@@ -269,8 +269,7 @@ function escapeAttr(s: string): string {
 }
 
 function assertKeys(provider: AiProvider, userKeys?: UserKeys) {
-  const tavily = userKeys?.tavily ?? env.TAVILY_API_KEY;
-  if (!tavily) throw new Error("Tavily key missing — add it in Settings → API keys to enable web search.");
+  if (!hasTavilyKey(userKeys)) throw new TavilyKeyMissingError();
   const llm =
     provider === "openai" ? (userKeys?.openai ?? env.OPENAI_API_KEY) :
     provider === "anthropic" ? (userKeys?.anthropic ?? env.ANTHROPIC_API_KEY) :

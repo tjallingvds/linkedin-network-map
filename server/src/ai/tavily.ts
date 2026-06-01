@@ -36,11 +36,52 @@ export class TavilyAuthError extends Error {
   }
 }
 
+/** Thrown when no Tavily key is configured at all — neither a per-user
+ *  (BYOK) key nor a workspace env key. Distinct from auth (a key that
+ *  exists but is rejected) so the user gets "add a key" rather than
+ *  "your key was rejected" — and, critically, so a missing key never
+ *  masquerades as "the search found nothing." */
+export class TavilyKeyMissingError extends Error {
+  readonly kind = "tavily_missing" as const;
+  constructor() {
+    super("No Tavily API key configured (neither a per-user key nor TAVILY_API_KEY).");
+    this.name = "TavilyKeyMissingError";
+  }
+}
+
+/** Thrown when EVERY web-search query failed for a non-quota/non-auth
+ *  reason (transient 5xx, timeout, network). Distinct from "the search
+ *  ran and legitimately returned zero results" so the user is told the
+ *  search failed rather than that their firms are "too obscure." */
+export class WebSearchFailedError extends Error {
+  readonly kind = "web_search_failed" as const;
+  /** The first underlying error message, for the diagnostic card + logs. */
+  readonly reason: string;
+  constructor(reason: string) {
+    super(`All web-search queries failed: ${reason}`);
+    this.name = "WebSearchFailedError";
+    this.reason = reason;
+  }
+}
+
 export function isTavilyQuotaError(e: unknown): e is TavilyQuotaError {
   return e instanceof TavilyQuotaError;
 }
 export function isTavilyAuthError(e: unknown): e is TavilyAuthError {
   return e instanceof TavilyAuthError;
+}
+export function isTavilyKeyMissingError(e: unknown): e is TavilyKeyMissingError {
+  return e instanceof TavilyKeyMissingError;
+}
+export function isWebSearchFailedError(e: unknown): e is WebSearchFailedError {
+  return e instanceof WebSearchFailedError;
+}
+
+/** True when a Tavily key is resolvable for this request (BYOK or env).
+ *  Lets callers fail fast with a clear message before spending LLM tokens
+ *  generating queries they can never run. */
+export function hasTavilyKey(userKeys?: UserKeys): boolean {
+  return !!(userKeys?.tavily ?? env.TAVILY_API_KEY);
 }
 
 export async function tavilySearch(
@@ -54,7 +95,7 @@ export async function tavilySearch(
   } = {},
 ): Promise<TavilyResult[]> {
   const apiKey = opts.userKeys?.tavily ?? env.TAVILY_API_KEY;
-  if (!apiKey) throw new Error("TAVILY_API_KEY not set");
+  if (!apiKey) throw new TavilyKeyMissingError();
   const byok = !!opts.userKeys?.tavily;
 
   const body: Record<string, unknown> = {
