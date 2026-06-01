@@ -244,6 +244,10 @@ export async function runFind(
 
   // ── Legacy: parse brief → build extractCtx ────────────────────────────────
   const parsed = await parseBrief(provider, fullBrief, userId, userKeys);
+  // Surface the extracted targeting so a "why did it ignore the company I
+  // named?" report can be diagnosed from the logs — an empty firms[] when
+  // the brief clearly named one is the tell that extraction misread it.
+  console.log(`[find] parsed brief → firms=[${(parsed?.firms ?? []).join(", ")}] titles=[${(parsed?.titles ?? []).join(", ")}] floor=${parsed?.seniorityFloor ?? "none"}`);
   const extractCtx = buildExtractCtx(parsed);
 
   // ── Legacy: multi-round discover loop ────────────────────────────────────
@@ -527,9 +531,14 @@ async function parseBrief(
 
 Rules:
 - Extract EXACT company names mentioned as targets. Do not add companies not named in the brief.
-- titles = SHORT searchable keywords (≤4 words each), not verbose verbatim titles.
-- archetypes: if the brief numbers or names role categories (e.g. "1. <archetype name>", "Archetype 2: <archetype name>"), capture each as a separate entry WITH its disambiguation rules and exclusions.
-- antiPatterns: capture every "exclude X where Y" or "avoid Z" clause the brief lists, in the brief's own wording.
+- COMPANY NAMES CAN BE ORDINARY WORDS. Many real companies are spelled as common English words or adjectives — Wise, Stripe, Block, Brex, Ramp, Monzo, Revolut, Apple, Meta, Mercury, Plaid, Notion, Linear, Figma. When the brief references such a word as an organisation, extract it as a firm even when it is lowercase or reads like an adjective. Signals that a word is the target COMPANY (not a description): it follows "at", "from", "@", "with"; it is possessive ("X's head of…"); or it sits directly before a role noun ("the X Head of Y", "X CTO"). Example: "who is the wise Head of TGS" → firms: ["Wise"] (Wise is the fintech, NOT the adjective "wise"). Example: "find the block VP of risk" → firms: ["Block"].
+- WHO-IS / SINGLE-TARGET QUESTIONS: a question like "who is the <role> at <Company>" or "who runs <function> at <Company>" names exactly one target firm — always populate "firms" with that company. Never return empty firms when a company is identifiable in the brief.
+- titles = SHORT searchable keywords (≤4 words each), not verbose verbatim titles. Keep unfamiliar acronyms or internal team names (e.g. "TGS") verbatim in titles — do NOT expand them into guesses like "AI" or "Technology"; if you genuinely cannot tell what a role token means, keep it as-is rather than substituting a broader function.
+- archetypes: if the brief numbers or names role categories (e.g. "1. <archetype name>", "Archetype 2: <archetype name>"), capture each as a separate entry WITH its disambiguation rules and exclusions. When the brief is a long ICP/company description rather than a role list, derive archetypes from the PERSON the user actually wants to reach — e.g. a bullet like "they have hired a Head of AI / Enterprise Head of AI / Head of AI Transformation" means the archetypes are those job titles. Do NOT leave archetypes empty just because the doc is prose.
+- antiPatterns: capture ONLY explicit PERSON/ROLE-level exclusions — clauses that tell you which kind of PERSON to reject ("exclude RPA developers", "no sales reps", "not customer-facing roles", "avoid junior engineers"). A valid anti-pattern names a role/job-family to drop.
+  - DO NOT turn descriptions of the TARGET COMPANY, the market situation, the deal, or the NATURE OF THE WORK into anti-patterns. These describe the account, not a person to exclude, and a downstream per-candidate gate will wrongly reject everyone if you do.
+  - Negative example: a brief line "Not RPA: judgment-based workflows that deterministic bots can't handle" describes the WORK the product targets — it is NOT an instruction to reject people. Do NOT emit "Not RPA" (or "beyond point solutions", "not legacy", "regulated", "ops-heavy", etc.) as an anti-pattern.
+  - When in doubt whether a clause excludes a PERSON vs. describes the ACCOUNT, leave it out. An over-eager anti-pattern is far more damaging than a missing one.
 - seniorityFloor: set this WHENEVER the brief states a minimum seniority bar — even casually. Trigger phrases include: "MD or above", "MD+", "MD and up", "Director-level or higher", "Partner level", "C-suite only", "VP and above", "Head-of and up", "senior leadership", "executives only", "decision-makers", "no juniors", "no analysts/associates", "top brass". Write the floor as one short phrase that names the minimum acceptable level AND makes "or above" explicit, e.g. "Managing Director or above", "Partner-level or above", "C-suite (CXO/Chief) only", "Head of <function> or above". If no minimum bar is stated, return null. Do NOT invent a floor that the brief didn't ask for.
 - excludeSeniority is for EXCLUSIONS only ("not VPs", "no Directors") — not for floors. When a floor is set, leave excludeSeniority empty unless the brief separately calls out a level to exclude. The seniorityFloor field drives a downstream semantic gate that handles "or above" semantics correctly across firm-specific title ladders.
 - employmentIntent: set to "past" when the brief clearly asks for people who USED TO work at the target firms and are no longer there. Trigger phrases: "ex-", "former", "formerly at", "used to work at", "previously at", "have left", "alumni of", "recent leavers from", "departed X". Default to "current" otherwise.
@@ -888,6 +897,11 @@ ${archetypeBlock}
 ANTI-PATTERNS (reject candidates matching any of these, even if their title looks like an archetype hit):
 ${antiPatternBlock}
 
+ANTI-PATTERN DISCIPLINE — read this before rejecting anyone:
+- Only reject on an anti-pattern when the candidate's title/evidence POSITIVELY shows they match it. The ABSENCE of evidence is NOT a match. "No evidence of X" is never a valid reason to reject — if you cannot see that the person matches the anti-pattern, the anti-pattern does not apply.
+- Some "anti-patterns" above may actually describe the nature of the WORK or the TARGET ACCOUNT (e.g. "Not RPA", "beyond point solutions", "regulated") rather than a person's role. Those are NOT person-level disqualifiers — ignore them entirely when classifying a candidate. Never reject a person because their profile doesn't mention a piece of account/work context.
+- A candidate who plausibly matches an archetype and triggers NO positively-evidenced anti-pattern must be ACCEPTED.
+
 HOW TO DECIDE — domain-neutral rules
 - Read each candidate's title + evidence, then reason about ROLE SEMANTICS, not title keywords.
 - DO NOT inject domain assumptions that aren't in the brief above. The brief defines the domain. The archetypes + anti-patterns above are the ONLY accept/reject criteria. Do not introduce industry vocabulary, role categories, division names, or "common traps" that the brief itself did not name. If a concept (e.g. a particular sub-industry or business unit) isn't mentioned in the archetypes/anti-patterns, you do not get to use it as a reason.
@@ -1076,17 +1090,28 @@ async function parallelDiscovery(args: {
   // as a no-floor brief — otherwise "MD or above" briefs return 5-10 hits
   // when the user asked for 50.
   const floorMultiplier = parsed?.seniorityFloor ? 1.5 : 1;
+  // Firm × role coverage. The earlier formula took max(count, archetypes,
+  // firms/3) — but for a brief with MANY firms AND several role archetypes,
+  // each firm needs to be queried once PER archetype, not just once total.
+  // Repro: a 35-firm, ~4-archetype fintech brief asking for 200 prospects
+  // got numQueries=40 (count-driven) — barely one query per firm, so most
+  // firms were only searched for a single role and the run finished in one
+  // thin round. Multiply firm-groups by archetype breadth so coverage
+  // scales with the brief's real surface area.
+  const firmGroups = Math.ceil(firmCount / 3);          // ~3 firms OR-grouped per query
+  const firmRoleCoverage = firmGroups * Math.max(1, archetypeCount);
   const numQueries = Math.min(
-    50,
+    80,
     Math.ceil(
       Math.max(
         Math.ceil(targetCount / 5),
         archetypeCount * 3,   // 3 queries per distinct archetype
-        Math.ceil(firmCount / 3), // 1 query per ~3 firms (OR-grouped)
+        firmRoleCoverage,     // every firm-group touched once per archetype
         8,
       ) * floorMultiplier,
     ),
   );
+  console.log(`[find] query budget: ${numQueries} (target=${targetCount}, firms=${firmCount}, archetypes=${archetypeCount})`);
 
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
@@ -1128,26 +1153,42 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
     query,
     // 2500 was too tight on long firm-list briefs — Tavily query strings
     // packed with OR groups and escaped quotes blow past it mid-second
-    // query and the response truncates inside a string. 6000 tokens fits
-    // 8–10 queries comfortably.
-    { maxTokens: 6000, userId, userKeys },
+    // query and the response truncates inside a string. Scale with the query
+    // count (~120 tokens/query covers an OR-grouped string + JSON overhead)
+    // so an 80-query budget doesn't truncate mid-array; floor at 6000.
+    { maxTokens: Math.max(6000, numQueries * 120), userId, userKeys },
   );
 
   let searchQueries = (queriesObj.queries ?? []).filter(
     (q): q is string => typeof q === "string" && q.trim().length > 0,
   );
-  if (searchQueries.length < 3) {
-    searchQueries = [
-      `${query.slice(0, 80)} LinkedIn`,
-      `${query.slice(0, 80)} professionals`,
-    ];
-  }
 
   // Near-duplicate filter — the LLM sometimes emits "COO Moelis" and "Chief
   // Operating Officer Moelis" as two separate queries. Token-set Jaccard
   // similarity > 0.75 → treat as a dupe and keep the first one. Cheap,
   // saves ~10-20% of calls on typical briefs.
   searchQueries = dedupeSimilarQueries(searchQueries);
+
+  // Enforce the query budget. The query-gen LLM routinely returns far fewer
+  // queries than asked ("generate exactly 40" often yields ~8-12), which
+  // silently shrinks the fan-out to a fraction of numQueries — the search
+  // then covers only a handful of firm/role combos and finishes suspiciously
+  // fast for a large brief. Top up deterministically from the parsed firms ×
+  // titles so the actual number of searches matches the intended breadth.
+  const llmQueryCount = searchQueries.length;
+  if (parsed && searchQueries.length < numQueries) {
+    const existing = new Set(searchQueries.map((q) => q.toLowerCase().trim()));
+    searchQueries.push(...buildCoverageQueries(parsed, numQueries - searchQueries.length, existing));
+  }
+  if (searchQueries.length < 3) {
+    searchQueries = [
+      `${query.slice(0, 80)} LinkedIn`,
+      `${query.slice(0, 80)} professionals`,
+    ];
+  }
+  if (searchQueries.length !== llmQueryCount) {
+    console.log(`[find] query count: LLM returned ${llmQueryCount}, topped up to ${searchQueries.length} (budget ${numQueries})`);
+  }
 
   // Legacy: maxPerQuery = targetCount > 30 ? 20 : 10
   const maxPerQuery = targetCount > 30 ? 20 : 10;
@@ -1158,7 +1199,7 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
   // failure into an empty list, so the aggregation below can tell "the web
   // legitimately had nothing" apart from "the search itself fell over".
   type QueryOutcome = { results: TavilyResult[]; error: Error | null };
-  const searchPromises = searchQueries.map(async (sq): Promise<QueryOutcome> => {
+  const runQuery = async (sq: string): Promise<QueryOutcome> => {
     const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, " ").trim();
     try {
       // 1. Advanced + include_domains: linkedin.com
@@ -1202,9 +1243,18 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
         return { results: [], error: e2 as Error };
       }
     }
-  });
+  };
 
-  const outcomes = await Promise.all(searchPromises);
+  // Run searches in bounded waves rather than all at once. With the budget
+  // now enforced (up to 80 queries), firing them all simultaneously risks
+  // tripping Tavily's rate limit — which the client treats as a quota error
+  // and would abort the whole run. A concurrency cap keeps the load steady
+  // and lets a genuine quota/auth error still propagate (the pool rejects on
+  // the first throw). 16 in flight stays near the unbounded fan-out the run
+  // historically tolerated, while smoothing an 80-query budget into ~5 waves
+  // so it neither bursts Tavily nor blows past the client's request timeout.
+  const SEARCH_CONCURRENCY = 16;
+  const outcomes = await mapWithConcurrency(searchQueries, SEARCH_CONCURRENCY, runQuery);
   const erroredQueries = outcomes.filter((o) => o.error);
   const allResults = outcomes.flatMap((o) => o.results);
 
@@ -1734,6 +1784,65 @@ function levenshtein(a: string, b: string): number {
  *  combo. 0.75 threshold keeps distinct intents (different firm sets or
  *  different titles) while catching surface-level rephrasings. Runs
  *  in-order, keeping the first instance of each cluster. */
+/** Run `fn` over `items` with at most `limit` calls in flight at once,
+ *  preserving result order. Rejects as soon as any call rejects (so a typed
+ *  Tavily quota/auth error still aborts the run) — in-flight calls are left
+ *  to settle on their own. Used to pace the web-search fan-out so a large
+ *  query budget doesn't burst-fire and trip rate limits. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!, i);
+    }
+  };
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+/** Deterministically build "title firmA OR firmB OR firmC" search queries
+ *  from the parsed brief — title × OR-grouped firm combinations. Used to
+ *  TOP UP the query list when the LLM returns fewer queries than the budget
+ *  asked for (a "generate 40" prompt routinely yields ~10, silently shrinking
+ *  the search). `existing` holds normalised query strings already queued so
+ *  we don't re-add ones the LLM already produced. Returns at most `need`. */
+function buildCoverageQueries(parsed: ParsedBrief, need: number, existing: Set<string>): string[] {
+  if (need <= 0) return [];
+  // Past mode searches prior employers; otherwise current target firms.
+  const firms = parsed.employmentIntent === "past" && parsed.pastFirms.length
+    ? parsed.pastFirms
+    : parsed.firms;
+  if (firms.length === 0) return [];
+  // OR-group firms 3 at a time — Tavily returns ~20 results per query, so a
+  // group of 3 still gives each firm meaningful coverage.
+  const groups: string[][] = [];
+  for (let i = 0; i < firms.length; i += 3) groups.push(firms.slice(i, i + 3));
+  // Cross every title keyword with every firm-group. No titles → bare firm
+  // groups (better than nothing for a "find anyone senior at X" brief).
+  const titles = parsed.titles.length ? parsed.titles : [""];
+  const prefix = parsed.employmentIntent === "past" ? "ex-" : "";
+  const out: string[] = [];
+  for (const title of titles) {
+    for (const g of groups) {
+      if (out.length >= need) return out;
+      const q = `${title} ${prefix}${g.join(` OR ${prefix}`)}`.trim();
+      const key = q.toLowerCase().trim();
+      if (existing.has(key)) continue;
+      existing.add(key);
+      out.push(q);
+    }
+  }
+  return out;
+}
+
 function dedupeSimilarQueries(qs: string[]): string[] {
   const SYNONYMS: Record<string, string> = {
     coo: "chief_operating_officer",
