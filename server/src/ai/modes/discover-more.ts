@@ -8,7 +8,7 @@
  * place stops that drift.
  */
 import type { AiProvider, CompletionResult } from "@app/shared";
-import { runFind } from "./find.js";
+import { runFind, type MatchBreadth } from "./find.js";
 import type { UserKeys } from "../user-keys.js";
 
 export async function runDiscoverMore(
@@ -17,6 +17,7 @@ export async function runDiscoverMore(
   excludeNames: string[],
   userId: string,
   userKeys?: UserKeys,
+  matchBreadth: MatchBreadth = "broad",
 ): Promise<CompletionResult> {
-  return runFind(provider, originalBrief, userId, userKeys, [], excludeNames);
+  return runFind(provider, originalBrief, userId, userKeys, [], excludeNames, matchBreadth);
 }

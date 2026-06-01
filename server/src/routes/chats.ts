@@ -133,6 +133,10 @@ const completionSchema = z.object({
    *  with a normal turn — when set, `content` should echo that user
    *  message's text so the mode handler re-runs the same request. */
   regenerateAssistantForUserId: z.string().uuid().optional(),
+  /** Per-search archetype-gate breadth. "broad" (default) accepts adjacent
+   *  senior roles in the same function family; "strict" matches only the
+   *  exact archetypes named in the brief. */
+  matchBreadth: z.enum(["strict", "broad"]).optional(),
 });
 
 router.post("/:id/completion", async (req: AuthedRequest, res) => {
@@ -309,11 +313,12 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     if (!res.writableEnded) res.write(" ");
   }, 10_000);
 
+  const matchBreadth = parsed.data.matchBreadth ?? "broad";
   let result: CompletionResult;
   try {
     const userId = req.user!.id;
     if (parsed.data.mode === "find") {
-      result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqAlreadyShown);
+      result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqAlreadyShown, matchBreadth);
     } else if (parsed.data.mode === "network") {
       result = await runNetwork(provider, parsed.data.content, userId, userKeys);
     } else if (parsed.data.mode === "enrich") {
@@ -337,7 +342,7 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
         ...uniqAlreadyShown,
       ]));
       const brief = parsed.data.previousBrief?.trim() || parsed.data.content;
-      result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys);
+      result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys, matchBreadth);
     } else {
       result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId, userKeys);
     }

@@ -91,6 +91,12 @@ interface ParsedBrief {
   pastFirms: string[];
 }
 
+/** How strictly the archetype gate matches the brief's role archetypes.
+ *  "strict" = only the exact archetypes as written; "broad" = treat them as
+ *  examples and accept adjacent/sibling senior roles in the same function
+ *  family (the user's per-search toggle). */
+export type MatchBreadth = "strict" | "broad";
+
 export async function runFind(
   provider: AiProvider,
   userInput: string,
@@ -101,6 +107,7 @@ export async function runFind(
    *  so a subsequent Find in the same chat doesn't re-surface them. Driven
    *  from messages.result.prospects in the DB by chats.ts. */
   alreadyShownNames: string[] = [],
+  matchBreadth: MatchBreadth = "broad",
 ): Promise<CompletionResult> {
   assertKeys(provider, userKeys);
 
@@ -306,6 +313,7 @@ export async function runFind(
         parsed,
         userId,
         userKeys,
+        matchBreadth,
       });
     } catch (e) {
       // A web-search failure / credit error on a LATER round must not nuke
@@ -672,8 +680,9 @@ async function handleDiscovery(args: {
   parsed: ParsedBrief | null;
   userId: string;
   userKeys?: UserKeys;
+  matchBreadth: MatchBreadth;
 }): Promise<HandleDiscoveryResult> {
-  const { provider, query, targetCount, extractionHint, parsed, userId, userKeys } = args;
+  const { provider, query, targetCount, extractionHint, parsed, userId, userKeys, matchBreadth } = args;
 
   const funnel: FunnelStats = {
     extracted: 0, afterClean: 0, afterBriefFilter: 0,
@@ -736,7 +745,7 @@ async function handleDiscovery(args: {
   let rejectedByArchetype: Candidate[] = [];
   if (parsed && (parsed.archetypes.length > 0 || parsed.antiPatterns.length > 0) && people.length > 0) {
     const before = people.length;
-    const gated = await gateByArchetype({ provider, parsed, candidates: people, userId, userKeys });
+    const gated = await gateByArchetype({ provider, parsed, candidates: people, userId, userKeys, matchBreadth });
     people = gated.kept;
     rejectedByArchetype = gated.rejected;
     console.log(`[find] archetype gate: ${before} → ${people.length} (kept) / ${rejectedByArchetype.length} (rejected)`);
@@ -863,8 +872,9 @@ async function gateByArchetype(args: {
   candidates: Candidate[];
   userId: string;
   userKeys?: UserKeys;
+  matchBreadth: MatchBreadth;
 }): Promise<{ kept: Candidate[]; rejected: Candidate[] }> {
-  const { provider, parsed, candidates, userId, userKeys } = args;
+  const { provider, parsed, candidates, userId, userKeys, matchBreadth } = args;
   const BATCH = 20;
   const batches: Candidate[][] = [];
   for (let i = 0; i < candidates.length; i += BATCH) {
@@ -876,6 +886,20 @@ async function gateByArchetype(args: {
   const antiPatternBlock = parsed.antiPatterns.length
     ? parsed.antiPatterns.map((a) => `  - ${a}`).join("\n")
     : "(none listed)";
+  // The user's per-search breadth toggle. "broad" (default) treats the named
+  // archetypes as EXAMPLES and accepts adjacent senior roles in the same
+  // function family — fixes the "I named 'Head of AI, etc.' and it rejected
+  // the Chief AI Officer / VP of AI" complaint. "strict" matches only the
+  // archetypes as written.
+  const breadthBlock = matchBreadth === "broad"
+    ? `MATCH BREADTH: BROAD (default).
+- The ROLE ARCHETYPES above are EXAMPLES of the kind of person wanted, NOT an exhaustive whitelist. Briefs routinely end archetype lists with "etc." — honour that intent.
+- Match on the FUNCTION + SENIORITY, not the exact title string. ACCEPT adjacent / sibling senior roles in the same function family as a listed archetype. E.g. if an archetype is "Head of AI / Head of AI Transformation", also ACCEPT: Chief AI Officer, Chief Data & AI Officer, Chief Data Officer (with an AI remit), VP/SVP/Head of AI, Head of ML / Data Science, Head of Applied AI, AI/GenAI leads at director level and above, Head of AI Risk/Governance, and similar senior owners of the AI agenda.
+- Default to ACCEPT when a candidate is a plausible senior owner of the archetype's function. Reject ONLY when the role is clearly a DIFFERENT function (e.g. Head of Sales, Marketing, Legal) or trips a positively-evidenced anti-pattern.
+- Seniority floor still applies: drop people clearly junior to the archetype's level.`
+    : `MATCH BREADTH: STRICT.
+- Match ONLY the role archetypes exactly as written. Do NOT widen to adjacent, sibling, or "close enough" titles.
+- If a candidate's role is not clearly one of the listed archetypes, return null.`;
 
   const results = await Promise.all(
     batches.map(async (batch) => {
@@ -896,6 +920,8 @@ ${archetypeBlock}
 
 ANTI-PATTERNS (reject candidates matching any of these, even if their title looks like an archetype hit):
 ${antiPatternBlock}
+
+${breadthBlock}
 
 ANTI-PATTERN DISCIPLINE — read this before rejecting anyone:
 - Only reject on an anti-pattern when the candidate's title/evidence POSITIVELY shows they match it. The ABSENCE of evidence is NOT a match. "No evidence of X" is never a valid reason to reject — if you cannot see that the person matches the anti-pattern, the anti-pattern does not apply.

@@ -322,6 +322,10 @@ export function DiscoverPage() {
   const [chatId, setChatId] = useState<string | null>(null);
   const [activeNav, setActiveNav] = useState<string>("");
   const [searchMode, setSearchMode] = useState<"find" | "network">("find");
+  // Per-search archetype-gate breadth. "broad" (default) accepts adjacent
+  // senior roles in the same function family (e.g. Chief AI Officer when the
+  // brief names "Head of AI"); "strict" matches only the exact roles named.
+  const [matchBreadth, setMatchBreadth] = useState<"broad" | "strict">("broad");
   const [chatList, setChatList] = useState<ChatListItem[]>([]);
   const [lastBrief, setLastBrief] = useState<string>("");
   const [lastProspects, setLastProspects] = useState<Prospect[]>([]);
@@ -679,7 +683,7 @@ export function DiscoverPage() {
 
     try {
       const id = await ensureChatId(text);
-      const body: Record<string, unknown> = { content: text, mode, parentId };
+      const body: Record<string, unknown> = { content: text, mode, parentId, matchBreadth };
       if (mode === "followup") body.previousProspects = lastProspects;
       if (mode === "discover_more") {
         body.previousProspects = lastProspects;
@@ -718,7 +722,7 @@ export function DiscoverPage() {
     try {
       const id = await ensureChatId(lastBrief);
       const resp = await api.post<CompletionResp>(`/api/chats/${id}/completion`, {
-        content, mode: "discover_more", parentId,
+        content, mode: "discover_more", parentId, matchBreadth,
         previousProspects: lastProspects,
         previousBrief: lastBrief,
       });
@@ -865,7 +869,7 @@ export function DiscoverPage() {
     const ctx = { kind: "edit" as const, parentId, userText: text };
     setPending({ kind: "edit", parentId, userText: text, steps: stepsFor(mode) });
     try {
-      const body: Record<string, unknown> = { content: text, mode, parentId };
+      const body: Record<string, unknown> = { content: text, mode, parentId, matchBreadth };
       if (mode === "followup") body.previousProspects = prospects;
       if (mode === "discover_more") { body.previousProspects = prospects; body.previousBrief = `${brief}\n\nRefinement: ${text}`; }
       const resp = await api.post<CompletionResp>(`/api/chats/${chatId}/completion`, body);
@@ -892,7 +896,7 @@ export function DiscoverPage() {
     const ctx = { kind: "retry" as const, anchorId: userNode.id };
     setPending({ kind: "retry", anchorId: userNode.id, steps: stepsFor(mode) });
     try {
-      const body: Record<string, unknown> = { content: text, mode, regenerateAssistantForUserId: userNode.id };
+      const body: Record<string, unknown> = { content: text, mode, regenerateAssistantForUserId: userNode.id, matchBreadth };
       if (mode === "followup") body.previousProspects = prospects;
       if (mode === "discover_more") { body.previousProspects = prospects; body.previousBrief = brief; }
       const resp = await api.post<CompletionResp>(`/api/chats/${chatId}/completion`, body);
@@ -1381,6 +1385,27 @@ export function DiscoverPage() {
                         <IconUsers size={12} />My network
                       </button>
                     </div>
+                    {/* Archetype-match breadth — only relevant for web search,
+                        which runs the archetype gate. Broad accepts adjacent
+                        senior roles; Strict matches only the exact roles. */}
+                    {searchMode === "find" && (
+                      <div className="mode-switch" style={{ marginRight: 8 }}>
+                        <button
+                          className={matchBreadth === "broad" ? "active" : ""}
+                          onClick={() => setMatchBreadth("broad")}
+                          title="Accept adjacent senior roles in the same function family (more results)"
+                        >
+                          Broad
+                        </button>
+                        <button
+                          className={matchBreadth === "strict" ? "active" : ""}
+                          onClick={() => setMatchBreadth("strict")}
+                          title="Match only the exact roles named in your brief (fewer, tighter results)"
+                        >
+                          Strict
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="send-group">
                     <button
