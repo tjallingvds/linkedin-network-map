@@ -114,6 +114,10 @@ export interface MessagesTable {
   /** Full CompletionResult JSON when the message represents a structured
    *  response (prospects / drafts). Null for plain-text messages. */
   result: unknown | null;
+  /** Parent message in the chat tree. Null for a branch root (the first
+   *  user message, or an edited sibling that re-roots the conversation).
+   *  Drives edit-forking + retry-as-sibling + version navigation. */
+  parent_id: string | null;
   created_at: Generated<Timestamp>;
 }
 

@@ -23,6 +23,29 @@ import { isTavilyQuotaError, isTavilyAuthError, isTavilyKeyMissingError, isWebSe
 
 const router = Router();
 
+/** A message row as loaded for branch walking. */
+type BranchRow = { id: string; parent_id: string | null; role: string; content: string; result: unknown };
+
+/** Walk up the chat tree from `startId` to the root via parent_id and return
+ *  the chain in root→start order. Used to scope a turn's context (prior
+ *  messages + already-shown names) to the ACTIVE branch, so messages on
+ *  abandoned sibling branches don't leak into the prompt or the dedup set.
+ *  Returns [] when startId is null (a fresh branch root has no prior context).
+ *  A `seen` guard makes a malformed cycle terminate instead of hang. */
+function branchUpTo(all: BranchRow[], startId: string | null): BranchRow[] {
+  if (!startId) return [];
+  const byId = new Map(all.map((r) => [r.id, r]));
+  const chain: BranchRow[] = [];
+  const seen = new Set<string>();
+  let cur = byId.get(startId) ?? null;
+  while (cur && !seen.has(cur.id)) {
+    seen.add(cur.id);
+    chain.push(cur);
+    cur = cur.parent_id ? byId.get(cur.parent_id) ?? null : null;
+  }
+  return chain.reverse();
+}
+
 router.get("/", async (req: AuthedRequest, res) => {
   const rows = await db
     .selectFrom("chats")
@@ -55,7 +78,7 @@ router.get("/:id/messages", async (req: AuthedRequest, res) => {
 
   const messages = await db
     .selectFrom("messages")
-    .selectAll()
+    .select(["id", "parent_id", "role", "content", "result", "created_at"])
     .where("chat_id", "=", chat.id)
     .orderBy("created_at", "asc")
     .execute();
@@ -100,6 +123,16 @@ const completionSchema = z.object({
    *  caused legitimate long briefs (≥2000 chars) to 400 with invalid_body
    *  the moment the user hit "Discover more" or sent a refinement. */
   previousBrief: z.string().max(20000).optional(),
+  /** Branch point for the new user message. The new message attaches under
+   *  this parent — pass the active leaf's id for a normal follow-up, or an
+   *  edited message's OWN parent to fork a sibling branch. Null/omitted =
+   *  branch root (first message in a fresh thread). */
+  parentId: z.string().uuid().nullable().optional(),
+  /** Retry: regenerate the assistant answer for this existing user message
+   *  as a sibling, WITHOUT inserting a new user message. Mutually exclusive
+   *  with a normal turn — when set, `content` should echo that user
+   *  message's text so the mode handler re-runs the same request. */
+  regenerateAssistantForUserId: z.string().uuid().optional(),
 });
 
 router.post("/:id/completion", async (req: AuthedRequest, res) => {
@@ -118,32 +151,57 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   const provider: AiProvider =
     parsed.data.provider ?? availableProviders(userKeys)[0] ?? ("openai" as AiProvider);
 
-  // Persist the user message so chat history is preserved.
-  await db
-    .insertInto("messages")
-    .values({ chat_id: chat.id, role: "user", content: parsed.data.content })
-    .execute();
-
-  // Pull the full chat history (sans the user message we JUST wrote) so
-  // the mode handlers can reason about prior context. "100" answering a
-  // clarify question becomes "100" + "Find me 100 AI consultants …" —
-  // the LLM stops asking clarifying questions it already got answers to.
-  const history = await db
+  // Load the whole chat tree once (before inserting this turn's user
+  // message) so we can scope context to the active branch via parent_id.
+  const allMessages = await db
     .selectFrom("messages")
-    .select(["role", "content", "result", "created_at"])
+    .select(["id", "parent_id", "role", "content", "result"])
     .where("chat_id", "=", chat.id)
     .orderBy("created_at", "asc")
     .execute();
-  const priorMessages = history
-    .slice(0, -1) // drop the just-written user message; it's in `parsed.data.content`
-    .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-  // Pull every prospect name surfaced earlier in this chat so Find doesn't
-  // re-surface them. The user saw "find people at X, Y, Z on the internet"
-  // return names that had already appeared in a prior turn's Goldman Sachs
-  // search — this is the fix.
+  // Resolve this turn into a tree position.
+  //   - Retry: regenerate the answer for an existing user message as a
+  //     sibling assistant — DON'T insert a new user message. Context is the
+  //     branch up to (and including) that user message's parent.
+  //   - Normal / edit: insert a new user message under `parentId` (the active
+  //     leaf for a follow-up, or an edited message's own parent to fork).
+  const isRetry = !!parsed.data.regenerateAssistantForUserId;
+  let currentUserMessageId: string;
+  let createdUserMessage = false;
+  let anchorParentId: string | null; // parent of the current user message — the prior-context branch tip
+
+  if (isRetry) {
+    const target = allMessages.find(
+      (m) => m.id === parsed.data.regenerateAssistantForUserId && m.role === "user",
+    );
+    if (!target) return res.status(400).json({ error: "invalid_retry_target" });
+    currentUserMessageId = target.id;
+    anchorParentId = target.parent_id;
+  } else {
+    const parentId = parsed.data.parentId ?? null;
+    const inserted = await db
+      .insertInto("messages")
+      .values({ chat_id: chat.id, role: "user", content: parsed.data.content, parent_id: parentId })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    currentUserMessageId = inserted.id;
+    createdUserMessage = true;
+    anchorParentId = parentId;
+  }
+
+  // Prior context = the active branch ABOVE the current user message. Using
+  // the tree (not created_at) keeps abandoned sibling branches out of the
+  // prompt and the dedup set. "100" answering a clarify question still lands
+  // right after "Find me 100 AI consultants …" on the same branch.
+  const branch = branchUpTo(allMessages, anchorParentId);
+  const priorMessages = branch.map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
+
+  // Pull every prospect name surfaced earlier ON THIS BRANCH so Find doesn't
+  // re-surface them — scoped to the branch so a discarded edit's results
+  // don't suppress people on the branch the user actually kept.
   const alreadyShownNames: string[] = [];
-  for (const m of history) {
+  for (const m of branch) {
     if (m.role !== "assistant") continue;
     const r = m.result as unknown;
     if (!r || typeof r !== "object") continue;
@@ -198,19 +256,14 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   // it off BEFORE runFind so the 30-second Find pipeline doesn't starve the
   // title LLM call of API connection / rate limit budget — by the time runFind
   // is done, titlePromise has long since resolved.
-  const userCountRow = await db
-    .selectFrom("messages")
-    .select(({ fn }) => [fn.count<number>("id").as("c")])
-    .where("chat_id", "=", chat.id)
-    .where("role", "=", "user")
-    .executeTakeFirst();
-  const userMsgCount = Number(userCountRow?.c ?? 0);
-  // Always generate an AI title on the first user message. The client seeds
-  // the chat row with a truncated copy of the user's text (so the sidebar
-  // has *something* before the LLM returns) — if we also gated on
-  // "title === New search", we'd never run the AI title pass for any chat
-  // created normally via ensureChatId. Just trust userMsgCount.
-  const shouldGenerateTitle = userMsgCount === 1;
+  //
+  // Title only on the genuinely-first user message: we created a NEW user
+  // message AND there were zero user messages before this turn. Editing a
+  // first message (a sibling) or retrying an answer must NOT regenerate the
+  // title. `allMessages` was loaded before the insert, so it reflects the
+  // pre-turn state.
+  const priorUserMsgCount = allMessages.filter((m) => m.role === "user").length;
+  const shouldGenerateTitle = createdUserMessage && priorUserMsgCount === 0;
 
   // Run title generation in parallel with the mode handler. Brief is
   // truncated to 400 chars so a 3KB multi-tier brief doesn't drown the
@@ -298,14 +351,18 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     const friendly = renderUpstreamError(err);
     if (friendly) {
       const result: CompletionResult = { kind: "text", content: friendly };
-      // Persist the friendly text as the assistant message so the chat
-      // history reflects what the user actually saw.
-      await db.insertInto("messages").values({
+      // Persist the friendly text as the assistant message (under the current
+      // user message) so the chat history + tree reflect what the user saw.
+      const errAssistant = await db.insertInto("messages").values({
         chat_id: chat.id, role: "assistant", content: friendly,
-        result: result as unknown as object,
-      }).execute().catch(() => { /* non-fatal */ });
+        result: result as unknown as object, parent_id: currentUserMessageId,
+      }).returning("id").executeTakeFirst().catch(() => undefined);
       if (!res.writableEnded) {
-        res.write(JSON.stringify({ result, provider }));
+        res.write(JSON.stringify({
+          result, provider,
+          userMessageId: createdUserMessage ? currentUserMessageId : undefined,
+          assistantMessageId: errAssistant?.id,
+        }));
         res.end();
       }
       return;
@@ -328,7 +385,7 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
         ? `${result.summary} (${result.prospects.length} prospects)`
         : `Drafted ${result.drafts.length} outreach message${result.drafts.length === 1 ? "" : "s"}.`;
 
-  await db
+  const assistantRow = await db
     .insertInto("messages")
     .values({
       chat_id: chat.id,
@@ -336,8 +393,10 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       content: timelineText,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       result: result as any,
+      parent_id: currentUserMessageId,
     })
-    .execute();
+    .returning("id")
+    .executeTakeFirstOrThrow();
 
   // Resolve the AI title (kicked off BEFORE runFind so Find doesn't starve it).
   // The outer try/catch is defensive — titlePromise already catches its own
@@ -369,8 +428,15 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   // Headers + heartbeat whitespace already sent — use res.write/res.end,
   // NOT res.json (which calls setHeader again and errors). Client parses
   // leading whitespace fine; JSON.parse ignores it.
+  //
+  // Return the new message ids so the client can graft this turn into its
+  // message tree and point the active branch at it — no full refetch needed.
   if (!res.writableEnded) {
-    res.write(JSON.stringify({ result, provider, title: newTitle }));
+    res.write(JSON.stringify({
+      result, provider, title: newTitle,
+      userMessageId: createdUserMessage ? currentUserMessageId : undefined,
+      assistantMessageId: assistantRow.id,
+    }));
     res.end();
   }
   } catch (err) {

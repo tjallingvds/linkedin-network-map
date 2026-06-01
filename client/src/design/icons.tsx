@@ -40,3 +40,8 @@ export const IconBriefcase = (p: IcoProps) => <Ico {...p}><rect x="2" y="7" widt
 export const IconSend = (p: IcoProps) => <Ico {...p}><path d="m22 2-7 20-4-9-9-4z" /><path d="M22 2 11 13" /></Ico>;
 export const IconArrowR = (p: IcoProps) => <Ico {...p}><path d="M5 12h14M12 5l7 7-7 7" /></Ico>;
 export const IconCalendar = (p: IcoProps) => <Ico {...p}><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></Ico>;
+export const IconCopy = (p: IcoProps) => <Ico {...p}><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></Ico>;
+export const IconEdit = (p: IcoProps) => <Ico {...p}><path d="M12 20h9" /><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" /></Ico>;
+export const IconRetry = (p: IcoProps) => <Ico {...p}><path d="M3 2v6h6" /><path d="M3.5 13a9 9 0 1 0 2.1-9.4L3 8" /></Ico>;
+export const IconChevL = (p: IcoProps) => <Ico {...p}><path d="m15 18-6-6 6-6" /></Ico>;
+export const IconChevR = (p: IcoProps) => <Ico {...p}><path d="m9 18 6-6-6-6" /></Ico>;

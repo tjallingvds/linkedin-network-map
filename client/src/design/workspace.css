@@ -930,6 +930,42 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 @keyframes blink { 0%,80%,100% { opacity: 0.2; transform: scale(0.7); } 40% { opacity: 1; transform: scale(1); } }
 @keyframes msg-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
+/* Message rows — user bubble / ai block + a hover action row (copy, edit /
+   retry) and a version switcher when the message has sibling branches. */
+.user-row { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.user-row.editing { align-items: stretch; align-self: stretch; width: 100%; }
+.msg-actions {
+  display: flex; align-items: center; gap: 2px;
+  opacity: 0; transition: opacity 140ms ease;
+}
+.ai-block .msg-actions { margin-top: 6px; }
+/* Reveal on hover; but a version switcher (multiple branches) stays visible. */
+.user-row:hover .msg-actions,
+.ai-block:hover .msg-actions,
+.msg-actions:has(.version-switch) { opacity: 1; }
+.msg-act {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 7px;
+  border: none; background: transparent; color: var(--text-mute);
+  cursor: pointer; transition: background 140ms ease, color 140ms ease;
+}
+.msg-act:hover:not(:disabled) { background: var(--panel); color: var(--text); }
+.msg-act:disabled { opacity: 0.35; cursor: default; }
+.version-switch { display: inline-flex; align-items: center; gap: 1px; }
+.version-count {
+  font-family: 'Geist Mono', monospace; font-size: 11px;
+  color: var(--text-mute); min-width: 26px; text-align: center;
+}
+/* Inline edit of a sent message — a composer-style textarea + actions. */
+.user-edit-input {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 56px;
+  padding: 10px 14px; border-radius: 14px;
+  border: 1px solid var(--accent); background: var(--bg);
+  color: var(--text); font: inherit; font-size: 13.5px; line-height: 1.5;
+  outline: none;
+}
+.user-edit-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+
 /* Prospect grid */
 .prospect-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));

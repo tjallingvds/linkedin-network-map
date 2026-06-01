@@ -88,6 +88,8 @@ export type CompletionResult =
 export interface ChatMessage {
   id: string;
   chatId: string;
+  /** Parent message id in the chat tree, or null for a branch root. */
+  parentId: string | null;
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;

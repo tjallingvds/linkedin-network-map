@@ -19,6 +19,7 @@ import { ConnectionsImportModal } from "../components/ConnectionsImportModal";
 import {
   IconSearch, IconSparkle, IconArrowUp,
   IconCheck, IconSave, IconDownload, IconSheet, IconSend, IconUsers,
+  IconCopy, IconEdit, IconRetry, IconChevL, IconChevR,
 } from "../design/icons";
 
 type ThreadEntry =
@@ -29,6 +30,157 @@ type ThreadEntry =
 
 type KeyErrorHint = { providers: string[] };
 interface ChatListItem { id: string; title: string; updated_at: string; }
+
+// ── Chat message tree ──────────────────────────────────────────────────────
+// The chat is a tree (server `messages.parent_id`), not a flat list. Editing a
+// message forks a sibling branch; retrying an answer adds a sibling assistant;
+// the visible conversation is the active root→leaf path. A node carries the
+// already-rendered shape so the render memo stays a pure projection.
+type ChatNode = {
+  id: string;
+  parentId: string | null;
+  order: number; // monotonic; newest sibling is the default-active one
+  role: "user" | "ai";
+  text?: string;
+  summary?: string;
+  prospects?: Prospect[];
+  isError?: boolean;
+  keyMissing?: KeyErrorHint;
+};
+
+// Branch metadata attached to a rendered entry so the row can show a version
+// switcher + edit/copy/retry actions. Absent on the transient thinking entry.
+type BranchMeta = { id: string; parentId: string | null; index: number; count: number; isUser: boolean };
+type RenderEntry = ThreadEntry & { node?: BranchMeta };
+
+// In-flight turn overlay — rendered on top of the committed path while the
+// server works, then replaced by real nodes on response.
+type Pending =
+  | { kind: "turn" | "edit" | "draft"; parentId: string | null; userText: string | null; steps: string[] }
+  | { kind: "retry"; anchorId: string; steps: string[] };
+
+// What a completed/failed turn needs to know to graft itself into the tree.
+type TurnCtx =
+  | { kind: "turn" | "edit" | "draft"; parentId: string | null; userText: string | null }
+  | { kind: "retry"; anchorId: string };
+
+// Server /completion response, including the new message ids for grafting.
+type CompletionResp = {
+  result?: CompletionResult;
+  title?: string;
+  userMessageId?: string;
+  assistantMessageId?: string;
+};
+
+const ROOT_KEY = "__root__";
+const pkey = (parentId: string | null) => parentId ?? ROOT_KEY;
+const isLocalId = (id: string) => id.startsWith("local:");
+
+function siblingsSorted(nodes: Map<string, ChatNode>, parentId: string | null): ChatNode[] {
+  return [...nodes.values()].filter((n) => n.parentId === parentId).sort((a, b) => a.order - b.order);
+}
+
+/** Walk root→leaf, choosing the selected child at each branch point (newest by
+ *  default). A `seen` guard stops a malformed cycle from hanging the render. */
+function activePath(nodes: Map<string, ChatNode>, activeChild: Record<string, string>): ChatNode[] {
+  const path: ChatNode[] = [];
+  const seen = new Set<string>();
+  let parentId: string | null = null;
+  for (;;) {
+    const sibs = siblingsSorted(nodes, parentId);
+    if (sibs.length === 0) break;
+    const chosenId = activeChild[pkey(parentId)];
+    const chosen = (chosenId && sibs.find((s) => s.id === chosenId)) || sibs[sibs.length - 1];
+    if (!chosen || seen.has(chosen.id)) break;
+    seen.add(chosen.id);
+    path.push(chosen);
+    parentId = chosen.id;
+  }
+  return path;
+}
+
+function nodeToEntry(n: ChatNode, nodes: Map<string, ChatNode>): RenderEntry {
+  const sibs = siblingsSorted(nodes, n.parentId);
+  const meta: BranchMeta = {
+    id: n.id, parentId: n.parentId,
+    index: sibs.findIndex((s) => s.id === n.id), count: sibs.length, isUser: n.role === "user",
+  };
+  if (n.role === "user") return { role: "user", text: n.text ?? "", node: meta };
+  if (n.prospects) return { role: "ai", summary: n.summary ?? "", prospects: n.prospects, node: meta };
+  return { role: "ai", text: n.text ?? "", isError: n.isError, keyMissing: n.keyMissing, node: meta };
+}
+
+/** Project the tree (+ optional in-flight overlay) into the linear render list
+ *  the thread UI consumes. */
+function buildThread(nodes: Map<string, ChatNode>, activeChild: Record<string, string>, pending: Pending | null): RenderEntry[] {
+  const path = activePath(nodes, activeChild);
+  if (!pending) return path.map((n) => nodeToEntry(n, nodes));
+
+  if (pending.kind === "retry") {
+    const idx = path.findIndex((n) => n.id === pending.anchorId);
+    const kept = idx >= 0 ? path.slice(0, idx + 1) : path;
+    const entries: RenderEntry[] = kept.map((n) => nodeToEntry(n, nodes));
+    entries.push({ role: "ai", thinking: true, steps: pending.steps });
+    return entries;
+  }
+  // turn / edit / draft — anchor on the parent (inclusive), then optimistic
+  // user bubble (when any) + the thinking row.
+  let kept: ChatNode[] = [];
+  if (pending.parentId != null) {
+    const idx = path.findIndex((n) => n.id === pending.parentId);
+    kept = idx >= 0 ? path.slice(0, idx + 1) : path;
+  }
+  const entries: RenderEntry[] = kept.map((n) => nodeToEntry(n, nodes));
+  if (pending.userText != null) entries.push({ role: "user", text: pending.userText });
+  entries.push({ role: "ai", thinking: true, steps: pending.steps });
+  return entries;
+}
+
+/** Build the node shape for an assistant reply from a CompletionResult. */
+function aiNodeFromResult(result: CompletionResult): Partial<ChatNode> {
+  if (result.kind === "prospects") return { summary: result.summary, prospects: result.prospects };
+  if (result.kind === "text") return { text: result.content };
+  return { text: `Drafted ${result.drafts.length} outreach message${result.drafts.length === 1 ? "" : "s"}.` };
+}
+
+/** Route a user message to a completion mode. Shared by fresh sends, edits,
+ *  and retries so re-runs route identically to the original send.
+ *   - find: a fresh research brief / person-background / site-scrape
+ *   - discover_more: an explicit "more / again / N people" re-ask when a prior
+ *     result + brief exist on this branch
+ *   - followup: a filter/refinement on an existing result
+ *   - else: the user's current search-mode toggle (find | network) */
+function routeMode(
+  text: string,
+  opts: { havePriorResult: boolean; hasBrief: boolean; searchMode: "find" | "network" },
+): "find" | "network" | "followup" | "discover_more" {
+  const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+  const looksLikeFreshBrief =
+    /^\s*(?:find\s+(?:me\s+)?|search(?:\s+for)?\s+|look\s+(?:for|up)\s+|get\s+me\s+|show\s+me\s+|give\s+me\s+|i\s+(?:want|need)\s+)/i.test(text) &&
+    (wordCount >= 8 || /\b(?:ai|cto|coo|cfo|cro|cio|ceo|svp|vp\b|md\b|director|head\s+of|manager|founder|partner|chief|engineer|scientist|analyst|consultant|investor)\b/i.test(text));
+
+  const wantsNewSearch =
+    looksLikeFreshBrief ||
+    /\b(more|another|additional|further|elsewhere|on the (web|internet)|search the web|search the internet)\b/i.test(text) ||
+    /\b(?:search(?:\s+(?:again|better|for|more))?|re[-\s]?search|look\s+up|dig\s+up|go\s+find)\b/i.test(text) ||
+    /\b(?:better|deeper|broader|wider|proper|real)\s+(?:search|list|results?)\b/i.test(text) ||
+    /\badd\s+(?:their|the)?\s*(?:linkedin|email|phone|location|title|bio|contact)s?\b/i.test(text) ||
+    /\b(?:find|get|give|show|need|want)\s+(?:me\s+)?(?:up\s+to\s+)?\d{1,3}\b/i.test(text) ||
+    /^\s*(?:no|nope|not (?:these|right|good|it)|actually|wait)\b/i.test(text) ||
+    /\b(?:start over|redo|try again|different (?:search|prospects)|new search)\b/i.test(text);
+
+  const wantsPersonBackground =
+    /\b(?:background\s+(?:on|for|info)|deep[-\s]?dive\s+(?:on|into)|research\s+(?:on|about)|tell\s+me\s+(?:everything|more|all)\s+about|what\s+(?:do\s+you\s+know|can\s+you\s+find)\s+about|everything\s+(?:you\s+can\s+find\s+)?about|recent\s+(?:posts?|talks?|interviews?))\b/i.test(text);
+
+  const wantsSiteScrape =
+    /\b(?:scrape|crawl|extract\s+(?:from|the\s+content)|read|summari[sz]e)\b/i.test(text) &&
+    /(?:https?:\/\/[^\s<>"']+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[\w./-]*)?)/i.test(text);
+
+  if (wantsSiteScrape || wantsPersonBackground) return "find";
+  if (opts.havePriorResult && wantsNewSearch && opts.hasBrief) return "discover_more";
+  if (opts.havePriorResult) return "followup";
+  return opts.searchMode;
+}
 
 /**
  * When sending chat-found prospects into a CRM board, carry their match
@@ -175,7 +327,74 @@ export function DiscoverPage() {
   const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table" | "overview">("kanban");
   const [activeBoardId, setActiveBoardId] = useState<string>("");
   const [view, setView] = useState<"hero" | "thread">("hero");
-  const [thread, setThread] = useState<ThreadEntry[]>([]);
+  // Chat message tree (source of truth) + which sibling is active at each
+  // branch point. The rendered `thread` is a pure projection of these.
+  const [nodes, setNodes] = useState<Map<string, ChatNode>>(new Map());
+  const [activeChild, setActiveChild] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<Pending | null>(null);
+  // Monotonic order counter so the newest sibling is the default-active one.
+  const orderRef = useRef(0);
+  // Read current nodes synchronously inside async send handlers.
+  const nodesRef = useRef(nodes);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  // Which user message is being edited inline (null = none), plus its draft text.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const thread = useMemo<RenderEntry[]>(() => buildThread(nodes, activeChild, pending), [nodes, activeChild, pending]);
+
+  const resetTree = () => {
+    setNodes(new Map());
+    setActiveChild({});
+    setPending(null);
+    setEditingId(null);
+    orderRef.current = 0;
+  };
+  /** The active leaf id — parent for the next normal follow-up turn. */
+  const currentLeafId = (): string | null => {
+    const path = activePath(nodesRef.current, activeChild);
+    return path.length ? path[path.length - 1]!.id : null;
+  };
+  /** Graft a completed turn's server-assigned nodes into the tree and make
+   *  that branch active. `assistantParentId` is the new user message (normal/
+   *  edit) or the existing user message (retry). */
+  const commitNodes = (args: {
+    userMessageId?: string;
+    userText?: string;
+    userParentId?: string | null;
+    assistantMessageId?: string;
+    assistantParentId: string | null;
+    result?: CompletionResult;
+    errorText?: string;
+    keyMissing?: KeyErrorHint;
+  }) => {
+    const o1 = orderRef.current++;
+    const o2 = orderRef.current++;
+    setNodes((prev) => {
+      const next = new Map(prev);
+      if (args.userMessageId) {
+        next.set(args.userMessageId, {
+          id: args.userMessageId, parentId: args.userParentId ?? null, order: o1,
+          role: "user", text: args.userText ?? "",
+        });
+      }
+      if (args.assistantMessageId) {
+        const ai: ChatNode = {
+          id: args.assistantMessageId, parentId: args.assistantParentId, order: o2, role: "ai",
+        };
+        if (args.errorText != null) { ai.text = args.errorText; ai.isError = true; ai.keyMissing = args.keyMissing; }
+        else if (args.result) Object.assign(ai, aiNodeFromResult(args.result));
+        next.set(args.assistantMessageId, ai);
+      }
+      return next;
+    });
+    setActiveChild((prev) => {
+      const next = { ...prev };
+      if (args.userMessageId) next[pkey(args.userParentId ?? null)] = args.userMessageId;
+      if (args.assistantMessageId) next[pkey(args.assistantParentId)] = args.assistantMessageId;
+      return next;
+    });
+    setPending(null);
+  };
   const [draft, setDraft] = useState("");
   const draftRef = useRef<HTMLTextAreaElement>(null);
   // Auto-size the composer textarea: height tracks scrollHeight so the box
@@ -246,7 +465,7 @@ export function DiscoverPage() {
   const handleNewChat = async () => {
     setAppMode("discover");
     setView("hero");
-    setThread([]);
+    resetTree();
     setSelected(new Set());
     setDraft("");
     setOpenProspect(null);
@@ -300,7 +519,7 @@ export function DiscoverPage() {
       if (chatId === id) {
         setChatId(null);
         setActiveNav("");
-        setThread([]);
+        resetTree();
         setView("hero");
         setLastProspects([]);
         setLastBrief("");
@@ -382,43 +601,44 @@ export function DiscoverPage() {
     setChatId(id);
     setLastProspects([]);
     setLastBrief("");
-    setThread([]);
+    resetTree();
     setView("hero");
     // Fetch messages — assistant messages include the full structured result
-    // as JSON so prospect cards rebuild instead of becoming plain-text summaries.
-    api.get<{ messages: { role: string; content: string; result?: CompletionResult | null }[] }>(`/api/chats/${id}/messages`)
+    // as JSON so prospect cards rebuild instead of becoming plain-text
+    // summaries. parent_id drives the branch tree; ordering is by created_at.
+    api.get<{ messages: { id: string; parent_id: string | null; role: string; content: string; result?: CompletionResult | null }[] }>(`/api/chats/${id}/messages`)
       .then((r) => {
-        const entries: ThreadEntry[] = [];
-        let lastProspectBatch: Prospect[] = [];
-        let lastBriefFromHistory = "";
-        for (const m of r.messages ?? []) {
+        const rows = r.messages ?? [];
+        const built = new Map<string, ChatNode>();
+        rows.forEach((m, i) => {
+          const node: ChatNode = {
+            id: m.id, parentId: m.parent_id, order: i, role: m.role === "user" ? "user" : "ai",
+          };
           if (m.role === "user") {
-            entries.push({ role: "user" as const, text: m.content });
-            lastBriefFromHistory = m.content;
+            node.text = m.content;
           } else {
-            // Prefer the structured payload when present.
             const res = m.result;
-            if (res && typeof res === "object" && "kind" in res) {
-              if (res.kind === "prospects") {
-                entries.push({ role: "ai" as const, summary: res.summary, prospects: res.prospects });
-                lastProspectBatch = res.prospects;
-                continue;
-              }
-              if (res.kind === "text") {
-                entries.push({ role: "ai" as const, text: res.content });
-                continue;
-              }
-              // "drafts" don't render in the thread in the legacy UI — fall through.
+            if (res && typeof res === "object" && "kind" in res && res.kind === "prospects") {
+              node.summary = res.summary; node.prospects = res.prospects;
+            } else if (res && typeof res === "object" && "kind" in res && res.kind === "text") {
+              node.text = res.content;
+            } else {
+              node.text = m.content; // drafts / legacy: render the timeline stub
             }
-            entries.push({ role: "ai" as const, text: m.content });
           }
-        }
-        setThread(entries);
-        setView(entries.length > 0 ? "thread" : "hero");
-        // Restore follow-up context so "More results" + refinement work after
-        // reopening a past chat.
-        setLastProspects(lastProspectBatch);
-        setLastBrief(lastBriefFromHistory);
+          built.set(m.id, node);
+        });
+        orderRef.current = rows.length;
+        setNodes(built);
+        setActiveChild({}); // newest-by-default selects the latest branch
+        // Restore follow-up context from the active (newest) branch so "More
+        // results" + refinement work after reopening a past chat.
+        const path = activePath(built, {});
+        const lastProspectNode = [...path].reverse().find((n) => n.prospects);
+        const lastUserNode = [...path].reverse().find((n) => n.role === "user");
+        setLastProspects(lastProspectNode?.prospects ?? []);
+        setLastBrief(lastUserNode?.text ?? "");
+        setView(path.length > 0 ? "thread" : "hero");
       })
       .catch(() => { /* leave thread empty */ });
   };
@@ -443,83 +663,26 @@ export function DiscoverPage() {
     const havePriorResult = lastProspects.length > 0;
     // Followup vs fresh-search routing. Trigger a fresh search whenever the
     // message reads as a re-ask, not a filter. Matches:
-    //   - "find more" / "another" / "on the web" (explicit "more" intent)
-    //   - "search again" / "better search" / "do a search" / "look up"
-    //     (re-run intent — previously fell through to followup, which then
-    //     punted with a clarify because it can only filter or answer)
-    //   - "add linkedins" / "add emails" / "pull their …" (enrich-ish re-ask
-    //     that users phrase as "add X" — a true filter of the current list
-    //     never produces new data, so re-run instead)
-    //   - "no …" / "not these" / "that's wrong" / "different" (rejection)
-    //   - "find me 100" / "get me 50 people" (count-driven re-ask)
-    //   - "start over" / "redo" / "try again"
-    // A message that LOOKS like a fresh research brief — starts with a
-    // discovery verb ("find", "search", "look", "get me", "show me") and
-    // is substantive (>=8 words OR mentions explicit role/sector
-    // language) — should kick off a new search, not get routed into the
-    // filter-or-answer Followup path. Repro: user re-pasted their full
-    // brief expecting a new search; it was treated as a filter on a
-    // previous 1-prospect list and returned "No prospects match the
-    // criteria." Filter-style messages stay short ("only those with
-    // email", "just VPs") so the word-count gate keeps them in Followup.
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
-    const looksLikeFreshBrief =
-      /^\s*(?:find\s+(?:me\s+)?|search(?:\s+for)?\s+|look\s+(?:for|up)\s+|get\s+me\s+|show\s+me\s+|give\s+me\s+|i\s+(?:want|need)\s+)/i.test(text) &&
-      (wordCount >= 8 || /\b(?:ai|cto|coo|cfo|cro|cio|ceo|svp|vp\b|md\b|director|head\s+of|manager|founder|partner|chief|engineer|scientist|analyst|consultant|investor)\b/i.test(text));
-
-    const wantsNewSearch =
-      looksLikeFreshBrief ||
-      /\b(more|another|additional|further|elsewhere|on the (web|internet)|search the web|search the internet)\b/i.test(text) ||
-      /\b(?:search(?:\s+(?:again|better|for|more))?|re[-\s]?search|look\s+up|dig\s+up|go\s+find)\b/i.test(text) ||
-      /\b(?:better|deeper|broader|wider|proper|real)\s+(?:search|list|results?)\b/i.test(text) ||
-      /\badd\s+(?:their|the)?\s*(?:linkedin|email|phone|location|title|bio|contact)s?\b/i.test(text) ||
-      /\b(?:find|get|give|show|need|want)\s+(?:me\s+)?(?:up\s+to\s+)?\d{1,3}\b/i.test(text) ||
-      /^\s*(?:no|nope|not (?:these|right|good|it)|actually|wait)\b/i.test(text) ||
-      /\b(?:start over|redo|try again|different (?:search|prospects)|new search)\b/i.test(text);
-
-    // Deep research intent: "tell me everything about X", "background on X",
-    // "deep dive on X". Must route to FIND (not discover_more — which would
-    // just return more people — and not followup — which would just filter
-    // the existing list). Find has a dedicated person-background branch that
-    // pulls non-obvious facts with citations.
-    const wantsPersonBackground =
-      /\b(?:background\s+(?:on|for|info)|deep[-\s]?dive\s+(?:on|into)|research\s+(?:on|about)|tell\s+me\s+(?:everything|more|all)\s+about|what\s+(?:do\s+you\s+know|can\s+you\s+find)\s+about|everything\s+(?:you\s+can\s+find\s+)?about|recent\s+(?:posts?|talks?|interviews?))\b/i.test(text);
-
-    // Site-scraper intent: any explicit scrape/crawl verb plus a URL in the
-    // text. Route to FIND so the dedicated site-scraper branch fires —
-    // otherwise discover_more / followup would ignore the URL.
-    const wantsSiteScrape =
-      /\b(?:scrape|crawl|extract\s+(?:from|the\s+content)|read|summari[sz]e)\b/i.test(text) &&
-      /(?:https?:\/\/[^\s<>"']+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/[\w./-]*)?)/i.test(text);
-
-    let mode: "find" | "network" | "followup" | "discover_more";
-    if (wantsSiteScrape || wantsPersonBackground) mode = "find";
-    else if (havePriorResult && wantsNewSearch && lastBrief) mode = "discover_more";
-    else if (havePriorResult) mode = "followup";
-    else mode = searchMode;
+    // (Routing rules live in routeMode — fresh brief vs more/again vs filter.)
+    const mode = routeMode(text, { havePriorResult, hasBrief: !!lastBrief, searchMode });
 
     // Server loads chat history from the DB and builds a full brief, so we
-    // just send the latest turn.
-
-    setThread((t) => [
-      ...t,
-      { role: "user", text },
-      { role: "ai", thinking: true, steps:
-          mode === "network" ? NETWORK_STEPS :
-          mode === "followup" ? FOLLOWUP_STEPS :
-          SEARCH_STEPS,
-      },
-    ]);
+    // just send the latest turn. The new user message attaches under the
+    // active leaf; the server returns ids we graft into the tree.
+    const parentId = currentLeafId();
+    const steps = mode === "network" ? NETWORK_STEPS : mode === "followup" ? FOLLOWUP_STEPS : SEARCH_STEPS;
+    const ctx = { kind: "turn" as const, parentId, userText: text };
+    setPending({ kind: "turn", parentId, userText: text, steps });
 
     try {
       const id = await ensureChatId(text);
-      const body: Record<string, unknown> = { content: text, mode };
+      const body: Record<string, unknown> = { content: text, mode, parentId };
       if (mode === "followup") body.previousProspects = lastProspects;
       if (mode === "discover_more") {
         body.previousProspects = lastProspects;
         body.previousBrief = `${lastBrief}\n\nRefinement: ${text}`;
       }
-      const resp = await api.post<{ result: CompletionResult; title?: string }>(`/api/chats/${id}/completion`, body);
+      const resp = await api.post<CompletionResp>(`/api/chats/${id}/completion`, body);
       // On first send, rename the sidebar row NO MATTER WHAT — either to the
       // server's AI-generated title, or a truncated fallback so it never
       // stays stuck as "New search".
@@ -533,9 +696,9 @@ export function DiscoverPage() {
           api.patch(`/api/chats/${id}`, { title: nextTitle }).catch(() => { /* non-fatal */ });
         }
       }
-      applyResult(resp.result, mode === "discover_more" ? lastBrief : text);
+      commitResult(resp, ctx, mode === "discover_more" ? lastBrief : text);
     } catch (err) {
-      appendError(err);
+      commitError(err, ctx);
     } finally {
       setStreaming(false);
       refreshUsage();
@@ -545,18 +708,20 @@ export function DiscoverPage() {
   async function sendDiscoverMore() {
     if (streaming || lastProspects.length === 0) return;
     setStreaming(true);
-    setThread((t) => [...t, { role: "ai", thinking: true, steps: SEARCH_STEPS }]);
+    const content = "Show me more matches beyond the ones already listed.";
+    const parentId = currentLeafId();
+    const ctx = { kind: "turn" as const, parentId, userText: content };
+    setPending({ kind: "turn", parentId, userText: content, steps: SEARCH_STEPS });
     try {
       const id = await ensureChatId(lastBrief);
-      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${id}/completion`, {
-        content: "Show me more matches beyond the ones already listed.",
-        mode: "discover_more",
+      const resp = await api.post<CompletionResp>(`/api/chats/${id}/completion`, {
+        content, mode: "discover_more", parentId,
         previousProspects: lastProspects,
         previousBrief: lastBrief,
       });
-      applyResult(resp.result, lastBrief);
+      commitResult(resp, ctx, lastBrief);
     } catch (err) {
-      appendError(err);
+      commitError(err, ctx);
     } finally {
       setStreaming(false);
       refreshUsage();
@@ -565,65 +730,62 @@ export function DiscoverPage() {
 
   async function sendDraft(recipients: Prospect[]) {
     setStreaming(true);
-    setThread((t) => [...t, { role: "ai", thinking: true, steps: DRAFT_STEPS }]);
+    const content = "Write personalised outreach for these recipients.";
+    const parentId = currentLeafId();
+    const ctx = { kind: "draft" as const, parentId, userText: content };
+    setPending({ kind: "draft", parentId, userText: content, steps: DRAFT_STEPS });
     try {
       const id = await ensureChatId(lastBrief || "Outreach drafts");
-      const resp = await api.post<{ result: CompletionResult }>(`/api/chats/${id}/completion`, {
-        content: "Write personalised outreach for these recipients.",
-        mode: "draft",
-        recipients,
+      const resp = await api.post<CompletionResp>(`/api/chats/${id}/completion`, {
+        content, mode: "draft", parentId, recipients,
       });
-      applyResult(resp.result);
+      commitResult(resp, ctx);
     } catch (err) {
-      appendError(err);
+      commitError(err, ctx);
     } finally {
       setStreaming(false);
       refreshUsage();
     }
   }
 
-  function appendError(err: unknown) {
+  /** Graft a thrown-error turn as a local (un-persisted) assistant node so the
+   *  user sees the failure; it reconciles from the server on reload. */
+  function commitError(err: unknown, ctx: TurnCtx) {
     const message = (err as Error).message ?? "Something went wrong.";
-    // Detect missing-key errors so we can render a nicer "Add your keys" card.
-    const keyHint = detectMissingKeys(message);
-    setThread((t) => {
-      const copy = t.slice();
-      const last = copy[copy.length - 1];
-      if (last && "thinking" in last && last.thinking) copy.pop();
-      copy.push({ role: "ai", text: message, isError: true, keyMissing: keyHint });
-      return copy;
+    const keyMissing = detectMissingKeys(message);
+    if (ctx.kind === "retry") {
+      commitNodes({ assistantMessageId: `local:a:${orderRef.current}`, assistantParentId: ctx.anchorId, errorText: message, keyMissing });
+      return;
+    }
+    const uid = `local:u:${orderRef.current}`;
+    commitNodes({
+      userMessageId: uid, userText: ctx.userText ?? "", userParentId: ctx.parentId,
+      assistantMessageId: `local:a:${orderRef.current}`, assistantParentId: uid,
+      errorText: message, keyMissing,
     });
   }
 
-  function applyResult(result: CompletionResult | undefined, brief?: string) {
-    // Defensive: if the server returned an error envelope past the early
-    // header flush, request() should already have thrown an ApiError — but
-    // belt-and-braces, treat a missing/malformed result as a soft error
-    // rather than crashing the page on `result.kind`.
+  /** Graft a completed turn (server ids + result) into the tree and run the
+   *  result's side effects (follow-up context, outreach modal). */
+  function commitResult(resp: CompletionResp, ctx: TurnCtx, brief?: string) {
+    const result = resp.result;
+    // Defensive: if the server returned no/malformed result (an error envelope
+    // slipping past the early header flush), show a soft error instead of
+    // crashing on `result.kind`.
     if (!result || typeof result !== "object" || !("kind" in result)) {
-      setThread((t) => {
-        const copy = t.slice();
-        const last = copy[copy.length - 1];
-        if (last && "thinking" in last && last.thinking) copy.pop();
-        copy.push({
-          role: "ai",
-          text: "Something went wrong on the server — no result was returned. Try again, and if it keeps happening, check the API keys in Settings.",
-        });
-        return copy;
-      });
+      commitError(new Error("Something went wrong on the server — no result was returned. Try again, and if it keeps happening, check the API keys in Settings."), ctx);
       return;
     }
-    setThread((t) => {
-      const copy = t.slice();
-      const last = copy[copy.length - 1];
-      if (last && "thinking" in last && last.thinking) copy.pop();
-      if (result.kind === "prospects") {
-        copy.push({ role: "ai", summary: result.summary, prospects: result.prospects });
-      } else if (result.kind === "text") {
-        copy.push({ role: "ai", text: result.content });
-      }
-      return copy;
-    });
+    if (ctx.kind === "retry") {
+      commitNodes({ assistantMessageId: resp.assistantMessageId, assistantParentId: ctx.anchorId, result });
+    } else {
+      commitNodes({
+        userMessageId: resp.userMessageId, userText: ctx.userText ?? "", userParentId: ctx.parentId,
+        assistantMessageId: resp.assistantMessageId,
+        assistantParentId: resp.userMessageId ?? ctx.parentId,
+        result,
+      });
+    }
     // Track the latest prospect result so follow-ups / discover_more have
     // context. Keep the original brief around for discover_more to re-query.
     if (result.kind === "prospects") {
@@ -641,6 +803,131 @@ export function DiscoverPage() {
       setOutreachFor({ prospects: recipients, drafts: result.drafts });
     }
   }
+
+  // ── Message actions: copy, version switch, edit (fork), retry ─────────────
+  const stepsFor = (mode: "find" | "network" | "followup" | "discover_more") =>
+    mode === "network" ? NETWORK_STEPS : mode === "followup" ? FOLLOWUP_STEPS : SEARCH_STEPS;
+
+  /** Follow-up context (prior prospects + brief) from the active branch up to
+   *  and including `parentId` — so an edit/retry routes + filters against what
+   *  preceded it, not the current leaf. */
+  const branchContextBefore = (parentId: string | null): { prospects: Prospect[]; brief: string } => {
+    if (!parentId) return { prospects: [], brief: "" };
+    const path = activePath(nodesRef.current, activeChild);
+    const idx = path.findIndex((n) => n.id === parentId);
+    const prefix = idx >= 0 ? path.slice(0, idx + 1) : path;
+    const reversed = [...prefix].reverse();
+    return {
+      prospects: reversed.find((n) => n.prospects)?.prospects ?? [],
+      brief: reversed.find((n) => n.role === "user")?.text ?? "",
+    };
+  };
+
+  const copyToClipboard = (text: string, label: string) => {
+    // Strip HTML so a copied AI summary (which can be markup) lands as plain
+    // text rather than tags.
+    const plain = text.includes("<") ? (() => { const d = document.createElement("div"); d.innerHTML = text; return d.textContent ?? text; })() : text;
+    navigator.clipboard?.writeText(plain).then(() => flash(`Copied ${label}`)).catch(() => flash("Copy failed"));
+  };
+
+  /** Flip a branch point to its previous/next sibling. */
+  const switchSibling = (parentId: string | null, dir: -1 | 1) => {
+    const sibs = siblingsSorted(nodesRef.current, parentId);
+    if (sibs.length < 2) return;
+    const activeId = activeChild[pkey(parentId)] ?? sibs[sibs.length - 1]!.id;
+    const i = sibs.findIndex((s) => s.id === activeId);
+    const nextSib = sibs[Math.min(sibs.length - 1, Math.max(0, i + dir))];
+    if (nextSib) setActiveChild((prev) => ({ ...prev, [pkey(parentId)]: nextSib.id }));
+  };
+
+  const startEdit = (nodeId: string, currentText: string) => {
+    setEditingId(nodeId);
+    setEditDraft(currentText);
+  };
+  const cancelEdit = () => { setEditingId(null); setEditDraft(""); };
+
+  /** Submit an edited user message as a SIBLING branch (same parent), then run
+   *  a completion under it — forking the conversation at that point. */
+  async function submitEdit() {
+    const id = editingId;
+    const text = editDraft.trim();
+    if (!id || !text || streaming || !chatId) return;
+    const node = nodesRef.current.get(id);
+    if (!node || isLocalId(id)) return;
+    const parentId = node.parentId;
+    setEditingId(null);
+    setStreaming(true);
+    const { prospects, brief } = branchContextBefore(parentId);
+    const mode = routeMode(text, { havePriorResult: prospects.length > 0, hasBrief: !!brief, searchMode });
+    const ctx = { kind: "edit" as const, parentId, userText: text };
+    setPending({ kind: "edit", parentId, userText: text, steps: stepsFor(mode) });
+    try {
+      const body: Record<string, unknown> = { content: text, mode, parentId };
+      if (mode === "followup") body.previousProspects = prospects;
+      if (mode === "discover_more") { body.previousProspects = prospects; body.previousBrief = `${brief}\n\nRefinement: ${text}`; }
+      const resp = await api.post<CompletionResp>(`/api/chats/${chatId}/completion`, body);
+      commitResult(resp, ctx, mode === "discover_more" ? brief : text);
+    } catch (err) {
+      commitError(err, ctx);
+    } finally {
+      setStreaming(false);
+      refreshUsage();
+    }
+  }
+
+  /** Regenerate the answer to a user message as a NEW sibling assistant. */
+  async function retryAssistant(assistantNodeId: string) {
+    if (streaming || !chatId) return;
+    const aNode = nodesRef.current.get(assistantNodeId);
+    if (!aNode || !aNode.parentId) return;
+    const userNode = nodesRef.current.get(aNode.parentId);
+    if (!userNode || userNode.role !== "user" || isLocalId(userNode.id)) return;
+    const text = userNode.text ?? "";
+    setStreaming(true);
+    const { prospects, brief } = branchContextBefore(userNode.parentId);
+    const mode = routeMode(text, { havePriorResult: prospects.length > 0, hasBrief: !!brief, searchMode });
+    const ctx = { kind: "retry" as const, anchorId: userNode.id };
+    setPending({ kind: "retry", anchorId: userNode.id, steps: stepsFor(mode) });
+    try {
+      const body: Record<string, unknown> = { content: text, mode, regenerateAssistantForUserId: userNode.id };
+      if (mode === "followup") body.previousProspects = prospects;
+      if (mode === "discover_more") { body.previousProspects = prospects; body.previousBrief = brief; }
+      const resp = await api.post<CompletionResp>(`/api/chats/${chatId}/completion`, body);
+      commitResult(resp, ctx, mode === "discover_more" ? brief : text);
+    } catch (err) {
+      commitError(err, ctx);
+    } finally {
+      setStreaming(false);
+      refreshUsage();
+    }
+  }
+
+  /** Hover action row under a message: version switcher (when the message has
+   *  sibling branches) + copy + edit (user) / retry (ai). */
+  const renderMsgActions = (
+    node: BranchMeta | undefined,
+    opts: { copyText: string; copyLabel: string; kind: "user" | "ai" },
+  ) => {
+    if (!node) return null;
+    return (
+      <div className="msg-actions">
+        {node.count > 1 && (
+          <div className="version-switch" title={`Version ${node.index + 1} of ${node.count}`}>
+            <button className="msg-act" aria-label="Previous version" onClick={() => switchSibling(node.parentId, -1)} disabled={node.index <= 0 || streaming}><IconChevL size={13} /></button>
+            <span className="version-count">{node.index + 1}/{node.count}</span>
+            <button className="msg-act" aria-label="Next version" onClick={() => switchSibling(node.parentId, 1)} disabled={node.index >= node.count - 1 || streaming}><IconChevR size={13} /></button>
+          </div>
+        )}
+        <button className="msg-act" title="Copy" onClick={() => copyToClipboard(opts.copyText, opts.copyLabel)}><IconCopy size={13} /></button>
+        {opts.kind === "user" && !isLocalId(node.id) && (
+          <button className="msg-act" title="Edit" onClick={() => startEdit(node.id, opts.copyText)} disabled={streaming}><IconEdit size={13} /></button>
+        )}
+        {opts.kind === "ai" && !isLocalId(node.id) && (
+          <button className="msg-act" title="Retry" onClick={() => retryAssistant(node.id)} disabled={streaming}><IconRetry size={13} /></button>
+        )}
+      </div>
+    );
+  };
 
   /** Create a fresh CRM board from the selected prospects. Real action — POSTs
    *  a board + bulk-inserts contacts, then switches the user to the new board. */
@@ -859,7 +1146,36 @@ export function DiscoverPage() {
             ) : (
               <div className="thread">
                 {thread.map((m, i) => {
-                  if (m.role === "user") return <div key={i} className="user-msg">{m.text}</div>;
+                  if (m.role === "user") {
+                    const node = m.node;
+                    const key = node?.id ?? `u${i}`;
+                    if (node && editingId === node.id) {
+                      return (
+                        <div key={key} className="user-row editing">
+                          <textarea
+                            className="user-edit-input"
+                            value={editDraft}
+                            autoFocus
+                            onChange={(e) => setEditDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submitEdit(); }
+                              if (e.key === "Escape") cancelEdit();
+                            }}
+                          />
+                          <div className="user-edit-actions">
+                            <button className="pill-btn" onClick={cancelEdit}>Cancel</button>
+                            <button className="pill-btn primary" onClick={submitEdit} disabled={!editDraft.trim() || streaming}>Send</button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={key} className="user-row">
+                        <div className="user-msg">{m.text}</div>
+                        {renderMsgActions(node, { copyText: m.text, copyLabel: "message", kind: "user" })}
+                      </div>
+                    );
+                  }
                   if ("thinking" in m && m.thinking) {
                     const step = m.steps[Math.min(m.steps.length - 1, Math.floor((Date.now() / 600) % m.steps.length))];
                     return (
@@ -873,7 +1189,7 @@ export function DiscoverPage() {
                     );
                   }
                   return (
-                    <div key={i} className="ai-block">
+                    <div key={m.node?.id ?? `a${i}`} className="ai-block">
                       <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
                       {"summary" in m && m.summary && (
                         <div className="ai-summary" dangerouslySetInnerHTML={{ __html: m.summary }} />
@@ -971,6 +1287,11 @@ export function DiscoverPage() {
                           )
                         )
                       )}
+                      {renderMsgActions(m.node, {
+                        copyText: "summary" in m && m.summary ? m.summary : ("text" in m && m.text ? m.text : ""),
+                        copyLabel: "response",
+                        kind: "ai",
+                      })}
                     </div>
                   );
                 })}
