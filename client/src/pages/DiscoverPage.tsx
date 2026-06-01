@@ -89,8 +89,11 @@ function activePath(nodes: Map<string, ChatNode>, activeChild: Record<string, st
   for (;;) {
     const sibs = siblingsSorted(nodes, parentId);
     if (sibs.length === 0) break;
-    const chosenId = activeChild[pkey(parentId)];
-    const chosen = (chosenId && sibs.find((s) => s.id === chosenId)) || sibs[sibs.length - 1];
+    // Annotate explicitly: `parentId` is reassigned from `chosen.id` below, so
+    // letting these infer forms a type cycle that `tsc -b` rejects (TS7022).
+    const chosenId: string | undefined = activeChild[pkey(parentId)];
+    const chosen: ChatNode | undefined =
+      (chosenId ? sibs.find((s) => s.id === chosenId) : undefined) ?? sibs[sibs.length - 1];
     if (!chosen || seen.has(chosen.id)) break;
     seen.add(chosen.id);
     path.push(chosen);
