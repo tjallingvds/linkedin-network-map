@@ -284,11 +284,35 @@ export async function runFind(
     const key = n.toLowerCase().trim();
     if (key) seenNames.add(key);
   }
-  const MAX_ROUNDS = 3;
+  // Keep digging across rounds until one of three things is true:
+  //   1. we've found at least HALF of what the user asked for (a satisfying
+  //      floor — niche briefs rarely yield 100% of a big ask),
+  //   2. we've spent the ~2-minute time budget, or
+  //   3. the web is exhausted (a round surfaces zero NEW people — only dupes).
+  // MAX_ROUNDS is just a backstop; time/exhaustion are the real limits. The
+  // old policy stopped after 3 rounds or as soon as it had 30% of the ask,
+  // which is why a 200-person brief gave up at a handful.
+  const SEARCH_TIME_BUDGET_MS = 120_000;
+  const halfTarget = Math.ceil(targetCount / 2);
+  const searchStartedAt = Date.now();
+  const MAX_ROUNDS = 12;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const remaining = targetCount - allPeople.length;
     if (remaining <= 0) break;
+    // Stop conditions are checked at the START of each round (after round 0,
+    // which always runs): an in-flight round is always allowed to finish.
+    if (round > 0) {
+      if (allPeople.length >= halfTarget) {
+        console.log(`[find] reached half-target (${allPeople.length}/${targetCount}) — stopping`);
+        break;
+      }
+      const elapsed = Date.now() - searchStartedAt;
+      if (elapsed >= SEARCH_TIME_BUDGET_MS) {
+        console.log(`[find] time budget spent (${Math.round(elapsed / 1000)}s, ${allPeople.length}/${targetCount}) — stopping`);
+        break;
+      }
+    }
 
     // When round > 0, include the names we've found THIS request in the
     // exclusion list for the query generator. When pre-seed has entries,
@@ -377,18 +401,13 @@ export async function runFind(
 
     console.log(`[find] round ${round + 1}: ${roundPeople.length} raw, ${newCount} new (total ${allPeople.length}/${targetCount})`);
 
-    // Break-out policy:
-    //  - Always break if the round added zero new candidates (the query
-    //    generator is producing pure dupes — more rounds won't help).
-    //  - Otherwise, only break early if we already have a meaningful
-    //    chunk of the target (>= 30% of what was asked). Previously the
-    //    loop quit after any round that returned <3 new — which was
-    //    way too aggressive on niche briefs where round 1 hits 2 people
-    //    but rounds 2 and 3, with different query angles, would have
-    //    found more. User reported "way too quick to say it didn't find
-    //    them" — that was this break.
+    // Only stop early when a round adds ZERO new people — that means the
+    // query generator + Tavily are returning pure dupes, so the web is
+    // exhausted for this brief and more rounds won't help. Otherwise keep
+    // digging toward the half-target / time budget checked at the top of the
+    // loop. (The old "stop once you have 30% and a round added <3" break is
+    // gone — that's what made big briefs give up early.)
     if (newCount === 0) break;
-    if (newCount < 3 && allPeople.length >= Math.ceil(targetCount * 0.3)) break;
   }
 
   // ── Map Candidate → Prospect ─────────────────────────────────────────────

@@ -80,15 +80,16 @@ function setKeyHeader(
  *  surface as "Load failed" rather than an eternal spinner. */
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
   if (isMockApiEnabled()) {
     const mocked = await mockDispatch(method, path, body);
     if (mocked !== undefined) return mocked as T;
     // Fall through to real fetch for anything the mock doesn't handle.
   }
 
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), DEFAULT_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   let r: Response;
   try {
     r = await fetch(`${API_BASE}${path}`, {
@@ -104,7 +105,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     // a uniform ApiError so the UI's catch handlers don't need to know
     // which one fired.
     if ((err as Error).name === "AbortError") {
-      throw new ApiError(0, null, `Request timed out after ${DEFAULT_TIMEOUT_MS / 1000}s — the server may be restarting. Try again in a moment.`);
+      throw new ApiError(0, null, `Request timed out after ${timeoutMs / 1000}s — the server may be restarting. Try again in a moment.`);
     }
     throw new ApiError(0, null, (err as Error).message || "Network error");
   }
@@ -181,8 +182,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 }
 
 export const api = {
-  get: <T>(p: string) => request<T>("GET", p),
-  post: <T>(p: string, body?: unknown) => request<T>("POST", p, body),
+  get: <T>(p: string, opts?: { timeoutMs?: number }) => request<T>("GET", p, undefined, opts),
+  post: <T>(p: string, body?: unknown, opts?: { timeoutMs?: number }) => request<T>("POST", p, body, opts),
   patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, body),
   del: <T>(p: string) => request<T>("DELETE", p),
 };

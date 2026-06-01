@@ -689,7 +689,8 @@ export function DiscoverPage() {
         body.previousProspects = lastProspects;
         body.previousBrief = `${lastBrief}\n\nRefinement: ${text}`;
       }
-      const resp = await api.post<CompletionResp>(`/api/chats/${id}/completion`, body);
+      // Long budget: a single search now digs for up to ~2 min server-side.
+      const resp = await api.post<CompletionResp>(`/api/chats/${id}/completion`, body, { timeoutMs: 300_000 });
       // On first send, rename the sidebar row NO MATTER WHAT — either to the
       // server's AI-generated title, or a truncated fallback so it never
       // stays stuck as "New search".
@@ -725,7 +726,7 @@ export function DiscoverPage() {
         content, mode: "discover_more", parentId, matchBreadth,
         previousProspects: lastProspects,
         previousBrief: lastBrief,
-      });
+      }, { timeoutMs: 300_000 });
       commitResult(resp, ctx, lastBrief);
     } catch (err) {
       commitError(err, ctx);
@@ -745,7 +746,7 @@ export function DiscoverPage() {
       const id = await ensureChatId(lastBrief || "Outreach drafts");
       const resp = await api.post<CompletionResp>(`/api/chats/${id}/completion`, {
         content, mode: "draft", parentId, recipients,
-      });
+      }, { timeoutMs: 300_000 });
       commitResult(resp, ctx);
     } catch (err) {
       commitError(err, ctx);
@@ -872,7 +873,7 @@ export function DiscoverPage() {
       const body: Record<string, unknown> = { content: text, mode, parentId, matchBreadth };
       if (mode === "followup") body.previousProspects = prospects;
       if (mode === "discover_more") { body.previousProspects = prospects; body.previousBrief = `${brief}\n\nRefinement: ${text}`; }
-      const resp = await api.post<CompletionResp>(`/api/chats/${chatId}/completion`, body);
+      const resp = await api.post<CompletionResp>(`/api/chats/${chatId}/completion`, body, { timeoutMs: 300_000 });
       commitResult(resp, ctx, mode === "discover_more" ? brief : text);
     } catch (err) {
       commitError(err, ctx);
@@ -899,7 +900,7 @@ export function DiscoverPage() {
       const body: Record<string, unknown> = { content: text, mode, regenerateAssistantForUserId: userNode.id, matchBreadth };
       if (mode === "followup") body.previousProspects = prospects;
       if (mode === "discover_more") { body.previousProspects = prospects; body.previousBrief = brief; }
-      const resp = await api.post<CompletionResp>(`/api/chats/${chatId}/completion`, body);
+      const resp = await api.post<CompletionResp>(`/api/chats/${chatId}/completion`, body, { timeoutMs: 300_000 });
       commitResult(resp, ctx, mode === "discover_more" ? brief : text);
     } catch (err) {
       commitError(err, ctx);
