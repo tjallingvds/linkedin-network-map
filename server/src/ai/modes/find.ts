@@ -296,6 +296,11 @@ export async function runFind(
   const halfTarget = Math.ceil(targetCount / 2);
   const searchStartedAt = Date.now();
   const MAX_ROUNDS = 12;
+  // HARD CEILING on total Tavily calls for this entire find request, across
+  // ALL rounds. This is the real cost guardrail: without it, a big brief on
+  // an exhausted niche fired ~500 searches for ~17 people. ~2 credits/call,
+  // so 50 ≈ 100 credits — a firm upper bound regardless of target/rounds.
+  const searchBudget = { remaining: 50 };
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const remaining = targetCount - allPeople.length;
@@ -303,6 +308,10 @@ export async function runFind(
     // Stop conditions are checked at the START of each round (after round 0,
     // which always runs): an in-flight round is always allowed to finish.
     if (round > 0) {
+      if (searchBudget.remaining <= 0) {
+        console.log(`[find] search budget exhausted (${allPeople.length}/${targetCount}) — stopping`);
+        break;
+      }
       if (allPeople.length >= halfTarget) {
         console.log(`[find] reached half-target (${allPeople.length}/${targetCount}) — stopping`);
         break;
@@ -338,6 +347,7 @@ export async function runFind(
         userId,
         userKeys,
         matchBreadth,
+        searchBudget,
       });
     } catch (e) {
       // A web-search failure / credit error on a LATER round must not nuke
@@ -700,8 +710,9 @@ async function handleDiscovery(args: {
   userId: string;
   userKeys?: UserKeys;
   matchBreadth: MatchBreadth;
+  searchBudget: { remaining: number };
 }): Promise<HandleDiscoveryResult> {
-  const { provider, query, targetCount, extractionHint, parsed, userId, userKeys, matchBreadth } = args;
+  const { provider, query, targetCount, extractionHint, parsed, userId, userKeys, matchBreadth, searchBudget } = args;
 
   const funnel: FunnelStats = {
     extracted: 0, afterClean: 0, afterBriefFilter: 0,
@@ -716,6 +727,7 @@ async function handleDiscovery(args: {
     parsed,
     userId,
     userKeys,
+    searchBudget,
   });
   funnel.extracted = raw.length;
 
@@ -1104,8 +1116,12 @@ async function parallelDiscovery(args: {
   parsed?: ParsedBrief | null;
   userId: string;
   userKeys?: UserKeys;
+  /** Shared, mutable cap on total Tavily calls for the whole find request.
+   *  Decremented per call; queries stop firing once it hits 0. */
+  searchBudget: { remaining: number };
 }): Promise<Candidate[]> {
-  const { provider, query, targetCount, extractionHint, parsed, userId, userKeys } = args;
+  const { provider, query, targetCount, extractionHint, parsed, userId, userKeys, searchBudget } = args;
+  const remaining = searchBudget.remaining;
 
   // Fail fast before spending LLM tokens on query generation: if no Tavily
   // key is configured, every search below would throw and (historically)
@@ -1145,8 +1161,15 @@ async function parallelDiscovery(args: {
   // scales with the brief's real surface area.
   const firmGroups = Math.ceil(firmCount / 3);          // ~3 firms OR-grouped per query
   const firmRoleCoverage = firmGroups * Math.max(1, archetypeCount);
-  const numQueries = Math.min(
-    80,
+  // Per-round query count, hard-capped low. Each query fires 1-2 Tavily calls,
+  // so this × rounds is what drives credit spend — an earlier cap of 80 ×
+  // many rounds burned ~500 searches for ~17 people on an exhausted niche.
+  // Also clamp to the request's remaining search budget so we never generate
+  // queries we can't afford to fire.
+  const PER_ROUND_QUERY_CAP = 16;
+  const numQueries = Math.max(1, Math.min(
+    PER_ROUND_QUERY_CAP,
+    Math.ceil(remaining / 2), // ~2 calls/query — don't exceed the budget
     Math.ceil(
       Math.max(
         Math.ceil(targetCount / 5),
@@ -1155,8 +1178,8 @@ async function parallelDiscovery(args: {
         8,
       ) * floorMultiplier,
     ),
-  );
-  console.log(`[find] query budget: ${numQueries} (target=${targetCount}, firms=${firmCount}, archetypes=${archetypeCount})`);
+  ));
+  console.log(`[find] query budget: ${numQueries} (target=${targetCount}, firms=${firmCount}, archetypes=${archetypeCount}, searchBudgetLeft=${searchBudget.remaining})`);
 
   const queriesObj = await aiJson<{ queries: string[] }>(
     provider,
@@ -1244,26 +1267,36 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
   // failure into an empty list, so the aggregation below can tell "the web
   // legitimately had nothing" apart from "the search itself fell over".
   type QueryOutcome = { results: TavilyResult[]; error: Error | null };
+  // Budget-guarded Tavily call: returns null (no call made) once the shared
+  // search budget for this find request is spent, so a single search can
+  // never run away with hundreds of Tavily credits. JS is single-threaded so
+  // the check-then-decrement is atomic between awaits even under concurrency.
+  const budgetedSearch = async (q: string, opts: Parameters<typeof tavilySearch>[1]): Promise<TavilyResult[] | null> => {
+    if (searchBudget.remaining <= 0) return null;
+    searchBudget.remaining--;
+    return tavilySearch(q, opts);
+  };
   const runQuery = async (sq: string): Promise<QueryOutcome> => {
     const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, " ").trim();
     try {
       // 1. Advanced + include_domains: linkedin.com
-      const linked = await tavilySearch(cleanQuery, {
+      const linked = await budgetedSearch(cleanQuery, {
         depth: "advanced",
         maxResults: maxPerQuery,
         includeDomains: ["linkedin.com"],
         userId,
         userKeys,
       });
+      if (linked === null) return { results: [], error: null }; // budget spent
       if (linked.length > 0) return { results: linked, error: null };
       // 2. Advanced + "LinkedIn profile" suffix, open web
-      const open = await tavilySearch(`${cleanQuery} LinkedIn profile`, {
+      const open = await budgetedSearch(`${cleanQuery} LinkedIn profile`, {
         depth: "advanced",
         maxResults: maxPerQuery,
         userId,
         userKeys,
       });
-      return { results: open, error: null };
+      return { results: open ?? [], error: null };
     } catch (e) {
       // Quota/auth/missing-key errors must NOT be silently swallowed —
       // without this, a Tavily 432 "out of credits" turns into "Found 0 —
@@ -1272,13 +1305,13 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
       if (isTavilyQuotaError(e) || isTavilyAuthError(e) || e instanceof TavilyKeyMissingError) throw e;
       // 3. Basic fallback for everything else (transient 5xx, timeouts).
       try {
-        const basic = await tavilySearch(cleanQuery, {
+        const basic = await budgetedSearch(cleanQuery, {
           depth: "basic",
           maxResults: 10,
           userId,
           userKeys,
         });
-        return { results: basic, error: null };
+        return { results: basic ?? [], error: null };
       } catch (e2) {
         if (isTavilyQuotaError(e2) || isTavilyAuthError(e2) || e2 instanceof TavilyKeyMissingError) throw e2;
         // Both attempts failed for a transient reason — record the error so
