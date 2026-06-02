@@ -8,7 +8,7 @@
  * place stops that drift.
  */
 import type { AiProvider, CompletionResult } from "@app/shared";
-import { runFind, type MatchBreadth } from "./find.js";
+import { runFind, type MatchBreadth, type PriorMessage } from "./find.js";
 import type { UserKeys } from "../user-keys.js";
 
 export async function runDiscoverMore(
@@ -18,6 +18,14 @@ export async function runDiscoverMore(
   userId: string,
   userKeys?: UserKeys,
   matchBreadth: MatchBreadth = "broad",
+  // Full chat history for this branch. Previously this was []  — which made
+  // discover_more BLIND to the conversation and dependent entirely on the
+  // client-supplied previousBrief. When that brief had degraded to a fragment
+  // (e.g. just the count "100" after the ICP was sent on an earlier turn),
+  // the ICP characteristics were lost and the search free-associated into
+  // competitors. Passing the real branch history rebuilds the full brief
+  // server-side regardless of what the client cached.
+  priorMessages: PriorMessage[] = [],
 ): Promise<CompletionResult> {
-  return runFind(provider, originalBrief, userId, userKeys, [], excludeNames, matchBreadth);
+  return runFind(provider, originalBrief, userId, userKeys, priorMessages, excludeNames, matchBreadth);
 }

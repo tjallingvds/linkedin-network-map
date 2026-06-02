@@ -342,7 +342,7 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
         ...uniqAlreadyShown,
       ]));
       const brief = parsed.data.previousBrief?.trim() || parsed.data.content;
-      result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys, matchBreadth);
+      result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys, matchBreadth, priorMessages);
     } else {
       result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId, userKeys);
     }

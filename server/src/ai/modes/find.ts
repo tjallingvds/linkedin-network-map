@@ -89,6 +89,14 @@ interface ParsedBrief {
    *  when employmentIntent = "past"). When set, the target-firm filter
    *  matches PAST experience and the "not currently there" check runs. */
   pastFirms: string[];
+  /** True ONLY when the brief explicitly wants people EMPLOYED AT AI-product
+   *  companies — model labs, AI agent/tooling vendors (e.g. "find AI
+   *  researchers at OpenAI and Anthropic"). Normally false: an ICP for
+   *  selling agentic-AI services targets BUYERS (operating companies in the
+   *  target industries), so AI vendors are competitors. When false and the
+   *  brief is archetype-driven, the company-type gate drops vendor employers
+   *  so a bare "Head of AI" query can't surface a model-lab exec. */
+  targetsAiVendors: boolean;
 }
 
 /** How strictly the archetype gate matches the brief's role archetypes.
@@ -206,9 +214,18 @@ export async function runFind(
 
   if ((!requestedCount || !hasTargeting) && !isNameLookup) {
     try {
+      // When targeting is already present (a role/company/industry brief or a
+      // full pasted ICP), the ONLY thing that can be missing is the count.
+      // Tell the LLM so it stops replying "what targeting do you need?" to a
+      // fully-specified ICP — the exact loop users hit when re-pasting their
+      // ICP without a number.
+      const targetingNote = hasTargeting
+        ? "TARGETING IS ALREADY PRESENT in this brief (roles, companies, industry, or a full ICP are specified). Do NOT ask what to target and do NOT ask the user to clarify their ICP — the ONLY thing you may be missing is the COUNT. "
+        : "";
       const clarify = await aiJson<{ ready: boolean; question?: string; count?: number }>(
         provider,
         "You screen a prospecting brief before running a web search. " +
+        targetingNote +
         "Require (a) some targeting (role/seniority/industry/company/region) AND (b) a specific COUNT of how many prospects the user wants. " +
         "If a count is missing, return {\"ready\": false, \"question\": \"How many would you like? e.g. 25, 50, 100, 200.\"} — do NOT invent a count and do NOT return ready:true without an integer count. " +
         "NEVER return count=1 unless the user literally typed '1' or 'one' — 'find me people' without a number means they want MANY, not one. " +
@@ -255,6 +272,51 @@ export async function runFind(
   // named?" report can be diagnosed from the logs — an empty firms[] when
   // the brief clearly named one is the tell that extraction misread it.
   console.log(`[find] parsed brief → firms=[${(parsed?.firms ?? []).join(", ")}] titles=[${(parsed?.titles ?? []).join(", ")}] floor=${parsed?.seniorityFloor ?? "none"}`);
+
+  // HARD CEILING on total Tavily calls for this entire find request, across
+  // firm-discovery AND all people-search rounds. ~2 credits/call, so 50 ≈ 100
+  // credits — a firm upper bound regardless of target/rounds. Declared here
+  // (not inside the loop) so the firm-discovery stage below draws from the
+  // same shared budget and can never run away with credits.
+  const searchBudget = { remaining: 50 };
+
+  // ── Firm discovery ───────────────────────────────────────────────────────
+  // The query generator is firm-anchored — it only searches firms the brief
+  // names. When the user describes a company TYPE by characteristics (or asks
+  // for "more / adjacent companies") rather than naming firms, expand to a
+  // vetted set of qualifying BUYER firms so the people-search has real anchors
+  // instead of free-associating into whoever is most famous for the title
+  // (which is how competitors surfaced). Hybrid: the LLM names firms from
+  // world knowledge AND Tavily runs its own firm-finding queries; the merged
+  // list is filtered to buyers (no AI vendors/competitors). Always on UNLESS
+  // the user explicitly locked the search to the firms they named ("only at
+  // X"). Skipped for name-lookups, past-employment briefs (firms live in
+  // pastFirms), and briefs explicitly targeting AI-vendor employees.
+  if (
+    parsed &&
+    !isNameLookup &&
+    parsed.employmentIntent !== "past" &&
+    !parsed.targetsAiVendors &&
+    !(looksLockedToNamedFirms(fullBrief) && parsed.firms.length > 0)
+  ) {
+    try {
+      const discovered = await discoverFirms({ provider, parsed, brief: fullBrief, userId, userKeys, searchBudget });
+      if (discovered.length > 0) {
+        const seen = new Set(parsed.firms.map((f) => f.toLowerCase().trim()));
+        const additions = discovered.filter((f) => !seen.has(f.toLowerCase().trim()));
+        // Cap the anchored firm set so query generation stays focused and the
+        // remaining search budget isn't spread impossibly thin.
+        parsed.firms = [...parsed.firms, ...additions].slice(0, 40);
+        console.log(`[find] firm set after discovery (${parsed.firms.length}): ${parsed.firms.slice(0, 30).join(", ")}`);
+      }
+    } catch (e) {
+      // Quota/auth errors must surface so the user sees a clear card; other
+      // discovery failures are non-fatal — fall through to the named firms.
+      if (isTavilyQuotaError(e) || isTavilyAuthError(e) || e instanceof TavilyKeyMissingError) throw e;
+      console.warn("[find] firm discovery failed, continuing with named firms:", (e as Error).message);
+    }
+  }
+
   const extractCtx = buildExtractCtx(parsed);
 
   // ── Legacy: multi-round discover loop ────────────────────────────────────
@@ -296,11 +358,8 @@ export async function runFind(
   const halfTarget = Math.ceil(targetCount / 2);
   const searchStartedAt = Date.now();
   const MAX_ROUNDS = 12;
-  // HARD CEILING on total Tavily calls for this entire find request, across
-  // ALL rounds. This is the real cost guardrail: without it, a big brief on
-  // an exhausted niche fired ~500 searches for ~17 people. ~2 credits/call,
-  // so 50 ≈ 100 credits — a firm upper bound regardless of target/rounds.
-  const searchBudget = { remaining: 50 };
+  // searchBudget is declared above (shared with the firm-discovery stage) so
+  // discovery + all people-search rounds draw from one ceiling.
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const remaining = targetCount - allPeople.length;
@@ -563,7 +622,8 @@ async function parseBrief(
   "archetypes": ["<role archetype as named in brief>", ...],
   "antiPatterns": ["<exclusion rule as worded in brief>", ...],
   "employmentIntent": "current" | "past",
-  "pastFirms": ["<exact company name>", ...]
+  "pastFirms": ["<exact company name>", ...],
+  "targetsAiVendors": false
 }
 
 Rules:
@@ -582,6 +642,7 @@ Rules:
 - pastFirms: when employmentIntent = "past", move the target firms to pastFirms AND leave "firms" EMPTY (so current-employer filters pass through). The extractor will then filter on past experience. When employmentIntent = "current", leave pastFirms empty.
 - Include all variant spellings of an excluded firm if the brief gives them (e.g. an abbreviation alongside the full name).
 - If the brief lists no archetypes or anti-patterns, return empty arrays. Do not invent any.
+- targetsAiVendors: default false. Set true ONLY when the brief EXPLICITLY wants people who WORK AT AI-product companies — foundation-model labs or AI agent/tooling vendors (e.g. "find AI researchers at OpenAI and Anthropic", "engineers at foundation-model labs", "leaders at AI startups"). When the brief describes selling/deploying AI INTO customer organisations (an ICP whose targets are operating companies — banks, insurers, payments, retail, etc.), leave it false: people employed at AI vendors are competitors, not prospects.
 
 Return ONLY the JSON object.`,
       brief,
@@ -603,6 +664,7 @@ Return ONLY the JSON object.`,
       antiPatterns: Array.isArray(parsed.antiPatterns) ? parsed.antiPatterns.filter((a): a is string => typeof a === "string") : [],
       employmentIntent,
       pastFirms: Array.isArray(parsed.pastFirms) ? parsed.pastFirms.filter((a): a is string => typeof a === "string") : [],
+      targetsAiVendors: parsed.targetsAiVendors === true,
     };
   } catch (e) {
     console.warn("parseBrief failed:", (e as Error).message);
@@ -661,6 +723,169 @@ function buildExtractCtx(parsed: ParsedBrief | null): string {
   if (parsed.excludeTitles.length) ctx += `EXCLUDE title patterns: ${parsed.excludeTitles.join(", ")}\n`;
   if (parsed.excludeSeniority.length) ctx += `EXCLUDE seniority: ${parsed.excludeSeniority.join(", ")}\n`;
   return ctx;
+}
+
+/** True when the brief explicitly restricts the search to the firms the user
+ *  named — "only at Stripe", "just these companies", "no other firms". When
+ *  set (and firms are actually named), the firm-discovery stage is skipped so
+ *  the search stays anchored to exactly what the user listed. Errs toward NOT
+ *  locking — discovery is the default the user asked for. */
+function looksLockedToNamedFirms(brief: string): boolean {
+  const hay = brief.toLowerCase();
+  return (
+    /\b(only|just|solely|exclusively|strictly)\b[^.\n]{0,40}\b(at|from|within|in)\b/.test(hay) ||
+    /\bonly\s+(these|those|the\s+(?:following|named|listed))\b/.test(hay) ||
+    /\b(no|not|never)\s+(other|additional|new)\s+(firms?|companies|orgs?|organi[sz]ations?)\b/.test(hay) ||
+    /\b(don'?t|do\s*not)\s+(add|expand|include|widen|discover)\b[^.\n]{0,30}\b(firms?|companies|orgs?)\b/.test(hay)
+  );
+}
+
+/** Firm-discovery stage. Given an ICP described by CHARACTERISTICS (industry,
+ *  size, regulated, ops-heavy, …) rather than a fixed firm list, expand to a
+ *  vetted set of qualifying BUYER companies so the people-search has real
+ *  anchors instead of free-associating. Hybrid by design:
+ *    1. the LLM names firms from world knowledge AND emits firm-finding web
+ *       queries, then
+ *    2. Tavily runs those queries (grounded, current) and names are extracted,
+ *  the two lists are merged, deduped, and run through a buyer/vendor filter so
+ *  no competitor ever seeds the search. Bounded by the shared search budget. */
+async function discoverFirms(args: {
+  provider: AiProvider;
+  parsed: ParsedBrief;
+  brief: string;
+  userId: string;
+  userKeys?: UserKeys;
+  searchBudget: { remaining: number };
+}): Promise<string[]> {
+  const { provider, parsed, brief, userId, userKeys, searchBudget } = args;
+  const namedAlready = new Set(parsed.firms.map((f) => f.toLowerCase().trim()));
+  const excluded = new Set(parsed.excludeFirms.map((f) => f.toLowerCase().trim()));
+  const characteristics = parsed.context?.trim() || parsed.archetypes.join("; ") || brief.slice(0, 2000);
+
+  // Step 1 — LLM proposes buyer firms AND independent web queries to find more.
+  let proposed: string[] = [];
+  let webQueries: string[] = [];
+  try {
+    const out = await aiJson<{ firms: string[]; webQueries: string[] }>(
+      provider,
+      `You build a target-account list for a B2B prospecting search. From the ICP below, identify real companies that FIT THE CHARACTERISTICS and would be BUYERS of the solution — organisations that would ADOPT it, operating in the target customer industries.
+
+HARD RULE — never include VENDORS/COMPETITORS: foundation-model labs, AI agent/copilot platforms, AI developer-tooling or ML-infra companies, or AI consultancies (e.g. OpenAI, Anthropic, Cohere, Mistral, Google DeepMind, Meta AI, Microsoft AI, Databricks, Scale AI). Those SELL the solution; they are not buyers.
+
+Return:
+- "firms": 25-40 real company names that match the ICP characteristics (industry, size, regulated, ops-heavy, etc.) and are BUYERS. Use exact, well-known company names. Prefer firms that clearly meet any size/segment bar stated in the ICP. Do NOT include any company the brief already named or excluded.
+- "webQueries": 4-6 web-search queries that would surface MORE such companies from the live web (e.g. "largest regulated payments companies 2024", "fintech companies over 2000 employees Europe", "insurers investing in AI operations"). These must find COMPANIES (lists, rankings, industry roundups), NOT individual people.
+
+ICP / characteristics:
+${characteristics}
+
+Return {"firms": [...], "webQueries": [...]}.`,
+      brief.slice(0, 4000),
+      { maxTokens: 1500, userId, userKeys },
+    );
+    proposed = Array.isArray(out.firms) ? out.firms.filter((f): f is string => typeof f === "string" && f.trim().length > 1) : [];
+    webQueries = Array.isArray(out.webQueries) ? out.webQueries.filter((q): q is string => typeof q === "string" && q.trim().length > 3) : [];
+  } catch (e) {
+    console.warn("[find] firm-discovery proposal failed:", (e as Error).message);
+  }
+
+  // Step 2 — Tavily firm-finding searches, capped so discovery never starves
+  // the people-search that follows. Draws from the shared budget.
+  const FIRM_DISCOVERY_CAP = Math.max(0, Math.min(5, Math.floor(searchBudget.remaining / 4)));
+  const snippets: TavilyResult[] = [];
+  for (const q of webQueries.slice(0, FIRM_DISCOVERY_CAP)) {
+    if (searchBudget.remaining <= 0) break;
+    searchBudget.remaining--;
+    try {
+      const r = await tavilySearch(q, { depth: "advanced", maxResults: 10, userId, userKeys });
+      snippets.push(...r);
+    } catch (e) {
+      // Quota/auth/missing-key must propagate (so the run shows a clear card);
+      // a single transient query failure is non-fatal.
+      if (isTavilyQuotaError(e) || isTavilyAuthError(e) || e instanceof TavilyKeyMissingError) throw e;
+      console.warn(`[find] firm-discovery query failed: "${q.slice(0, 60)}" → ${(e as Error).message}`);
+    }
+  }
+
+  // Step 3 — extract buyer firm names from the web snippets.
+  let fromWeb: string[] = [];
+  if (snippets.length > 0) {
+    try {
+      const out = await aiJson<{ firms: string[] }>(
+        provider,
+        `From the web search results below, extract the names of real COMPANIES that match this ICP and would be BUYERS of the solution (operating companies in the target industries — NOT AI vendors / model labs / AI tooling firms, and NOT news sites, analysts, or consultancies writing about them).
+
+ICP / characteristics:
+${characteristics}
+
+Rules:
+- Only return company names that actually appear in the results below.
+- Exclude AI vendors/competitors and generic publishers.
+- Return up to 30 names. {"firms": [...]}`,
+        buildSnippetHaystack(snippets),
+        { maxTokens: 1200, userId, userKeys },
+      );
+      fromWeb = Array.isArray(out.firms) ? out.firms.filter((f): f is string => typeof f === "string" && f.trim().length > 1) : [];
+    } catch (e) {
+      console.warn("[find] firm-discovery web extraction failed:", (e as Error).message);
+    }
+  }
+
+  // Merge LLM + web, dedupe (case-insensitive), drop excluded + already-named.
+  const merged: string[] = [];
+  const seen = new Set<string>([...namedAlready, ...excluded]);
+  for (const f of [...proposed, ...fromWeb]) {
+    const key = f.toLowerCase().trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(f.trim());
+  }
+  if (merged.length === 0) return [];
+
+  // Step 4 — buyer/vendor backstop on the merged firm list.
+  const buyers = await filterBuyerFirms({ provider, firms: merged, characteristics, userId, userKeys });
+  console.log(`[find] firm-discovery: proposed=${proposed.length} web=${fromWeb.length} merged=${merged.length} → ${buyers.length} buyer firms (searchBudgetLeft=${searchBudget.remaining})`);
+  return buyers;
+}
+
+/** Classify firm NAMES as buyers vs AI vendors/competitors; keep only buyers.
+ *  Backstop for firm-discovery so a competitor can never seed the people-search
+ *  even if it slipped through proposal/extraction. One call (firm lists are
+ *  small). Fail-open: keep all on error. */
+async function filterBuyerFirms(args: {
+  provider: AiProvider;
+  firms: string[];
+  characteristics: string;
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<string[]> {
+  const { provider, firms, characteristics, userId, userKeys } = args;
+  if (firms.length === 0) return [];
+  try {
+    const out = await aiJson<{ verdicts: Array<{ firm: string; type: "buyer" | "vendor" | "unknown" }> }>(
+      provider,
+      `Classify each company as a BUYER or a VENDOR for this ICP.
+
+ICP / the solution being sold INTO customers:
+${characteristics}
+
+- "vendor": core business is building or selling AI/ML technology — foundation-model labs, AI agent/copilot platforms, AI dev-tooling/infra, or AI consultancies. Competitors, NOT prospects.
+- "buyer": operates in a target customer industry (banking, insurance, payments, retail, healthcare, manufacturing, etc.) and would CONSUME the solution.
+- "unknown": you cannot tell.
+
+Reject only "vendor". Return {"verdicts": [{"firm": "<name>", "type": "buyer"}, ...]} — one per company, echoing the name exactly.`,
+      JSON.stringify(firms),
+      { maxTokens: 1500, userId, userKeys },
+    );
+    const verdicts = Array.isArray(out.verdicts) ? out.verdicts : [];
+    const vendor = new Set(
+      verdicts.filter((v) => v?.type === "vendor" && typeof v.firm === "string").map((v) => v.firm.toLowerCase().trim()),
+    );
+    return firms.filter((f) => !vendor.has(f.toLowerCase().trim()));
+  } catch (e) {
+    console.warn("[find] buyer-firm filter failed — keeping all:", (e as Error).message);
+    return firms;
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -766,6 +991,26 @@ async function handleDiscovery(args: {
     console.log(`[find] seniority gate (floor="${parsed.seniorityFloor}"): ${before} → ${people.length} (kept) / ${rejectedBySeniority.length} (rejected)`);
   }
   funnel.afterSeniorityGate = people.length;
+
+  // Company-type gate — drop candidates whose EMPLOYER is an AI vendor /
+  // competitor (model labs, AI agent/tooling platforms) rather than a buyer in
+  // the target industries. Runs BEFORE the archetype gate so a perfect title
+  // match at a competitor (e.g. "Chief AI Officer, Cohere") never even reaches
+  // archetype classification. Only for archetype-driven briefs that aren't
+  // explicitly prospecting AI-vendor employees. Rejects are DROPPED entirely,
+  // not added to the rescue pool — a competitor must never resurface as a
+  // best-effort result when the gates empty the pool.
+  if (
+    parsed && parsed.archetypes.length > 0 && !parsed.targetsAiVendors &&
+    people.length > 0
+  ) {
+    const before = people.length;
+    const gated = await gateByCompanyType({ provider, parsed, candidates: people, userId, userKeys });
+    people = gated.kept;
+    if (gated.rejected.length > 0) {
+      console.log(`[find] company-type gate: ${before} → ${people.length} (kept) / ${gated.rejected.length} dropped as competitor/AI-vendor`);
+    }
+  }
 
   // Archetype gate — dedicated semantic classifier. Only runs when the
   // brief listed archetypes or anti-patterns (so simple "find me COOs at
@@ -888,6 +1133,80 @@ Return {"verdicts": [{"id": 0, "verdict": "above_floor", "reason": "..."}, ...]}
     kept: results.flatMap((r) => r.kept),
     rejected: results.flatMap((r) => r.rejected),
   };
+}
+
+/** Company-type gate. Rejects candidates whose CURRENT EMPLOYER is an AI/ML
+ *  technology VENDOR — a foundation-model lab, an AI agent/copilot platform,
+ *  or an AI developer-tooling/infra company — i.e. a competitor that SELLS the
+ *  kind of solution the brief is about, not a BUYER in the target industries.
+ *
+ *  Fixes the "find more in adjacent companies" wander: with no firm anchor a
+ *  bare "Head of AI" query returns the web's most prominent Heads of AI —
+ *  OpenAI / Meta / Cohere leaders — which are perfect TITLE matches but are
+ *  the user's competition. The decision is EMPLOYER-based, not title-based, so
+ *  a "Head of AI" at a bank is kept while a "Chief AI Officer" at a model lab
+ *  is dropped. Runs only for archetype-driven briefs that aren't explicitly
+ *  prospecting AI-vendor employees. Batched 25/call, fail-open. */
+async function gateByCompanyType(args: {
+  provider: AiProvider;
+  parsed: ParsedBrief;
+  candidates: Candidate[];
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<{ kept: Candidate[]; rejected: Candidate[] }> {
+  const { provider, parsed, candidates, userId, userKeys } = args;
+  const BATCH = 25;
+  const batches: Candidate[][] = [];
+  for (let i = 0; i < candidates.length; i += BATCH) {
+    batches.push(candidates.slice(i, i + BATCH));
+  }
+  const briefContext = parsed.context?.trim() || parsed.archetypes.join("; ") || "(not specified)";
+  const results = await Promise.all(
+    batches.map(async (batch) => {
+      const roster = batch.map((c, idx) => ({
+        id: idx, name: c.name, title: c.title, company: c.company, evidence: c.evidence ?? "",
+      }));
+      try {
+        const out = await aiJson<{ verdicts: Array<{ id: number; verdict: "buyer" | "vendor" | "unknown"; reason: string }> }>(
+          provider,
+          `You filter prospecting candidates by their CURRENT EMPLOYER'S business type.
+
+The brief targets BUYERS — people at customer organisations who would ADOPT or PURCHASE the solution it describes. Anyone whose employer SELLS that same kind of solution is a COMPETITOR/VENDOR, not a prospect, and must be rejected — even when their job title is a perfect match.
+
+WHAT THE BRIEF IS ABOUT (the solution being sold INTO customers):
+${briefContext}
+
+CLASSIFY each candidate's EMPLOYER — judge the COMPANY using real-world knowledge, NOT the person's title:
+- "vendor": the employer's CORE BUSINESS is building or selling AI/ML technology — a foundation-model lab, an AI agent / copilot / assistant platform, an AI developer-tooling or ML-infrastructure company, or a consultancy whose product is deploying AI for clients. These are competitors. Illustrative (NOT exhaustive — use your own knowledge): OpenAI, Anthropic, Cohere, Mistral, xAI, Hugging Face, Google DeepMind / Google AI, Meta AI / FAIR / GenAI / Superintelligence Labs, Microsoft AI / Copilot, NVIDIA's AI org, Databricks, Scale AI, Glean, Sierra, Adept, Inflection — plus any startup whose pitch is "we build AI agents / models / tooling".
+- "buyer": the employer operates in a target customer industry (e.g. banking, insurance, payments, retail, healthcare, manufacturing) and would CONSUME AI rather than sell it. A bank, insurer, or payments network is a BUYER even when the candidate's title contains "AI" — e.g. "Head of AI" at Monzo or "Chief AI Officer" at a bank → buyer, KEEP.
+- "unknown": you genuinely cannot tell what the company does. KEEP these (fail open — never guess "vendor").
+
+Reject ONLY "vendor". Keep "buyer" and "unknown".
+
+Return {"verdicts": [{"id": 0, "verdict": "buyer", "reason": "<one line: what the company does>"}, ...]} — one entry per candidate.`,
+          JSON.stringify(roster, null, 2),
+          { maxTokens: 2000, userId, userKeys },
+        );
+        const verdicts = Array.isArray(out.verdicts) ? out.verdicts : [];
+        const kept: Candidate[] = [];
+        const rejected: Candidate[] = [];
+        batch.forEach((c, idx) => {
+          const v = verdicts.find((x) => x.id === idx);
+          // Only an explicit "vendor" verdict rejects — missing/buyer/unknown
+          // all keep, so a dropped row or hedge never loses a real buyer.
+          if (!v || v.verdict !== "vendor") { kept.push(c); return; }
+          const reason = v.reason?.trim() || `${c.company} is an AI vendor/competitor, not a target buyer`;
+          const ev = `Rejected as competitor/AI-vendor: ${reason}`;
+          rejected.push({ ...c, evidence: c.evidence ? `${ev} — ${c.evidence}` : ev });
+        });
+        return { kept, rejected };
+      } catch (e) {
+        console.warn("[find] company-type gate batch failed — keeping candidates:", (e as Error).message);
+        return { kept: batch, rejected: [] as Candidate[] };
+      }
+    }),
+  );
+  return { kept: results.flatMap((r) => r.kept), rejected: results.flatMap((r) => r.rejected) };
 }
 
 /** Semantic archetype gate. Given the brief's archetype definitions and
