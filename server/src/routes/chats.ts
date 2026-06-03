@@ -388,7 +388,9 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       ? result.content
       : result.kind === "prospects"
         ? `${result.summary} (${result.prospects.length} prospects)`
-        : `Drafted ${result.drafts.length} outreach message${result.drafts.length === 1 ? "" : "s"}.`;
+        : result.kind === "companies"
+          ? `${result.summary} (${result.companies.length} companies)`
+          : `Drafted ${result.drafts.length} outreach message${result.drafts.length === 1 ? "" : "s"}.`;
 
   const assistantRow = await db
     .insertInto("messages")

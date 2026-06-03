@@ -79,10 +79,30 @@ export interface OutreachDraft {
   linkedin: string;
 }
 
+/** A company returned from a "find companies" search — the target-account list
+ *  surfaced as the result itself (not just an internal anchor for a people
+ *  search). Metadata fields are best-effort; the AI omits what it can't ground. */
+export interface Company {
+  id: string;
+  name: string;
+  industry?: string;
+  hq?: string;
+  /** Approximate headcount band, e.g. "10,000+". Never a precise guess. */
+  employees?: string;
+  domain?: string;
+  linkedin?: string;
+  /** One-line reason this company matches the ICP. */
+  fit: string;
+  /** 1-3 short supporting points. */
+  signals: string[];
+  matchPct: number;
+}
+
 /** The shape returned by POST /api/chats/:id/completion. */
 export type CompletionResult =
   | { kind: "text"; content: string }
   | { kind: "prospects"; summary: string; prospects: Prospect[] }
+  | { kind: "companies"; summary: string; companies: Company[] }
   | { kind: "drafts"; drafts: OutreachDraft[] };
 
 export interface ChatMessage {

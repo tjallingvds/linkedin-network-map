@@ -23,7 +23,7 @@
  *   • priorMessages folding (legacy kept one in-browser chat session)
  *   • normalizeLinkedInUrl (fixes <a href> on LLM-returned URLs)
  */
-import type { AiProvider, CompletionResult, Prospect, ProspectSignal } from "@app/shared";
+import type { AiProvider, Company, CompletionResult, Prospect, ProspectSignal } from "@app/shared";
 import { env } from "../../env.js";
 import { aiJson } from "../json.js";
 import {
@@ -279,6 +279,42 @@ export async function runFind(
   // (not inside the loop) so the firm-discovery stage below draws from the
   // same shared budget and can never run away with credits.
   const searchBudget = { remaining: 50 };
+
+  // ── Company-list output ──────────────────────────────────────────────────
+  // The user asked for COMPANIES (a target-account list), not people. Run the
+  // same hybrid firm-discovery, but PROFILE the firms and return them as the
+  // result instead of pivoting to a people-search at them. Intent resolution:
+  // the latest message wins — an explicit people request overrides company
+  // intent inherited from earlier turns; a bare answer (e.g. the count "50")
+  // inherits the company intent from history.
+  const wantsCompanies = looksLikePeopleRequest(userInput)
+    ? false
+    : looksLikeCompanySearch(userInput) || looksLikeCompanySearch(fullBrief);
+  if (parsed && wantsCompanies && !isNameLookup) {
+    const names = await discoverFirms({
+      provider, parsed, brief: fullBrief, userId, userKeys, searchBudget, count: targetCount,
+    });
+    // Fold in any firms the user already named — they qualify by definition.
+    const allNames: string[] = [];
+    const seen = new Set<string>();
+    for (const n of [...parsed.firms, ...names]) {
+      const key = n.toLowerCase().trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      allNames.push(n);
+    }
+    if (allNames.length === 0) {
+      return {
+        kind: "text",
+        content: "I couldn't surface companies matching that ICP — try loosening a hard constraint (e.g. the employee floor or a specific sub-industry) and ask again.",
+      };
+    }
+    const companies = await profileCompanies({
+      provider, names: allNames.slice(0, targetCount), brief: fullBrief, userId, userKeys,
+    });
+    const summary = `Found ${companies.length} compan${companies.length === 1 ? "y" : "ies"} matching your ICP. Each was checked against your full criteria — not just industry — and filtered to buyers (no vendors/competitors).`;
+    return { kind: "companies", summary, companies };
+  }
 
   // ── Firm discovery ───────────────────────────────────────────────────────
   // The query generator is firm-anchored — it only searches firms the brief
@@ -740,6 +776,36 @@ function looksLockedToNamedFirms(brief: string): boolean {
   );
 }
 
+/** True when the latest message explicitly asks for PEOPLE — used to override
+ *  a stale company-intent inherited from earlier in the conversation (e.g.
+ *  "find companies …" on turn 1, then "find people at these companies" later).
+ *  The newest message's intent wins. */
+function looksLikePeopleRequest(text: string): boolean {
+  const hay = text.toLowerCase();
+  return (
+    /\b(?:find|get|show|give|list|pull|surface|identify)\s+(?:me\s+)?(?:more\s+|all\s+|some\s+|\d+\s+)?(?:people|persons?|contacts?|prospects?|leads?|profiles?|names?|individuals?|executives?|employees?|staff)\b/.test(hay) ||
+    /\b(?:people|contacts?|prospects?|leads?|executives?|leaders?|decision[-\s]?makers?)\s+(?:at|from|in|within|for)\b/.test(hay)
+  );
+}
+
+/** True when the user is asking for a list of COMPANIES (a target-account
+ *  list) rather than people. The object of the request must be firms — "find
+ *  companies that fit this", "which firms match", "list accounts" — NOT a
+ *  people search that merely mentions companies ("find Heads of AI at fintech
+ *  companies"). Tightly anchored on the verb→noun adjacency so a normal
+ *  people search is never misrouted. */
+function looksLikeCompanySearch(brief: string): boolean {
+  const hay = brief.toLowerCase();
+  const noun = "(?:comp(?:any|anies)|firms?|accounts?|organi[sz]ations?|orgs?|businesses|institutions?|employers)";
+  // "find / list / show / give me [N|all|some|more|a list of] companies …"
+  const direct = new RegExp(`\\b(?:find|list|show|get|give|identify|surface|build\\s+(?:me\\s+)?a\\s+list\\s+of|compile|pull)\\s+(?:me\\s+)?(?:all\\s+|some\\s+|more\\s+|a\\s+list\\s+of\\s+|up\\s+to\\s+\\d+\\s+|\\d+\\s+)?${noun}\\b`);
+  // "which / what companies …"
+  const whichWhat = new RegExp(`\\b(?:which|what)\\s+${noun}\\b`);
+  // "companies that (can) fit / match / qualify …"
+  const thatFit = new RegExp(`\\b${noun}\\s+(?:that|which|who)\\s+(?:can\\s+|could\\s+|would\\s+)?(?:fit|match|qualify|meet|suit|align)`);
+  return direct.test(hay) || whichWhat.test(hay) || thatFit.test(hay);
+}
+
 /** Firm-discovery stage. Given an ICP described by CHARACTERISTICS (industry,
  *  size, regulated, ops-heavy, …) rather than a fixed firm list, expand to a
  *  vetted set of qualifying BUYER companies so the people-search has real
@@ -756,11 +822,23 @@ async function discoverFirms(args: {
   userId: string;
   userKeys?: UserKeys;
   searchBudget: { remaining: number };
+  /** How many firms to aim for. Defaults to 30 (the people-anchor use). The
+   *  "find companies" path passes the user's requested count so the result
+   *  list can reach the target. */
+  count?: number;
 }): Promise<string[]> {
   const { provider, parsed, brief, userId, userKeys, searchBudget } = args;
+  const targetFirms = Math.max(10, Math.min(args.count ?? 30, 60));
   const namedAlready = new Set(parsed.firms.map((f) => f.toLowerCase().trim()));
   const excluded = new Set(parsed.excludeFirms.map((f) => f.toLowerCase().trim()));
-  const characteristics = parsed.context?.trim() || parsed.archetypes.join("; ") || brief.slice(0, 2000);
+  // Use the FULL ICP, not just the short parsed summary — the summary captures
+  // industry + title (the "convenient" criteria) but drops the hard qualifiers
+  // (employee floor, ops headcount, regulated, agentic appetite, budget,
+  // less-legacy). Firm selection must honour ALL of them.
+  const summary = parsed.context?.trim() || parsed.archetypes.join("; ");
+  const characteristics = summary
+    ? `${summary}\n\nFULL ICP (apply EVERY qualifying characteristic below, not just industry/title):\n${brief.slice(0, 4000)}`
+    : brief.slice(0, 4000);
 
   // Step 1 — LLM proposes buyer firms AND independent web queries to find more.
   let proposed: string[] = [];
@@ -772,8 +850,10 @@ async function discoverFirms(args: {
 
 HARD RULE — never include VENDORS/COMPETITORS: foundation-model labs, AI agent/copilot platforms, AI developer-tooling or ML-infra companies, or AI consultancies (e.g. OpenAI, Anthropic, Cohere, Mistral, Google DeepMind, Meta AI, Microsoft AI, Databricks, Scale AI). Those SELL the solution; they are not buyers.
 
+APPLY EVERY QUALIFYING CHARACTERISTIC, not just the convenient ones (industry + "has an AI leader"). Before including a firm, check it against ALL the ICP's hard criteria — e.g. employee floor (2,000+), operations headcount (1,000+ ops staff / genuinely ops-heavy middle/back-office), regulated environment, demonstrated pressure/appetite to adopt agentic AI, modern systems that allow API/OAuth integration ("less legacy"), and budget capacity for a six-figure contract. Exclude firms that clearly fail a hard criterion (too small, not regulated, pure-engineering/no ops weight, legacy-locked). Prefer firms you can justify against the SPECIFIC criteria, not generic "big finance brand".
+
 Return:
-- "firms": 25-40 real company names that match the ICP characteristics (industry, size, regulated, ops-heavy, etc.) and are BUYERS. Use exact, well-known company names. Prefer firms that clearly meet any size/segment bar stated in the ICP. Do NOT include any company the brief already named or excluded.
+- "firms": ${targetFirms} real company names that satisfy ALL the ICP's qualifying characteristics above and are BUYERS. Use exact, well-known company names. Do NOT include any company the brief already named or excluded.
 - "webQueries": 4-6 web-search queries that would surface MORE such companies from the live web (e.g. "largest regulated payments companies 2024", "fintech companies over 2000 employees Europe", "insurers investing in AI operations"). These must find COMPANIES (lists, rankings, industry roundups), NOT individual people.
 
 ICP / characteristics:
@@ -820,6 +900,7 @@ ${characteristics}
 
 Rules:
 - Only return company names that actually appear in the results below.
+- Apply ALL the ICP's hard criteria (size/headcount floor, regulated, ops-heavy, etc.) — do NOT include every firm merely mentioned; include only those that plausibly qualify on the full ICP.
 - Exclude AI vendors/competitors and generic publishers.
 - Return up to 30 names. {"firms": [...]}`,
         buildSnippetHaystack(snippets),
@@ -845,7 +926,60 @@ Rules:
   // Step 4 — buyer/vendor backstop on the merged firm list.
   const buyers = await filterBuyerFirms({ provider, firms: merged, characteristics, userId, userKeys });
   console.log(`[find] firm-discovery: proposed=${proposed.length} web=${fromWeb.length} merged=${merged.length} → ${buyers.length} buyer firms (searchBudgetLeft=${searchBudget.remaining})`);
-  return buyers;
+  return buyers.slice(0, targetFirms);
+}
+
+/** Profile a list of discovered firm NAMES into rich Company records — fit
+ *  rationale + best-effort metadata — so a "find companies" search returns a
+ *  usable target-account list, not bare names. World-knowledge grounded; the
+ *  LLM omits fields it can't ground rather than guessing. */
+async function profileCompanies(args: {
+  provider: AiProvider;
+  names: string[];
+  brief: string;
+  userId: string;
+  userKeys?: UserKeys;
+}): Promise<Company[]> {
+  const { provider, names, brief, userId, userKeys } = args;
+  if (names.length === 0) return [];
+  let profiles: Array<{ name: string; industry?: string; hq?: string; employees?: string; domain?: string; linkedin?: string; fit?: string; signals?: string[] }> = [];
+  try {
+    const out = await aiJson<{ companies: typeof profiles }>(
+      provider,
+      `For each company below, write a concise profile of how it fits this ICP. Use real-world knowledge. If you are not confident of a field, OMIT it — never guess. For employees use a band like "10,000+", not a precise number.
+
+FULL ICP (apply EVERY qualifying characteristic, not just the convenient ones):
+${brief.slice(0, 4000)}
+
+In the "fit" sentence, address the ICP's HARD criteria — company size / headcount floor, ops-heaviness, regulated status, AI-adoption pressure, agentic risk appetite, modern systems (API/OAuth integration, "less legacy"), and budget capacity — not just the industry. If a company is included but clearly fails a hard criterion, say so honestly in "fit" (e.g. "below the 2,000-employee floor") rather than glossing over it.
+
+For each company return: name (echo exactly), industry, hq (city/country), employees (band), domain (website), linkedin (company page URL), fit (ONE sentence grounded in the ICP's actual criteria), signals (1-3 short supporting points — e.g. a named AI leader, a public AI mandate, regulatory context, integration-readiness).
+
+Echo the names EXACTLY as given and do NOT add companies not in the list. Return {"companies": [...]}.`,
+      JSON.stringify(names),
+      { maxTokens: Math.max(2000, names.length * 90), userId, userKeys },
+    );
+    profiles = Array.isArray(out.companies) ? out.companies : [];
+  } catch (e) {
+    console.warn("[find] company profiling failed — returning bare names:", (e as Error).message);
+  }
+  const byName = new Map(profiles.filter((p) => typeof p?.name === "string").map((p) => [p.name.toLowerCase().trim(), p]));
+  return names.map((name, i) => {
+    const p = byName.get(name.toLowerCase().trim());
+    const signals = Array.isArray(p?.signals) ? p!.signals.filter((s): s is string => typeof s === "string" && s.trim().length > 0).slice(0, 3) : [];
+    return {
+      id: `c${Date.now()}-${i}`,
+      name,
+      industry: typeof p?.industry === "string" && p.industry.trim() ? p.industry.trim() : undefined,
+      hq: typeof p?.hq === "string" && p.hq.trim() ? p.hq.trim() : undefined,
+      employees: typeof p?.employees === "string" && p.employees.trim() ? p.employees.trim() : undefined,
+      domain: typeof p?.domain === "string" && p.domain.trim() ? p.domain.trim() : undefined,
+      linkedin: typeof p?.linkedin === "string" && p.linkedin.trim() ? p.linkedin.trim() : undefined,
+      fit: typeof p?.fit === "string" && p.fit.trim() ? p.fit.trim() : "Matches the ICP characteristics.",
+      signals,
+      matchPct: 88,
+    };
+  });
 }
 
 /** Classify firm NAMES as buyers vs AI vendors/competitors; keep only buyers.

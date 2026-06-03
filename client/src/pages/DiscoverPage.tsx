@@ -4,13 +4,14 @@
  * Outreach drafts are triggered from the selection bar.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CompletionResult, CrmBoard, OutreachDraft, Prospect } from "@app/shared";
+import type { Company, CompletionResult, CrmBoard, OutreachDraft, Prospect } from "@app/shared";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
 import { useModal } from "../components/Modal";
 import { Sidebar } from "../components/Sidebar";
 import { useUsage } from "../lib/useUsage";
 import { ProspectGrid } from "../components/ProspectCard";
+import { CompanyGrid } from "../components/CompanyCard";
 import { DetailDrawer } from "../components/DetailDrawer";
 import { OutreachDrawer } from "../components/OutreachDrawer";
 import { CRMView } from "../components/CRMView";
@@ -26,6 +27,7 @@ type ThreadEntry =
   | { role: "user"; text: string }
   | { role: "ai"; thinking: true; steps: string[] }
   | { role: "ai"; summary: string; prospects: Prospect[] }
+  | { role: "ai"; summary: string; companies: Company[] }
   | { role: "ai"; text: string; isError?: boolean; keyMissing?: KeyErrorHint };
 
 type KeyErrorHint = { providers: string[] };
@@ -44,6 +46,7 @@ type ChatNode = {
   text?: string;
   summary?: string;
   prospects?: Prospect[];
+  companies?: Company[];
   isError?: boolean;
   keyMissing?: KeyErrorHint;
 };
@@ -110,6 +113,7 @@ function nodeToEntry(n: ChatNode, nodes: Map<string, ChatNode>): RenderEntry {
   };
   if (n.role === "user") return { role: "user", text: n.text ?? "", node: meta };
   if (n.prospects) return { role: "ai", summary: n.summary ?? "", prospects: n.prospects, node: meta };
+  if (n.companies) return { role: "ai", summary: n.summary ?? "", companies: n.companies, node: meta };
   return { role: "ai", text: n.text ?? "", isError: n.isError, keyMissing: n.keyMissing, node: meta };
 }
 
@@ -142,6 +146,7 @@ function buildThread(nodes: Map<string, ChatNode>, activeChild: Record<string, s
 /** Build the node shape for an assistant reply from a CompletionResult. */
 function aiNodeFromResult(result: CompletionResult): Partial<ChatNode> {
   if (result.kind === "prospects") return { summary: result.summary, prospects: result.prospects };
+  if (result.kind === "companies") return { summary: result.summary, companies: result.companies };
   if (result.kind === "text") return { text: result.content };
   return { text: `Drafted ${result.drafts.length} outreach message${result.drafts.length === 1 ? "" : "s"}.` };
 }
@@ -627,6 +632,8 @@ export function DiscoverPage() {
             const res = m.result;
             if (res && typeof res === "object" && "kind" in res && res.kind === "prospects") {
               node.summary = res.summary; node.prospects = res.prospects;
+            } else if (res && typeof res === "object" && "kind" in res && res.kind === "companies") {
+              node.summary = res.summary; node.companies = res.companies;
             } else if (res && typeof res === "object" && "kind" in res && res.kind === "text") {
               node.text = res.content;
             } else {
@@ -801,6 +808,11 @@ export function DiscoverPage() {
       if (brief && brief !== "Show me more matches beyond the ones already listed.") {
         setLastBrief(brief);
       }
+    }
+    // Company results carry no prospects, but we still keep the brief so a
+    // follow-up ("find more companies", "only US-HQ ones") has context.
+    if (result.kind === "companies" && brief && brief !== "Show me more matches beyond the ones already listed.") {
+      setLastBrief(brief);
     }
     if (result.kind === "drafts") {
       const byId = new Map(allProspects.map((p) => [p.id, p]));
@@ -1249,6 +1261,18 @@ export function DiscoverPage() {
                               />
                               <span className="result-hint">
                                 Type a filter or question below (e.g. "only those with email") to refine.
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      )}
+                      {"companies" in m && (
+                        <>
+                          <CompanyGrid companies={m.companies} />
+                          {i === thread.length - 1 && m.companies.length > 0 && !streaming && (
+                            <div className="result-actions">
+                              <span className="result-hint">
+                                These are target accounts. Ask "find people at these companies" to pull contacts, or "find more companies" for another pass.
                               </span>
                             </div>
                           )}
