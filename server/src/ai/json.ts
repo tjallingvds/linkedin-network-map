@@ -7,10 +7,15 @@ import type { AiProvider } from "@app/shared";
 import { recordUsage } from "../usage/tracker.js";
 import type { UserKeys } from "./user-keys.js";
 
+// JSON-mode pins deepseek-chat, NOT the flash tier: deepseek-v4-flash
+// intermittently ignores response_format:json_object and echoes prose, which
+// breaks structured parsing. Flash is used only for free-text (see
+// providers.ts / aiChat). The retry below is a safety net, not a license to
+// run a JSON-unreliable model here.
 const MODELS: Record<AiProvider, string> = {
   openai: "gpt-4o-mini",
   anthropic: "claude-sonnet-4-6",
-  deepseek: "deepseek-v4-flash",
+  deepseek: "deepseek-chat",
 };
 
 /** Thrown when an LLM provider rejects the call because the account is out
@@ -99,7 +104,6 @@ export async function aiJson<T = unknown>(
   const apiKey = userKey ?? envKey;
   const byok = !!userKey;
 
-  let raw = "";
   let inputTokens = 0;
   let outputTokens = 0;
 
@@ -123,34 +127,42 @@ export async function aiJson<T = unknown>(
     }
   };
 
-  if (provider === "anthropic") {
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-    const r = await callWithTimeout("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: maxTokens,
-        system: `${systemPrompt}\n\nReturn valid JSON only. No prose, no markdown fences.`,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-    });
-    if (!r.ok) throw classifyProviderError("anthropic", r.status, await r.text(), byok);
-    const data = (await r.json()) as {
-      content: Array<{ type: string; text?: string }>;
-      usage: { input_tokens: number; output_tokens: number };
-    };
-    raw = data.content.map((c) => c.text ?? "").join("").trim();
-    inputTokens = data.usage.input_tokens ?? 0;
-    outputTokens = data.usage.output_tokens ?? 0;
-  } else {
+  // One request → raw text. `reinforce` strengthens the JSON instruction on a
+  // retry after the first reply came back as prose (some models — notably
+  // deepseek's flash tier — intermittently ignore response_format and echo
+  // the prompt or emit a sentence instead of an object). Usage from BOTH
+  // attempts is recorded so the cost of a retry is never hidden.
+  const requestRaw = async (reinforce: boolean): Promise<string> => {
+    const jsonNudge = reinforce
+      ? "\n\nCRITICAL: Your previous reply was NOT valid JSON. Respond with ONLY a single JSON object — no prose, no explanation, no markdown fences, no leading or trailing text."
+      : "";
+    if (provider === "anthropic") {
+      if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
+      const r = await callWithTimeout("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          system: `${systemPrompt}\n\nReturn valid JSON only. No prose, no markdown fences.${jsonNudge}`,
+          messages: [{ role: "user", content: userPrompt }],
+        }),
+      });
+      if (!r.ok) throw classifyProviderError("anthropic", r.status, await r.text(), byok);
+      const data = (await r.json()) as {
+        content: Array<{ type: string; text?: string }>;
+        usage: { input_tokens: number; output_tokens: number };
+      };
+      inputTokens += data.usage.input_tokens ?? 0;
+      outputTokens += data.usage.output_tokens ?? 0;
+      return data.content.map((c) => c.text ?? "").join("").trim();
+    }
     if (!apiKey) throw new Error(`${provider.toUpperCase()}_API_KEY not set`);
     const baseUrl = provider === "deepseek" ? "https://api.deepseek.com" : "https://api.openai.com";
-
     const r = await callWithTimeout(`${baseUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -159,7 +171,7 @@ export async function aiJson<T = unknown>(
         max_tokens: maxTokens,
         response_format: { type: "json_object" },
         messages: [
-          { role: "system", content: `${systemPrompt}\nReturn a JSON object.` },
+          { role: "system", content: `${systemPrompt}\nReturn a JSON object.${jsonNudge}` },
           { role: "user", content: userPrompt },
         ],
       }),
@@ -169,19 +181,33 @@ export async function aiJson<T = unknown>(
       choices: Array<{ message: { content: string } }>;
       usage: { prompt_tokens: number; completion_tokens: number };
     };
-    raw = data.choices[0]?.message.content ?? "";
-    inputTokens = data.usage.prompt_tokens ?? 0;
-    outputTokens = data.usage.completion_tokens ?? 0;
-  }
+    inputTokens += data.usage.prompt_tokens ?? 0;
+    outputTokens += data.usage.completion_tokens ?? 0;
+    return data.choices[0]?.message.content ?? "";
+  };
 
-  if (opts.userId) {
-    await recordUsage({
-      userId: opts.userId, provider, kind: "json",
-      inputTokens, outputTokens, metadata: { model, byok },
-    });
-  }
+  const record = async () => {
+    if (opts.userId) {
+      await recordUsage({
+        userId: opts.userId, provider, kind: "json",
+        inputTokens, outputTokens, metadata: { model, byok },
+      });
+    }
+  };
 
-  return parseJson<T>(raw);
+  // First attempt; on a parse failure (non-JSON / prose echo) retry ONCE with
+  // a reinforced instruction before giving up. Recovers the common flash-tier
+  // failure where the model returns a sentence instead of an object.
+  let raw = await requestRaw(false);
+  try {
+    const parsed = parseJson<T>(raw);
+    await record();
+    return parsed;
+  } catch {
+    raw = await requestRaw(true);
+    await record();
+    return parseJson<T>(raw);
+  }
 }
 
 function parseJson<T>(raw: string): T {

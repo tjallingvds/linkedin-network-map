@@ -41,7 +41,9 @@ export async function runFollowup(
     matchPct: p.matchPct,
   }));
 
-  const decision = await aiJson<FollowupDecision>(
+  let decision: FollowupDecision;
+  try {
+    decision = await aiJson<FollowupDecision>(
     provider,
     "You help a user interrogate or filter a list of prospects they just saw. " +
     'Decide: is the user asking a question about the list (answer in text) or requesting a filter (return matching ids)? ' +
@@ -61,7 +63,19 @@ export async function runFollowup(
     `Example: "What would you like me to do — keep them all, filter by something, or start a new search?"\n` +
     `- Never invent info not present in the list. Never narrate internal reasoning.`,
     { maxTokens: 1500, userId, userKeys },
-  );
+    );
+  } catch (err) {
+    // The LLM returned something we couldn't parse as JSON even after a
+    // retry (flash-tier models occasionally echo the prompt instead of
+    // emitting an object). Never surface a raw "AI returned non-JSON" to the
+    // user — degrade to a clarify so the turn ends cleanly and they can
+    // rephrase the filter.
+    console.warn("[followup] decision parse failed:", (err as Error).message);
+    return {
+      kind: "text",
+      content: "I couldn't parse that into a filter. Try rephrasing — e.g. \"only SVPs and above\" or \"just the ones at Mastercard\".",
+    };
+  }
 
   if (decision.kind === "filter") {
     const keep = new Set((decision.keepIds ?? []).map(String));
