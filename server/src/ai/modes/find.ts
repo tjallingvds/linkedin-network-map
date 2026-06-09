@@ -291,9 +291,18 @@ export async function runFind(
     ? false
     : looksLikeCompanySearch(userInput) || looksLikeCompanySearch(fullBrief);
   if (parsed && wantsCompanies && !isNameLookup) {
-    const names = await discoverFirms({
-      provider, parsed, brief: fullBrief, userId, userKeys, searchBudget, count: targetCount,
-    });
+    let names: string[] = [];
+    try {
+      names = await discoverFirms({
+        provider, parsed, brief: fullBrief, userId, userKeys, searchBudget, count: targetCount,
+      });
+    } catch (e) {
+      // Quota/auth/missing-key surface as a clear card; any other discovery
+      // failure is non-fatal — fall back to the firms the user named so the
+      // whole request never dies on one bad sub-call.
+      if (isTavilyQuotaError(e) || isTavilyAuthError(e) || e instanceof TavilyKeyMissingError) throw e;
+      console.warn("[find] company discovery failed, falling back to named firms:", (e as Error).message);
+    }
     // Fold in any firms the user already named — they qualify by definition.
     const allNames: string[] = [];
     const seen = new Set<string>();
@@ -946,11 +955,23 @@ async function profileCompanies(args: {
 }): Promise<Company[]> {
   const { provider, names, brief, userId, userKeys } = args;
   if (names.length === 0) return [];
-  let profiles: Array<{ name: string; industry?: string; hq?: string; employees?: string; domain?: string; linkedin?: string; fit?: string; signals?: string[] }> = [];
-  try {
-    const out = await aiJson<{ companies: typeof profiles }>(
-      provider,
-      `For each company below, write a concise profile of how it fits this ICP. Use real-world knowledge. If you are not confident of a field, OMIT it — never guess. For employees use a band like "10,000+", not a precise number.
+  type Profile = { name: string; industry?: string; hq?: string; employees?: string; domain?: string; linkedin?: string; fit?: string; signals?: string[] };
+
+  // Profile in PARALLEL batches rather than one big call. A single 50-company
+  // request runs ~4500 output tokens and routinely brushes the 60s per-call
+  // timeout — and once the JSON-retry doubles a near-timeout call, the whole
+  // company search blows past the hosting platform's request cap and the
+  // socket is reset ("Failed to fetch"). Small concurrent batches keep every
+  // call well under the timeout and make wall-clock ≈ one batch.
+  const BATCH = 10;
+  const batches: string[][] = [];
+  for (let i = 0; i < names.length; i += BATCH) batches.push(names.slice(i, i + BATCH));
+
+  const profileBatch = async (batch: string[]): Promise<Profile[]> => {
+    try {
+      const out = await aiJson<{ companies: Profile[] }>(
+        provider,
+        `For each company below, write a concise profile of how it fits this ICP. Use real-world knowledge. If you are not confident of a field, OMIT it — never guess. For employees use a band like "10,000+", not a precise number.
 
 FULL ICP (apply EVERY qualifying characteristic, not just the convenient ones):
 ${brief.slice(0, 4000)}
@@ -960,13 +981,20 @@ In the "fit" sentence, address the ICP's HARD criteria — company size / headco
 For each company return: name (echo exactly), industry, hq (city/country), employees (band), domain (website), linkedin (company page URL), fit (ONE sentence grounded in the ICP's actual criteria), signals (1-3 short supporting points — e.g. a named AI leader, a public AI mandate, regulatory context, integration-readiness).
 
 Echo the names EXACTLY as given and do NOT add companies not in the list. Return {"companies": [...]}.`,
-      JSON.stringify(names),
-      { maxTokens: Math.max(2000, names.length * 90), userId, userKeys },
-    );
-    profiles = Array.isArray(out.companies) ? out.companies : [];
-  } catch (e) {
-    console.warn("[find] company profiling failed — returning bare names:", (e as Error).message);
-  }
+        JSON.stringify(batch),
+        { maxTokens: Math.max(1500, batch.length * 110), userId, userKeys },
+      );
+      return Array.isArray(out.companies) ? out.companies : [];
+    } catch (e) {
+      // A single batch failing just means bare names for those firms — never
+      // nuke the whole list.
+      console.warn(`[find] company profiling batch failed (${batch.length} firms) — bare names:`, (e as Error).message);
+      return [];
+    }
+  };
+
+  const batchResults = await Promise.all(batches.map(profileBatch));
+  const profiles: Profile[] = batchResults.flat();
   const byName = new Map(profiles.filter((p) => typeof p?.name === "string").map((p) => [p.name.toLowerCase().trim(), p]));
   return names.map((name, i) => {
     const p = byName.get(name.toLowerCase().trim());
