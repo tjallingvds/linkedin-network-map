@@ -163,6 +163,29 @@ function routeMode(
   opts: { havePriorResult: boolean; hasBrief: boolean; searchMode: "find" | "network" },
 ): "find" | "network" | "followup" | "discover_more" {
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+
+  // A bare count ("100", "up to 50", "50 people") is the user answering a
+  // "How many prospects would you like?" clarify. It must route to `find` so
+  // the server folds it into the conversation brief and runs the search —
+  // NOT to followup, which has no list to filter and replies "I'm not sure
+  // what you mean by 100." (find.ts reconstructs fullBrief from history and
+  // reads a lone number as the count answer.)
+  const isBareCount = /^\s*(?:up\s+to\s+)?\d{1,4}\s*(?:people|persons?|prospects|companies|firms|contacts|leads?)?\s*$/i.test(text);
+  if (isBareCount) return "find";
+
+  // A long pasted ICP that contains an explicit find/identify directive is a
+  // FRESH search, even in a chat that already has prospects. Without this it
+  // hits `if (havePriorResult) return "followup"` below (the brief doesn't
+  // start with a find-verb, so looksLikeFreshBrief misses it) and gets eaten
+  // by the followup LLM instead of running the real Find clarify→search flow.
+  // Guards against eating genuine followup filters: requires a find directive
+  // AND a substantial brief AND that it does NOT open with a filter verb
+  // ("only…", "remove…", "just the…") which signals refine-the-list intent.
+  const hasFindDirective = /\b(?:find|identify|search\s+for|look\s+for|get\s+me|pull|source|build\s+(?:me\s+)?a\s+list|give\s+me\s+a\s+list)\b/i.test(text);
+  const startsWithFilterVerb = /^\s*(?:only|just|remove|exclude|keep|filter|drop|narrow|of\s+those|from\s+(?:these|the\s+list)|show\s+(?:me\s+)?(?:only|just))\b/i.test(text);
+  const looksLikeFreshIcp = wordCount >= 25 && hasFindDirective && !startsWithFilterVerb;
+  if (looksLikeFreshIcp) return "find";
+
   const looksLikeFreshBrief =
     /^\s*(?:find\s+(?:me\s+)?|search(?:\s+for)?\s+|look\s+(?:for|up)\s+|get\s+me\s+|show\s+me\s+|give\s+me\s+|i\s+(?:want|need)\s+)/i.test(text) &&
     (wordCount >= 8 || /\b(?:ai|cto|coo|cfo|cro|cio|ceo|svp|vp\b|md\b|director|head\s+of|manager|founder|partner|chief|engineer|scientist|analyst|consultant|investor)\b/i.test(text));
