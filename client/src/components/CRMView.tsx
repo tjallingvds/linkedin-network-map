@@ -4027,6 +4027,12 @@ export function CRMView({
   // Connections.csv imported) → fall back to the subtractive behaviour.
   const [connectedNames, setConnectedNames] = useState<Set<string>>(new Set());
   const [connectedLinkedIns, setConnectedLinkedIns] = useState<Set<string>>(new Set());
+  // Messaged-sent rows only (a subset of the hide set). Tracked separately so
+  // a contact who is BOTH a 1st-degree connection AND still listed as a
+  // pending invite is shown (the accepted invite just lingered in LinkedIn's
+  // CSV) — while connections you've actually messaged stay hidden.
+  const [messagedNames, setMessagedNames] = useState<Set<string>>(new Set());
+  const [messagedLinkedIns, setMessagedLinkedIns] = useState<Set<string>>(new Set());
   const [invitedCount, setInvitedCount] = useState(0);
   const [messagedCount, setMessagedCount] = useState(0);
   const [networkFilter, setNetworkFilter] = useState<"all" | "fresh">("all");
@@ -4091,15 +4097,24 @@ export function CRMView({
           const isConnected =
             (n && connectedNames.has(n)) || (li && connectedLinkedIns.has(li));
           if (!isConnected) return false;
+          // Connected contacts: an accepted invitation often lingers in
+          // LinkedIn's "sent invitations" CSV, so DON'T hide a connection just
+          // because they're still listed as invited — the invite was clearly
+          // accepted (that's how they became a connection). But DO hide
+          // connections you've already messaged — they're not "new".
+          if (n && messagedNames.has(n)) return false;
+          if (li && messagedLinkedIns.has(li)) return false;
+          return true;
         }
-        // ...and in either mode, hide anyone already invited or messaged.
+        // Subtractive mode (no Connections.csv imported, so we can't tell who's
+        // a connection): hide anyone already invited or messaged.
         if (n && invitedNames.has(n)) return false;
         if (li && invitedLinkedIns.has(li)) return false;
         return true;
       });
     }
     return contacts;
-  }, [contacts, networkFilter, invitedNames, invitedLinkedIns, connectedNames, connectedLinkedIns]);
+  }, [contacts, networkFilter, invitedNames, invitedLinkedIns, connectedNames, connectedLinkedIns, messagedNames, messagedLinkedIns]);
 
   // Stage filter — keep only contacts in the selected stages. Empty set
   // means no filter. Sits between the network filter and search so each
@@ -4158,6 +4173,12 @@ export function CRMView({
         const connRows = r.invitations.filter((i) => i.kind === "connection");
         setConnectedNames(new Set(connRows.map((i) => i.name).filter(Boolean)));
         setConnectedLinkedIns(new Set(connRows.map((i) => i.linkedin).filter(Boolean)));
+        // Messaged-only subset: these stay hidden even for connections (you've
+        // already engaged them), unlike a stale pending-invite which a
+        // connection should override.
+        const messagedRows = r.invitations.filter((i) => i.kind === "messaged");
+        setMessagedNames(new Set(messagedRows.map((i) => i.name).filter(Boolean)));
+        setMessagedLinkedIns(new Set(messagedRows.map((i) => i.linkedin).filter(Boolean)));
         setInvitedCount(r.invitedCount ?? 0);
         setMessagedCount(r.messagedCount ?? 0);
       })
