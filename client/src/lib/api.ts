@@ -181,9 +181,67 @@ async function request<T>(method: string, path: string, body?: unknown, opts?: {
   return data as T;
 }
 
+/** Start a background completion job and poll until it finishes.
+ *
+ *  Completions used to run on the POST request itself, but long searches blew
+ *  past the hosting platform's ~60-90s request cap and the socket was reset
+ *  ("Failed to fetch"). The server now starts the search in the background and
+ *  returns a job id; we poll a tiny status endpoint until it's done. Each call
+ *  is sub-second, so a search of any length completes reliably.
+ *
+ *  Resolves with the same shape the old POST used to return
+ *  ({ result, provider, title?, userMessageId?, assistantMessageId? }). */
+async function completion<T>(
+  chatId: string,
+  body: unknown,
+  opts?: { pollMs?: number; maxWaitMs?: number },
+): Promise<T> {
+  const pollMs = opts?.pollMs ?? 2500;
+  const maxWaitMs = opts?.maxWaitMs ?? 600_000; // 10-minute hard ceiling
+  const start = await request<{ jobId: string; userMessageId?: string }>(
+    "POST", `/api/chats/${chatId}/completion`, body, { timeoutMs: 30_000 },
+  );
+  const startedAt = Date.now();
+  let pollErrors = 0;
+  // Ramp the interval: quick first checks keep clarify questions / followup
+  // filters feeling instant, then settle to pollMs so a 2-minute search isn't
+  // hammered. After the ramp, every poll waits pollMs.
+  const rampMs = [400, 800, 1500];
+  let tick = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    if (Date.now() - startedAt > maxWaitMs) {
+      throw new ApiError(0, null, "The search is taking unusually long — it may still finish. Reload the chat in a moment to see results.");
+    }
+    await new Promise((r) => setTimeout(r, rampMs[tick] ?? pollMs));
+    tick++;
+    let s: { status: string; message?: string } & Record<string, unknown>;
+    try {
+      s = await request(
+        "GET", `/api/chats/${chatId}/completion/${start.jobId}`, undefined, { timeoutMs: 30_000 },
+      );
+    } catch (e) {
+      // A genuinely missing job (server restarted) is fatal; a transient poll
+      // blip is not — retry a few times before giving up.
+      if (e instanceof ApiError && e.status === 404) throw e;
+      if (++pollErrors > 5) throw e;
+      continue;
+    }
+    pollErrors = 0;
+    if (s.status === "running") continue;
+    if (s.status === "error") throw new ApiError(0, s, s.message || "Search failed");
+    // Done — carry the userMessageId from the start response if the final
+    // payload omitted it (it shouldn't, but be safe).
+    if (start.userMessageId && s.userMessageId == null) s.userMessageId = start.userMessageId;
+    return s as T;
+  }
+}
+
 export const api = {
   get: <T>(p: string, opts?: { timeoutMs?: number }) => request<T>("GET", p, undefined, opts),
   post: <T>(p: string, body?: unknown, opts?: { timeoutMs?: number }) => request<T>("POST", p, body, opts),
   patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, body),
   del: <T>(p: string) => request<T>("DELETE", p),
+  /** Start + poll a background completion job. See completion() above. */
+  completion: <T>(chatId: string, body: unknown, opts?: { pollMs?: number; maxWaitMs?: number }) => completion<T>(chatId, body, opts),
 };

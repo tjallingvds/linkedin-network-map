@@ -6,6 +6,7 @@
  * messages, and returns a typed CompletionResult shape the client renders.
  */
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { db } from "../db/index.js";
 import type { AuthedRequest } from "../auth/session.js";
@@ -138,6 +139,35 @@ const completionSchema = z.object({
    *  exact archetypes named in the brief. */
   matchBreadth: z.enum(["strict", "broad"]).optional(),
 });
+
+// ── Background completion jobs ───────────────────────────────────────────
+// The hosting platform hard-caps any single HTTP request at ~60-90s (a total-
+// duration reset, not an idle timeout — heartbeats can't dodge it). Long
+// searches blew past it and surfaced as "Failed to fetch". So a completion no
+// longer runs on the request: POST starts a background job and returns a job
+// id; the client polls the GET endpoint below. In-memory is fine for a single
+// instance — the assistant message is persisted to the DB when the job
+// finishes, so the result survives even if the job map is lost on restart.
+interface CompletionPayload {
+  result: CompletionResult;
+  provider: AiProvider;
+  title?: string;
+  userMessageId?: string;
+  assistantMessageId?: string;
+}
+type CompletionJob =
+  | { status: "running"; userId: string; createdAt: number }
+  | { status: "done"; userId: string; createdAt: number; payload: CompletionPayload }
+  | { status: "error"; userId: string; createdAt: number; message: string };
+const completionJobs = new Map<string, CompletionJob>();
+/** Drop jobs older than 10 min so the map can't grow unbounded. Kept (not
+ *  deleted on read) so a re-poll after a network blip still gets the result. */
+function reapCompletionJobs(): void {
+  const now = Date.now();
+  for (const [id, j] of completionJobs) {
+    if (now - j.createdAt > 10 * 60 * 1000) completionJobs.delete(id);
+  }
+}
 
 router.post("/:id/completion", async (req: AuthedRequest, res) => {
   const parsed = completionSchema.safeParse(req.body);
@@ -296,190 +326,122 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
       })()
     : Promise.resolve(undefined);
 
-  // ── Keep-alive heartbeat ─────────────────────────────────────────────
-  // Long-running Find / Enrich pipelines can run 30-120s. Railway's (and
-  // most cloud proxies') HTTP layer kills the TCP connection if no bytes
-  // flow on it for ~60s → user sees "Application failed to respond" and
-  // we waste every Tavily credit already spent.
-  //
-  // Send response headers and a single whitespace byte every 10s while the
-  // mode handler runs. JSON.parse ignores leading whitespace, so when we
-  // finally write the real {result,provider,title} body, the client
-  // parses it normally. No client change needed.
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("X-Accel-Buffering", "no"); // disable nginx-style buffering if present
-  res.flushHeaders?.();
-
-  // Once headers are flushed we own the socket for 30-120s. If the client
-  // navigates away — or a proxy drops the connection — any subsequent write
-  // (the heartbeat below, or the final JSON body) hits a destroyed socket and
-  // emits an 'error' event. WITHOUT this listener that event is unhandled and
-  // crashes the whole process → every concurrent request 502s and Railway
-  // restarts. This is the actual cause of the intermittent 502s on long Finds.
-  let clientGone = false;
-  res.on("error", (err) => {
-    clientGone = true;
-    console.warn("[completion] response stream error:", (err as Error).message);
-  });
-  res.on("close", () => {
-    // 'close' before we've ended means the client hung up mid-search.
-    if (!res.writableEnded) {
-      clientGone = true;
-      console.warn("[completion] client disconnected before completion");
-    }
-  });
-  // Crash-proof write: never throws, never writes to a dead socket. Returns
-  // false once the connection is gone so callers can stop early.
-  const safeWrite = (chunk: string): boolean => {
-    if (clientGone || res.writableEnded || !res.writable) return false;
-    try {
-      return res.write(chunk);
-    } catch (err) {
-      clientGone = true;
-      console.warn("[completion] write failed:", (err as Error).message);
-      return false;
-    }
-  };
-  const heartbeat = setInterval(() => {
-    if (clientGone || res.writableEnded) { clearInterval(heartbeat); return; }
-    safeWrite(" ");
-  }, 10_000);
-
+  // ── Async job: run the search in the background, hand back a job id ───────
+  // Long Find/company searches run well past the hosting platform's ~60-90s
+  // HARD request cap — a total-duration reset (not an idle timeout, so the old
+  // whitespace heartbeat couldn't save it) that surfaced as "Failed to fetch".
+  // Fix: don't hold the HTTP request. Kick the search off in the background and
+  // return a job id the client polls (each call sub-second). The search can now
+  // run as long as it needs, and the result is persisted either way so it
+  // survives the client navigating away.
+  const userId = req.user!.id;
   const matchBreadth = parsed.data.matchBreadth ?? "broad";
-  let result: CompletionResult;
-  try {
-    const userId = req.user!.id;
-    if (parsed.data.mode === "find") {
-      result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqAlreadyShown, matchBreadth);
-    } else if (parsed.data.mode === "network") {
-      result = await runNetwork(provider, parsed.data.content, userId, userKeys);
-    } else if (parsed.data.mode === "enrich") {
-      result = await runEnrich(provider, parsed.data.content, userId, userKeys);
-    } else if (parsed.data.mode === "followup") {
-      result = await runFollowup(
-        provider,
-        parsed.data.content,
-        (parsed.data.previousProspects ?? []) as Prospect[],
-        userId,
-        userKeys,
-      );
-    } else if (parsed.data.mode === "discover_more") {
-      const prev = (parsed.data.previousProspects ?? []) as Prospect[];
-      // Merge the previous-prospects exclusion with the CRM-backed
-      // exclusion so "find more" doesn't re-recommend people already on
-      // one of the user's boards. uniqAlreadyShown already includes both
-      // chat-history names and CRM names.
-      const excludeNames = Array.from(new Set([
-        ...prev.map((p) => p.name).filter(Boolean),
-        ...uniqAlreadyShown,
-      ]));
-      const brief = parsed.data.previousBrief?.trim() || parsed.data.content;
-      result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys, matchBreadth, priorMessages);
-    } else {
-      result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId, userKeys);
-    }
-  } catch (err) {
-    clearInterval(heartbeat);
-    // Typed quota/auth errors get rendered as a normal "text" CompletionResult
-    // so the chat shows a clean, actionable card — not a generic
-    // "completion_failed" envelope. Without this, a Tavily 432 looked
-    // identical to "no results found" and the user couldn't tell their
-    // credit was the actual blocker.
-    const friendly = renderUpstreamError(err);
-    if (friendly) {
-      const result: CompletionResult = { kind: "text", content: friendly };
-      // Persist the friendly text as the assistant message (under the current
-      // user message) so the chat history + tree reflect what the user saw.
-      const errAssistant = await db.insertInto("messages").values({
-        chat_id: chat.id, role: "assistant", content: friendly,
-        result: result as unknown as object, parent_id: currentUserMessageId,
-      }).returning("id").executeTakeFirst().catch(() => undefined);
-      if (safeWrite(JSON.stringify({
-        result, provider,
-        userMessageId: createdUserMessage ? currentUserMessageId : undefined,
-        assistantMessageId: errAssistant?.id,
-      }))) {
-        try { res.end(); } catch { /* socket already gone */ }
-      }
-      return;
-    }
-    if (!clientGone) writeErrorEnvelope(res, (err as Error).message);
-    return;
-  }
-  clearInterval(heartbeat);
 
-  // Everything past this point must also be wrapped so a DB / title failure
-  // can't leave the client staring at a whitespace-only response body
-  // (JSON.parse chokes with "Unexpected end of JSON input" when it does).
-  try {
-  // Persist both a human-readable timeline stub AND the full structured
-  // result so prospect cards can be rebuilt on chat reload.
-  const timelineText =
-    result.kind === "text"
-      ? result.content
-      : result.kind === "prospects"
-        ? `${result.summary} (${result.prospects.length} prospects)`
-        : result.kind === "companies"
-          ? `${result.summary} (${result.companies.length} companies)`
-          : `Drafted ${result.drafts.length} outreach message${result.drafts.length === 1 ? "" : "s"}.`;
-
-  const assistantRow = await db
-    .insertInto("messages")
-    .values({
-      chat_id: chat.id,
-      role: "assistant",
-      content: timelineText,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      result: result as any,
-      parent_id: currentUserMessageId,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow();
-
-  // Resolve the AI title (kicked off BEFORE runFind so Find doesn't starve it).
-  // The outer try/catch is defensive — titlePromise already catches its own
-  // errors and resolves to undefined.
-  let newTitle: string | undefined;
-  if (shouldGenerateTitle) {
-    let candidate: string | undefined;
+  // All context (chat, branch, priorMessages, exclusions, titlePromise) is
+  // captured by closure — the background work needs no request object.
+  const execute = async (): Promise<CompletionPayload> => {
+    let result: CompletionResult;
     try {
-      candidate = await titlePromise;
+      if (parsed.data.mode === "find") {
+        result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqAlreadyShown, matchBreadth);
+      } else if (parsed.data.mode === "network") {
+        result = await runNetwork(provider, parsed.data.content, userId, userKeys);
+      } else if (parsed.data.mode === "enrich") {
+        result = await runEnrich(provider, parsed.data.content, userId, userKeys);
+      } else if (parsed.data.mode === "followup") {
+        result = await runFollowup(provider, parsed.data.content, (parsed.data.previousProspects ?? []) as Prospect[], userId, userKeys);
+      } else if (parsed.data.mode === "discover_more") {
+        const prev = (parsed.data.previousProspects ?? []) as Prospect[];
+        // Merge previous-prospects + CRM exclusion so "find more" never repeats.
+        const excludeNames = Array.from(new Set([
+          ...prev.map((p) => p.name).filter(Boolean),
+          ...uniqAlreadyShown,
+        ]));
+        const brief = parsed.data.previousBrief?.trim() || parsed.data.content;
+        result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys, matchBreadth, priorMessages);
+      } else {
+        result = await runDraft(provider, parsed.data.content, (parsed.data.recipients ?? []) as Prospect[], userId, userKeys);
+      }
     } catch (err) {
-      console.warn("[title] promise rejected:", (err as Error).message);
+      // Typed quota/auth errors render as a normal "text" card (actionable),
+      // not a hard failure — and persist like any other turn.
+      const friendly = renderUpstreamError(err);
+      if (!friendly) throw err;
+      result = { kind: "text", content: friendly };
     }
-    if (!candidate) {
-      // Deliberate fallback: "Search: <first 60 chars>" so the sidebar row
-      // is visibly DIFFERENT from the raw query. Users correctly called
-      // out that a fallback identical to the query looks like the AI step
-      // never ran.
-      const firstLine = parsed.data.content.split(/\n/)[0]?.trim() ?? "";
-      const truncated = firstLine.slice(0, 60).replace(/\s+\S*$/, "");
-      candidate = truncated ? `Search: ${truncated}` : "Untitled search";
-      console.warn(`[title] using fallback: "${candidate}"`);
+
+    // Persist a human-readable timeline stub + the full structured result so
+    // prospect/company cards rebuild on chat reload.
+    const timelineText =
+      result.kind === "text" ? result.content
+        : result.kind === "prospects" ? `${result.summary} (${result.prospects.length} prospects)`
+          : result.kind === "companies" ? `${result.summary} (${result.companies.length} companies)`
+            : `Drafted ${result.drafts.length} outreach message${result.drafts.length === 1 ? "" : "s"}.`;
+
+    const assistantRow = await db
+      .insertInto("messages")
+      .values({
+        chat_id: chat.id, role: "assistant", content: timelineText,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        result: result as any, parent_id: currentUserMessageId,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+
+    // Resolve the AI title (kicked off before the search so it isn't starved).
+    let newTitle: string | undefined;
+    if (shouldGenerateTitle) {
+      let candidate: string | undefined;
+      try { candidate = await titlePromise; } catch (err) { console.warn("[title] promise rejected:", (err as Error).message); }
+      if (!candidate) {
+        const firstLine = parsed.data.content.split(/\n/)[0]?.trim() ?? "";
+        const truncated = firstLine.slice(0, 60).replace(/\s+\S*$/, "");
+        candidate = truncated ? `Search: ${truncated}` : "Untitled search";
+      }
+      newTitle = candidate;
+      await db.updateTable("chats").set({ title: candidate }).where("id", "=", chat.id).execute();
     }
-    newTitle = candidate;
-    await db.updateTable("chats").set({ title: candidate }).where("id", "=", chat.id).execute();
-  }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await db.updateTable("chats").set({ updated_at: new Date() as any }).where("id", "=", chat.id).execute();
 
-  await db.updateTable("chats").set({ updated_at: new Date() as any }).where("id", "=", chat.id).execute();
+    return {
+      result, provider, title: newTitle,
+      userMessageId: createdUserMessage ? currentUserMessageId : undefined,
+      assistantMessageId: assistantRow.id,
+    };
+  };
 
-  // Headers + heartbeat whitespace already sent — use res.write/res.end,
-  // NOT res.json (which calls setHeader again and errors). Client parses
-  // leading whitespace fine; JSON.parse ignores it.
-  //
-  // Return the new message ids so the client can graft this turn into its
-  // message tree and point the active branch at it — no full refetch needed.
-  if (safeWrite(JSON.stringify({
-    result, provider, title: newTitle,
-    userMessageId: createdUserMessage ? currentUserMessageId : undefined,
-    assistantMessageId: assistantRow.id,
-  }))) {
-    try { res.end(); } catch { /* socket already gone */ }
+  const jobId = randomUUID();
+  completionJobs.set(jobId, { status: "running", userId, createdAt: Date.now() });
+  // Fire-and-forget — the job store carries the outcome to the poll endpoint.
+  // The .catch ensures a failed search can never become an unhandledRejection.
+  void execute()
+    .then((payload) => { completionJobs.set(jobId, { status: "done", userId, createdAt: Date.now(), payload }); })
+    .catch((err) => {
+      console.error("[completion] job failed:", (err as Error).message);
+      completionJobs.set(jobId, {
+        status: "error", userId, createdAt: Date.now(),
+        message: (err as Error).message || "Search failed",
+      });
+    });
+
+  reapCompletionJobs();
+  return res.json({ jobId, userMessageId: createdUserMessage ? currentUserMessageId : undefined });
+});
+
+// Poll a background completion job. Each poll is sub-second, so a search of any
+// length finishes without holding one long HTTP request past the platform cap.
+router.get("/:id/completion/:jobId", async (req: AuthedRequest, res) => {
+  const job = completionJobs.get(req.params.jobId);
+  if (!job || job.userId !== req.user!.id) {
+    return res.status(404).json({
+      error: "job_not_found",
+      message: "That search expired or the server restarted before it finished — re-run it.",
+    });
   }
-  } catch (err) {
-    console.error("[completion] post-mode failure:", (err as Error).message);
-    if (!clientGone) writeErrorEnvelope(res, (err as Error).message);
-  }
+  if (job.status === "running") return res.json({ status: "running" });
+  if (job.status === "error") return res.json({ status: "error", message: job.message });
+  return res.json({ status: "done", ...job.payload });
 });
 
 /** After we flushed headers (for the heartbeat), Express's default error

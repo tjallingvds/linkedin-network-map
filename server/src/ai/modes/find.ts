@@ -400,14 +400,12 @@ export async function runFind(
   // old policy stopped after 3 rounds or as soon as it had 30% of the ask,
   // which is why a 200-person brief gave up at a handful.
   //
-  // CAP NOTE: the hosting platform resets any HTTP request that runs longer
-  // than ~60-90s (the heartbeat prevents IDLE timeouts but not a total-
-  // duration cap), surfacing to the user as "Failed to fetch". The budget is
-  // checked at the START of each round, so worst-case total ≈ budget + one
-  // round (~20s). Keep the budget low enough that a full run still returns
-  // (with partial results) before the platform kills the socket. The real fix
-  // is async job + polling; this bound keeps synchronous runs under the cap.
-  const SEARCH_TIME_BUDGET_MS = 45_000;
+  // The search runs in a BACKGROUND JOB now (chats.ts), not on the HTTP
+  // request, so it's no longer bound by the platform's ~60-90s request cap —
+  // we can dig for the full budget without the socket being reset. The client
+  // polls a status endpoint, so a long run just means more polls, not a
+  // "Failed to fetch".
+  const SEARCH_TIME_BUDGET_MS = 120_000;
   const halfTarget = Math.ceil(targetCount / 2);
   const searchStartedAt = Date.now();
   const MAX_ROUNDS = 12;
