@@ -27,6 +27,35 @@ import salesRoutes from "./routes/sales/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// ── Process-level safety net ────────────────────────────────────────────────
+// express-async-errors forwards a handler's *thrown/rejected* errors to the
+// error middleware, but it can't catch an asynchronous 'error' event emitted
+// on a socket — e.g. the completion route's keep-alive heartbeat writing its
+// whitespace byte 10s after the client (or a proxy) silently dropped a
+// long-running Find. With no listener, that event became an uncaughtException
+// that killed the WHOLE process — every concurrent request then 502'd and
+// Railway restarted the container. The route now listens on its own response,
+// but these guards ensure no single stray socket/promise error can ever take
+// the server down again.
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  // Writes to an already-closed client socket surface here as EPIPE /
+  // ECONNRESET / ERR_STREAM_*. The request they belong to is already over, so
+  // they're benign — log and keep serving every other in-flight request.
+  const code = (err as NodeJS.ErrnoException).code ?? "";
+  const benign = ["EPIPE", "ECONNRESET", "ERR_STREAM_WRITE_AFTER_END", "ERR_STREAM_DESTROYED"];
+  if (benign.includes(code) || benign.includes(err.name)) {
+    console.warn(`[process] ignored benign socket error: ${code || err.message}`);
+    return;
+  }
+  // Anything else means we may be in a corrupted state — exit so Railway
+  // restarts a clean process rather than serving from a half-broken one.
+  console.error("[process] uncaughtException — exiting for clean restart:", err);
+  process.exit(1);
+});
+
 const app = express();
 
 app.set("trust proxy", 1); // needed on Railway/Fly/etc. for secure cookies

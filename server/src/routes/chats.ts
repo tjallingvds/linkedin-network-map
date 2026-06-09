@@ -309,8 +309,40 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("X-Accel-Buffering", "no"); // disable nginx-style buffering if present
   res.flushHeaders?.();
+
+  // Once headers are flushed we own the socket for 30-120s. If the client
+  // navigates away — or a proxy drops the connection — any subsequent write
+  // (the heartbeat below, or the final JSON body) hits a destroyed socket and
+  // emits an 'error' event. WITHOUT this listener that event is unhandled and
+  // crashes the whole process → every concurrent request 502s and Railway
+  // restarts. This is the actual cause of the intermittent 502s on long Finds.
+  let clientGone = false;
+  res.on("error", (err) => {
+    clientGone = true;
+    console.warn("[completion] response stream error:", (err as Error).message);
+  });
+  res.on("close", () => {
+    // 'close' before we've ended means the client hung up mid-search.
+    if (!res.writableEnded) {
+      clientGone = true;
+      console.warn("[completion] client disconnected before completion");
+    }
+  });
+  // Crash-proof write: never throws, never writes to a dead socket. Returns
+  // false once the connection is gone so callers can stop early.
+  const safeWrite = (chunk: string): boolean => {
+    if (clientGone || res.writableEnded || !res.writable) return false;
+    try {
+      return res.write(chunk);
+    } catch (err) {
+      clientGone = true;
+      console.warn("[completion] write failed:", (err as Error).message);
+      return false;
+    }
+  };
   const heartbeat = setInterval(() => {
-    if (!res.writableEnded) res.write(" ");
+    if (clientGone || res.writableEnded) { clearInterval(heartbeat); return; }
+    safeWrite(" ");
   }, 10_000);
 
   const matchBreadth = parsed.data.matchBreadth ?? "broad";
@@ -362,17 +394,16 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
         chat_id: chat.id, role: "assistant", content: friendly,
         result: result as unknown as object, parent_id: currentUserMessageId,
       }).returning("id").executeTakeFirst().catch(() => undefined);
-      if (!res.writableEnded) {
-        res.write(JSON.stringify({
-          result, provider,
-          userMessageId: createdUserMessage ? currentUserMessageId : undefined,
-          assistantMessageId: errAssistant?.id,
-        }));
-        res.end();
+      if (safeWrite(JSON.stringify({
+        result, provider,
+        userMessageId: createdUserMessage ? currentUserMessageId : undefined,
+        assistantMessageId: errAssistant?.id,
+      }))) {
+        try { res.end(); } catch { /* socket already gone */ }
       }
       return;
     }
-    writeErrorEnvelope(res, (err as Error).message);
+    if (!clientGone) writeErrorEnvelope(res, (err as Error).message);
     return;
   }
   clearInterval(heartbeat);
@@ -438,17 +469,16 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   //
   // Return the new message ids so the client can graft this turn into its
   // message tree and point the active branch at it — no full refetch needed.
-  if (!res.writableEnded) {
-    res.write(JSON.stringify({
-      result, provider, title: newTitle,
-      userMessageId: createdUserMessage ? currentUserMessageId : undefined,
-      assistantMessageId: assistantRow.id,
-    }));
-    res.end();
+  if (safeWrite(JSON.stringify({
+    result, provider, title: newTitle,
+    userMessageId: createdUserMessage ? currentUserMessageId : undefined,
+    assistantMessageId: assistantRow.id,
+  }))) {
+    try { res.end(); } catch { /* socket already gone */ }
   }
   } catch (err) {
     console.error("[completion] post-mode failure:", (err as Error).message);
-    writeErrorEnvelope(res, (err as Error).message);
+    if (!clientGone) writeErrorEnvelope(res, (err as Error).message);
   }
 });
 
