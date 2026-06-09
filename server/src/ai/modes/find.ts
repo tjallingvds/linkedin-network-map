@@ -796,9 +796,13 @@ function looksLikePeopleRequest(text: string): boolean {
  *  people search is never misrouted. */
 function looksLikeCompanySearch(brief: string): boolean {
   const hay = brief.toLowerCase();
-  const noun = "(?:comp(?:any|anies)|firms?|accounts?|organi[sz]ations?|orgs?|businesses|institutions?|employers)";
-  // "find / list / show / give me [N|all|some|more|a list of] companies …"
-  const direct = new RegExp(`\\b(?:find|list|show|get|give|identify|surface|build\\s+(?:me\\s+)?a\\s+list\\s+of|compile|pull)\\s+(?:me\\s+)?(?:all\\s+|some\\s+|more\\s+|a\\s+list\\s+of\\s+|up\\s+to\\s+\\d+\\s+|\\d+\\s+)?${noun}\\b`);
+  // Stem allows the common truncation "companie" (user cut "companies" short).
+  const noun = "(?:compan(?:y|ies|ie)|firms?|accounts?|organi[sz]ations?|orgs?|businesses|institutions?|employers)";
+  // "find / list / show / give me [the|these|those|N|all|some|more|a list of] companies …"
+  // The determiner alternatives (the/these/those/that) matter: without them
+  // "find these companies" / "find the companies" fell through to the PEOPLE
+  // path and returned scattered individuals instead of a target-account list.
+  const direct = new RegExp(`\\b(?:find|list|show|get|give|identify|surface|build\\s+(?:me\\s+)?a\\s+list\\s+of|compile|pull)\\s+(?:me\\s+)?(?:the\\s+|these\\s+|those\\s+|that\\s+|all\\s+|some\\s+|more\\s+|a\\s+list\\s+of\\s+|up\\s+to\\s+\\d+\\s+|\\d+\\s+)?${noun}\\b`);
   // "which / what companies …"
   const whichWhat = new RegExp(`\\b(?:which|what)\\s+${noun}\\b`);
   // "companies that (can) fit / match / qualify …"
