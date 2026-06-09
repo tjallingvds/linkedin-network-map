@@ -22,7 +22,7 @@ export interface AiCallResult {
 const MODELS: Record<AiProvider, string> = {
   openai: "gpt-4o-mini",
   anthropic: "claude-sonnet-4-6",
-  deepseek: "deepseek-chat",
+  deepseek: "deepseek-v4-flash",
 };
 
 import type { UserKeys } from "./user-keys.js";

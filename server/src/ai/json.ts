@@ -10,7 +10,7 @@ import type { UserKeys } from "./user-keys.js";
 const MODELS: Record<AiProvider, string> = {
   openai: "gpt-4o-mini",
   anthropic: "claude-sonnet-4-6",
-  deepseek: "deepseek-chat",
+  deepseek: "deepseek-v4-flash",
 };
 
 /** Thrown when an LLM provider rejects the call because the account is out
