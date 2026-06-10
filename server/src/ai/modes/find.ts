@@ -916,7 +916,7 @@ Return {"firms": [...], "webQueries": [...]}.`,
     if (searchBudget.remaining <= 0) break;
     searchBudget.remaining--;
     try {
-      const r = await tavilySearch(q, { depth: "advanced", maxResults: 10, userId, userKeys });
+      const r = await tavilySearch(q, { depth: "advanced", maxResults: 20, userId, userKeys });
       snippets.push(...r);
     } catch (e) {
       // Quota/auth/missing-key must propagate (so the run shows a clear card);
@@ -1769,8 +1769,12 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
     console.log(`[find] query count: LLM returned ${llmQueryCount}, topped up to ${searchQueries.length} (budget ${numQueries})`);
   }
 
-  // Legacy: maxPerQuery = targetCount > 30 ? 20 : 10
-  const maxPerQuery = targetCount > 30 ? 20 : 10;
+  // Always pull the FULL page of results. An advanced Tavily call costs 2
+  // credits whether you ask for 5 results or 20, so capping small asks at 10
+  // threw away half the call's yield for the same price. Maxing it out means
+  // more candidates per credit and fewer rounds needed to hit the target —
+  // "more with less". (20 is Tavily's max_results ceiling.)
+  const maxPerQuery = 20;
 
   // Per-query outcome — distinguishes a query that RAN and returned zero
   // hits from one that ERRORED (transient 5xx / timeout / network). A query
@@ -1800,9 +1804,12 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
       });
       if (linked === null) return { results: [], error: null }; // budget spent
       if (linked.length > 0) return { results: linked, error: null };
-      // 2. Advanced + "LinkedIn profile" suffix, open web
+      // 2. Open-web fallback when the LinkedIn-restricted call came up dry.
+      // BASIC depth (1 credit) not advanced (2): this is a last-chance attempt
+      // on a query that already missed, so it's not worth full price. Small
+      // recall cost on hard-to-find firms, ~half the cost of every dry query.
       const open = await budgetedSearch(`${cleanQuery} LinkedIn profile`, {
-        depth: "advanced",
+        depth: "basic",
         maxResults: maxPerQuery,
         userId,
         userKeys,
