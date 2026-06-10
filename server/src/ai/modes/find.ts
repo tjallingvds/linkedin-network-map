@@ -116,6 +116,11 @@ export async function runFind(
    *  from messages.result.prospects in the DB by chats.ts. */
   alreadyShownNames: string[] = [],
   matchBreadth: MatchBreadth = "broad",
+  /** Names already on the user's CRM boards. Normally excluded too, but
+   *  DROPPED when the search is locked to firms the user explicitly named —
+   *  they're deliberately re-pulling those accounts and suppressing everyone
+   *  already saved would return almost nothing. */
+  crmExcludeNames: string[] = [],
 ): Promise<CompletionResult> {
   assertKeys(provider, userKeys);
 
@@ -124,6 +129,15 @@ export async function runFind(
     .map((m) => m.content)
     .join("\n");
   const fullBrief = priorUserText ? `${priorUserText}\n${userInput}` : userInput;
+
+  // Chat-turn dedup always applies; CRM exclusion applies UNLESS the user
+  // locked the search to firms they named (then they want those people even
+  // if already saved). `effectiveShown` is the exclusion set used everywhere
+  // below (seeding + the per-round "do not return these" query hints).
+  const lockedToNamedFirms = looksLockedToNamedFirms(fullBrief);
+  const effectiveShown = lockedToNamedFirms
+    ? alreadyShownNames
+    : [...alreadyShownNames, ...crmExcludeNames];
 
   // ── CRM-read fast path ──────────────────────────────────────────────────
   // "what's in my Banks board?" / "list the technical people in my CRM" /
@@ -274,11 +288,14 @@ export async function runFind(
   console.log(`[find] parsed brief → firms=[${(parsed?.firms ?? []).join(", ")}] titles=[${(parsed?.titles ?? []).join(", ")}] floor=${parsed?.seniorityFloor ?? "none"}`);
 
   // HARD CEILING on total Tavily calls for this entire find request, across
-  // firm-discovery AND all people-search rounds. ~2 credits/call, so 50 ≈ 100
-  // credits — a firm upper bound regardless of target/rounds. Declared here
-  // (not inside the loop) so the firm-discovery stage below draws from the
-  // same shared budget and can never run away with credits.
-  const searchBudget = { remaining: 50 };
+  // firm-discovery AND all people-search rounds. ~2 credits/call. The ceiling
+  // now SCALES with the ask: a flat 50 couldn't cover a 100-person search over
+  // 40 firms (firm-discovery ate ~10, leaving ~40 calls = ~2 rounds), so big
+  // asks returned a handful. ~1.5 calls per requested prospect, floored at 50
+  // (small asks keep their headroom) and capped at 200 (~400 credits — a firm
+  // upper bound no matter how large the ask). Declared here (not in the loop)
+  // so firm-discovery draws from the same shared budget and can't run away.
+  const searchBudget = { remaining: Math.min(200, Math.max(50, Math.round(targetCount * 1.5))) };
 
   // ── Company-list output ──────────────────────────────────────────────────
   // The user asked for COMPANIES (a target-account list), not people. Run the
@@ -387,13 +404,14 @@ export async function runFind(
   // dedup works. Without this, turn 3 ("find everyone at JPM/Barclays/…")
   // happily returned people turn 1 ("find everyone at Goldman Sachs")
   // already surfaced — which the user saw and called out.
-  for (const n of alreadyShownNames) {
+  for (const n of effectiveShown) {
     const key = n.toLowerCase().trim();
     if (key) seenNames.add(key);
   }
   // Keep digging across rounds until one of three things is true:
-  //   1. we've found at least HALF of what the user asked for (a satisfying
-  //      floor — niche briefs rarely yield 100% of a big ask),
+  //   1. we've found ~90% of what the user asked for (the old 50% floor was
+  //      the #1 reason a "find 50" returned ~12 even on a fresh chat — it quit
+  //      at 25 then exclusion/gates shaved it further),
   //   2. we've spent the ~2-minute time budget, or
   //   3. the web is exhausted (a round surfaces zero NEW people — only dupes).
   // MAX_ROUNDS is just a backstop; time/exhaustion are the real limits. The
@@ -406,7 +424,9 @@ export async function runFind(
   // polls a status endpoint, so a long run just means more polls, not a
   // "Failed to fetch".
   const SEARCH_TIME_BUDGET_MS = 120_000;
-  const halfTarget = Math.ceil(targetCount / 2);
+  // Dig toward ~90% of the ask, not 50%. The remaining handful rarely warrants
+  // another round, and time/budget/exhaustion still cap a thin niche brief.
+  const satisfyingFloor = Math.ceil(targetCount * 0.9);
   const searchStartedAt = Date.now();
   const MAX_ROUNDS = 12;
   // searchBudget is declared above (shared with the firm-discovery stage) so
@@ -422,8 +442,8 @@ export async function runFind(
         console.log(`[find] search budget exhausted (${allPeople.length}/${targetCount}) — stopping`);
         break;
       }
-      if (allPeople.length >= halfTarget) {
-        console.log(`[find] reached half-target (${allPeople.length}/${targetCount}) — stopping`);
+      if (allPeople.length >= satisfyingFloor) {
+        console.log(`[find] reached satisfying floor (${allPeople.length}/${targetCount}) — stopping`);
         break;
       }
       const elapsed = Date.now() - searchStartedAt;
@@ -437,14 +457,14 @@ export async function runFind(
     // exclusion list for the query generator. When pre-seed has entries,
     // surface the first slice on round 0 too so Tavily queries don't aim
     // at the same LinkedIn profiles again.
-    const priorShownSlice = round === 0 && alreadyShownNames.length > 0
-      ? `\n\n(Already shown in earlier chat turns — do NOT return these: ${alreadyShownNames.slice(0, 80).join(", ")}.)`
+    const priorShownSlice = round === 0 && effectiveShown.length > 0
+      ? `\n\n(Already shown in earlier chat turns — do NOT return these: ${effectiveShown.slice(0, 80).join(", ")}.)`
       : "";
     const roundQuery = round === 0
       ? `${fullBrief}${priorShownSlice}`
       : `${fullBrief}\n\n(ROUND ${round + 1}: Find DIFFERENT people. Already found: ${
           allPeople.map((p) => p.name).join(", ")
-        }${alreadyShownNames.length ? "; Also already shown earlier: " + alreadyShownNames.slice(0, 40).join(", ") : ""}. Do NOT return these again.)`;
+        }${effectiveShown.length ? "; Also already shown earlier: " + effectiveShown.slice(0, 40).join(", ") : ""}. Do NOT return these again.)`;
 
     let roundResult: HandleDiscoveryResult;
     try {

@@ -234,7 +234,13 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   // Pull every prospect name surfaced earlier ON THIS BRANCH so Find doesn't
   // re-surface them — scoped to the branch so a discarded edit's results
   // don't suppress people on the branch the user actually kept.
-  const alreadyShownNames: string[] = [];
+  // Two exclusion sources, kept SEPARATE so Find can treat them differently:
+  //  - chatShownNames: people already surfaced on this branch → always deduped
+  //    (no repeats within a thread).
+  //  - crmNames: everyone on the user's boards → normally excluded, but Find
+  //    DROPS this exclusion when the user locked the search to firms they
+  //    explicitly named (deliberately re-pulling those accounts).
+  const chatShownNames: string[] = [];
   for (const m of branch) {
     if (m.role !== "assistant") continue;
     const r = m.result as unknown;
@@ -244,14 +250,15 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     const list = (r as { prospects?: Array<{ name?: string }> }).prospects ?? [];
     for (const p of list) {
       if (p && typeof p.name === "string" && p.name.trim()) {
-        alreadyShownNames.push(p.name.trim());
+        chatShownNames.push(p.name.trim());
       }
     }
   }
-  // Also pull names from the user's CRM so Find doesn't recommend people
-  // they've already added to a board. Scoped to boards the user owns OR is
-  // a member of — if a collaborator added someone to a shared pipeline,
-  // surfacing them again would waste an outreach slot.
+  // Pull names from the user's CRM so Find doesn't recommend people they've
+  // already added to a board. Scoped to boards the user owns OR is a member of
+  // — if a collaborator added someone to a shared pipeline, surfacing them
+  // again would waste an outreach slot.
+  const crmNames: string[] = [];
   try {
     const myBoards = await db
       .selectFrom("crm_boards")
@@ -271,7 +278,7 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
         .where("board_id", "in", boardIds)
         .execute();
       for (const row of crmRows) {
-        if (row.name && row.name.trim()) alreadyShownNames.push(row.name.trim());
+        if (row.name && row.name.trim()) crmNames.push(row.name.trim());
       }
     }
   } catch (err) {
@@ -280,11 +287,14 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     console.warn("[chats] crm exclusion lookup failed:", (err as Error).message);
   }
 
-  // Dedupe — same person can appear in multiple assistant turns or on
-  // multiple boards.
-  const uniqAlreadyShown = Array.from(new Set(alreadyShownNames.map((n) => n.toLowerCase())))
-    .map((lc) => alreadyShownNames.find((n) => n.toLowerCase() === lc)!)
-    .filter(Boolean);
+  // Dedupe each set (case-insensitive) — same person can appear across turns
+  // or on multiple boards.
+  const dedupe = (names: string[]): string[] =>
+    Array.from(new Set(names.map((n) => n.toLowerCase())))
+      .map((lc) => names.find((n) => n.toLowerCase() === lc)!)
+      .filter(Boolean);
+  const uniqChatShown = dedupe(chatShownNames);
+  const uniqCrm = dedupe(crmNames);
 
   // Decide NOW whether this turn should trigger AI title generation. We kick
   // it off BEFORE runFind so the 30-second Find pipeline doesn't starve the
@@ -343,7 +353,7 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     let result: CompletionResult;
     try {
       if (parsed.data.mode === "find") {
-        result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqAlreadyShown, matchBreadth);
+        result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqChatShown, matchBreadth, uniqCrm);
       } else if (parsed.data.mode === "network") {
         result = await runNetwork(provider, parsed.data.content, userId, userKeys);
       } else if (parsed.data.mode === "enrich") {
@@ -352,10 +362,12 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
         result = await runFollowup(provider, parsed.data.content, (parsed.data.previousProspects ?? []) as Prospect[], userId, userKeys);
       } else if (parsed.data.mode === "discover_more") {
         const prev = (parsed.data.previousProspects ?? []) as Prospect[];
-        // Merge previous-prospects + CRM exclusion so "find more" never repeats.
+        // "find more" should never repeat — exclude prior prospects, chat-shown
+        // names, AND CRM members.
         const excludeNames = Array.from(new Set([
           ...prev.map((p) => p.name).filter(Boolean),
-          ...uniqAlreadyShown,
+          ...uniqChatShown,
+          ...uniqCrm,
         ]));
         const brief = parsed.data.previousBrief?.trim() || parsed.data.content;
         result = await runDiscoverMore(provider, brief, excludeNames, userId, userKeys, matchBreadth, priorMessages);

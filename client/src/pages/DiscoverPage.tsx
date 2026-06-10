@@ -190,13 +190,29 @@ function routeMode(
     /^\s*(?:find\s+(?:me\s+)?|search(?:\s+for)?\s+|look\s+(?:for|up)\s+|get\s+me\s+|show\s+me\s+|give\s+me\s+|i\s+(?:want|need)\s+)/i.test(text) &&
     (wordCount >= 8 || /\b(?:ai|cto|coo|cfo|cro|cio|ceo|svp|vp\b|md\b|director|head\s+of|manager|founder|partner|chief|engineer|scientist|analyst|consultant|investor)\b/i.test(text));
 
+  // A bare comma-separated list of names ("revolut, wise, monzo, etc.") with
+  // no verb is the user handing us target firms to search — a refinement/new
+  // search, NOT a filter. Without this it dead-ends at the followup
+  // fallthrough and the user (who just named their targets) gets a "could you
+  // clarify" loop. Guard against filter phrasings ("remove X, Y") and
+  // questions so genuine followups aren't misrouted.
+  const looksLikeNamedTargets =
+    /,/.test(text) && wordCount <= 12 && !/\?/.test(text) &&
+    !/^\s*(?:only|just|remove|exclude|keep|filter|drop|narrow|without|except)\b/i.test(text) &&
+    !/\b(?:find|search|filter|show|get|give|which|who|what|how)\b/i.test(text);
+
   const wantsNewSearch =
     looksLikeFreshBrief ||
+    looksLikeNamedTargets ||
     /\b(more|another|additional|further|elsewhere|on the (web|internet)|search the web|search the internet)\b/i.test(text) ||
     /\b(?:search(?:\s+(?:again|better|for|more))?|re[-\s]?search|look\s+up|dig\s+up|go\s+find)\b/i.test(text) ||
     /\b(?:better|deeper|broader|wider|proper|real)\s+(?:search|list|results?)\b/i.test(text) ||
     /\badd\s+(?:their|the)?\s*(?:linkedin|email|phone|location|title|bio|contact)s?\b/i.test(text) ||
     /\b(?:find|get|give|show|need|want)\s+(?:me\s+)?(?:up\s+to\s+)?\d{1,3}\b/i.test(text) ||
+    // Imperative to act on named targets WITHOUT a count: "yes so find them",
+    // "go find them", "find these people", "pull them". The named firms ride
+    // in the conversation brief, so discover_more/find will target them.
+    /\b(?:find|get|pull|surface|source|search\s+for)\s+(?:me\s+)?(?:them|these|those|the\s+(?:people|ones|rest))\b/i.test(text) ||
     /^\s*(?:no|nope|not (?:these|right|good|it)|actually|wait)\b/i.test(text) ||
     /\b(?:start over|redo|try again|different (?:search|prospects)|new search)\b/i.test(text);
 
@@ -357,6 +373,11 @@ export function DiscoverPage() {
   const [chatList, setChatList] = useState<ChatListItem[]>([]);
   const [lastBrief, setLastBrief] = useState<string>("");
   const [lastProspects, setLastProspects] = useState<Prospect[]>([]);
+  // Names from the most recent COMPANIES result, so a follow-on people search
+  // ("find the people in charge of AI within these companies") actually
+  // targets them — otherwise the company list lives only in an assistant
+  // result the server-side brief reconstruction never sees.
+  const [lastCompanies, setLastCompanies] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState(false);
   const [appMode, setAppMode] = useState<"discover" | "crm">("discover");
   const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table" | "overview">("kanban");
@@ -507,6 +528,7 @@ export function DiscoverPage() {
     setOutreachFor(null);
     setLastProspects([]);
     setLastBrief("");
+    setLastCompanies([]);
     // Eagerly create a chat so it shows up in the sidebar immediately.
     // On first user message the title will be replaced via the same endpoint.
     try {
@@ -558,6 +580,7 @@ export function DiscoverPage() {
         setView("hero");
         setLastProspects([]);
         setLastBrief("");
+        setLastCompanies([]);
       }
       flash("Search deleted");
     } catch (err) {
@@ -636,6 +659,7 @@ export function DiscoverPage() {
     setChatId(id);
     setLastProspects([]);
     setLastBrief("");
+    setLastCompanies([]);
     resetTree();
     setView("hero");
     // Fetch messages — assistant messages include the full structured result
@@ -713,11 +737,27 @@ export function DiscoverPage() {
 
     try {
       const id = await ensureChatId(text);
-      const body: Record<string, unknown> = { content: text, mode, parentId, matchBreadth };
+      // If the user refers back to a prior COMPANIES result ("…within these
+      // companies", "find people at these"), append the names so the server's
+      // brief reconstruction actually targets them. The displayed message
+      // stays clean (ctx.userText = text); only the sent/persisted content
+      // carries the anchor.
+      const refersToPriorCompanies =
+        lastCompanies.length > 0 &&
+        (mode === "find" || mode === "discover_more") &&
+        /\b(these|those|them|above|the\s+(?:companies|firms|accounts|list))\b/i.test(text);
+      // Phrasing matters: "only within … do not add other firms" trips the
+      // server's looksLockedToNamedFirms, which skips firm-discovery (don't
+      // waste budget re-deriving firms), keeps all named companies (no
+      // slice-40 drop), and bypasses the buyer-filter so none are dropped.
+      const companyAnchor = refersToPriorCompanies
+        ? `\n\n(Search ONLY within these specific companies — do not add other firms: ${lastCompanies.join(", ")}.)`
+        : "";
+      const body: Record<string, unknown> = { content: `${text}${companyAnchor}`, mode, parentId, matchBreadth };
       if (mode === "followup") body.previousProspects = lastProspects;
       if (mode === "discover_more") {
         body.previousProspects = lastProspects;
-        body.previousBrief = `${lastBrief}\n\nRefinement: ${text}`;
+        body.previousBrief = `${lastBrief}\n\nRefinement: ${text}${companyAnchor}`;
       }
       // Long budget: a single search now digs for up to ~2 min server-side.
       const resp = await api.completion<CompletionResp>(id, body);
@@ -833,9 +873,13 @@ export function DiscoverPage() {
       }
     }
     // Company results carry no prospects, but we still keep the brief so a
-    // follow-up ("find more companies", "only US-HQ ones") has context.
-    if (result.kind === "companies" && brief && brief !== "Show me more matches beyond the ones already listed.") {
-      setLastBrief(brief);
+    // follow-up ("find more companies", "only US-HQ ones") has context, and
+    // the company names so "find people within these companies" can target them.
+    if (result.kind === "companies") {
+      setLastCompanies(result.companies.map((c) => c.name).filter(Boolean));
+      if (brief && brief !== "Show me more matches beyond the ones already listed.") {
+        setLastBrief(brief);
+      }
     }
     if (result.kind === "drafts") {
       const byId = new Map(allProspects.map((p) => [p.id, p]));
