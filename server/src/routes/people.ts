@@ -108,11 +108,21 @@ router.post("/bulk", async (req: AuthedRequest, res) => {
 
   // When replacing AND we have a kind, scope the wipe to that kind so a
   // fresh invitations import doesn't blow away connections (and vice versa).
+  //
+  // Legacy rows imported before the `kind` column existed have kind = NULL;
+  // those were always connections (invitations arrived with the column). So a
+  // connection re-import must clear NULL-kind rows too — otherwise the old set
+  // survives the wipe and the import appears to "append" instead of replace.
+  // An invitations re-import deliberately leaves NULL rows alone.
   if (parsed.data.replace && kind) {
     await db
       .deleteFrom("people")
       .where("user_id", "=", userId)
-      .where("kind", "=", kind)
+      .where((eb) =>
+        kind === "connection"
+          ? eb.or([eb("kind", "=", "connection"), eb("kind", "is", null)])
+          : eb("kind", "=", kind),
+      )
       .execute();
   }
 
