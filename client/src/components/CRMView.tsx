@@ -4735,6 +4735,11 @@ export function CRMView({
 
   return (
     <div className="crm-wrap">
+      {active && (
+        <div className="crm-header">
+          <h1 className="crm-title">{active.name}</h1>
+        </div>
+      )}
       <div className="crm-toolbar">
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <div className="view-toggle">

@@ -50,8 +50,7 @@ export function Sidebar({
           lines up with the topbar's bottom border across the whole app. */}
       <div className="sidebar-header">
         <div className="brand-l">
-          <div className="brand-mark" title="Nontrivial" />
-          {!collapsed && <span className="brand-name">Nontrivial</span>}
+          {!collapsed && <span className="brand-name">Observable Intuition</span>}
         </div>
         {!collapsed && (
           <button className="icon-btn" title="Collapse sidebar" onClick={onToggleCollapse}>

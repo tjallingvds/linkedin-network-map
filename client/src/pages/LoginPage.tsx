@@ -68,7 +68,7 @@ export function LoginPage() {
         <form className="l-form" onSubmit={submit} noValidate>
           <div className="l-wordmark">
             <span className="l-mark"><span className="l-mark-dot" /></span>
-            <span className="l-word">Nontrivial</span>
+            <span className="l-word">Observable Intuition</span>
           </div>
 
           <div className="l-heading">
@@ -136,7 +136,7 @@ export function LoginPage() {
             )}
           </button>
 
-          <div className="l-legal">© 2026 Nontrivial</div>
+          <div className="l-legal">© 2026 Observable Intuition</div>
         </form>
       </div>
 
