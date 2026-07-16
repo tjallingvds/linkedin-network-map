@@ -1916,10 +1916,17 @@ function OverviewView({
   };
 
   const { needsReply, followUp, deadlines } = useMemo(() => {
+    // Stages whose name marks a lead as dead or parked ("Cold",
+    // "Replied Then Ignored", …). People sitting in those columns shouldn't
+    // be nudged, so they're excluded from the whole overview.
+    const excludedStageIds = new Set(
+      stages.filter((s) => /cold|ignored/i.test(s.label ?? "")).map((s) => s.id),
+    );
     const needsReply: CrmContact[] = [];
     const followUp: CrmContact[] = [];
     const deadlines: CrmContact[] = [];
     for (const c of contacts) {
+      if (excludedStageIds.has(c.stage)) continue;
       const h = hoursSince(c.lastTouchAt);
       // Inbound — always surface. The user wants to see every message
       // waiting on a reply, no matter how recently it arrived.
@@ -1946,7 +1953,7 @@ function OverviewView({
     followUp.sort(byStaleness);
     deadlines.sort(byDueAt);
     return { needsReply, followUp, deadlines };
-  }, [contacts]);
+  }, [contacts, stages]);
 
   const stageById = useMemo(() => {
     const m = new Map<string, StageDef>();
