@@ -1270,7 +1270,6 @@ export function DiscoverPage() {
                     const step = m.steps[Math.min(m.steps.length - 1, Math.floor((Date.now() / 600) % m.steps.length))];
                     return (
                       <div key={i} className="ai-block">
-                        <div className="ai-header"><div className="ai-avatar" /><span>Observable Intuition</span></div>
                         <div className="thinking-row">
                           <div className="think-spark"><IconSparkle size={15} /></div>
                           <span>{step}</span>
@@ -1280,7 +1279,6 @@ export function DiscoverPage() {
                   }
                   return (
                     <div key={m.node?.id ?? `a${i}`} className="ai-block">
-                      <div className="ai-header"><div className="ai-avatar" /><span>Observable Intuition</span></div>
                       {"summary" in m && m.summary && (
                         <div className="ai-summary" dangerouslySetInnerHTML={{ __html: m.summary }} />
                       )}
