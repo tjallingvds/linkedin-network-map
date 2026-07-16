@@ -1196,7 +1196,7 @@ export function DiscoverPage() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div className="main">
+        <div className={`main${appMode === "discover" && view === "hero" ? " discover-hero" : ""}`}>
           <div className="topbar">
             <div className="crumbs">
               {appMode !== "crm" && (
