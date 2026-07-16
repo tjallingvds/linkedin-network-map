@@ -310,9 +310,9 @@ export function ConnectionsImportModal({
                   borderRadius: 10, padding: "10px 12px", marginBottom: 10,
                   fontSize: 12, color: "var(--text)",
                 }}>
-                  <strong>Heads up:</strong> you already have {kind} loaded. Re-importing
-                  will <strong>add to</strong> the existing set, not replace it. Manage from
-                  the CRM page if you need to dedupe.
+                  <strong>Heads up:</strong> you already have {kind} loaded. Uploading a
+                  new file will <strong>replace</strong> this set — the old rows are
+                  cleared first, so nothing double-counts.
                 </div>
               )}
 
