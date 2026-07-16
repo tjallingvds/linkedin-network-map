@@ -1,5 +1,5 @@
 /**
- * Discover — primary Nontrivial workspace. The composer is search-only;
+ * Discover — primary Observable Intuition workspace. The composer is search-only;
  * enrichment lives in the CRM (per-board "Enrich with Apollo" button).
  * Outreach drafts are triggered from the selection bar.
  */
@@ -1199,9 +1199,13 @@ export function DiscoverPage() {
         <div className="main">
           <div className="topbar">
             <div className="crumbs">
-              <span>{breadcrumb[0]}</span>
-              <span className="crumb-sep">/</span>
-              <span className="cur">{breadcrumb[1]}</span>
+              {appMode !== "crm" && (
+                <>
+                  <span>{breadcrumb[0]}</span>
+                  <span className="crumb-sep">/</span>
+                  <span className="cur">{breadcrumb[1]}</span>
+                </>
+              )}
             </div>
             <div className="top-actions">
               <button
@@ -1227,7 +1231,6 @@ export function DiscoverPage() {
               />
             ) : view === "hero" ? (
               <div className="hero">
-                <div className="orb-wrap"><div className={`orb ${streaming ? "thinking" : ""}`} /></div>
                 <h1>Describe your <em>ideal prospect.</em></h1>
               </div>
             ) : (
@@ -1267,9 +1270,9 @@ export function DiscoverPage() {
                     const step = m.steps[Math.min(m.steps.length - 1, Math.floor((Date.now() / 600) % m.steps.length))];
                     return (
                       <div key={i} className="ai-block">
-                        <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
+                        <div className="ai-header"><div className="ai-avatar" /><span>Observable Intuition</span></div>
                         <div className="thinking-row">
-                          <div className="dots"><div className="dot" /><div className="dot" /><div className="dot" /></div>
+                          <div className="think-spark"><IconSparkle size={15} /></div>
                           <span>{step}</span>
                         </div>
                       </div>
@@ -1277,7 +1280,7 @@ export function DiscoverPage() {
                   }
                   return (
                     <div key={m.node?.id ?? `a${i}`} className="ai-block">
-                      <div className="ai-header"><div className="ai-avatar" /><span>Nontrivial</span></div>
+                      <div className="ai-header"><div className="ai-avatar" /><span>Observable Intuition</span></div>
                       {"summary" in m && m.summary && (
                         <div className="ai-summary" dangerouslySetInnerHTML={{ __html: m.summary }} />
                       )}
@@ -1352,7 +1355,7 @@ export function DiscoverPage() {
                             <div style={{ flex: 1, minWidth: 0 }}>
                               <div className="kmc-title">Connect a model to get started</div>
                               <div className="kmc-body">
-                                Nontrivial runs on your own API keys, so every search hits your own quota — nothing is stored on our side. Add a key from any one of:
+                                Observable Intuition runs on your own API keys, so every search hits your own quota — nothing is stored on our side. Add a key from any one of:
                               </div>
                               <div className="kmc-providers">
                                 <span className="kmc-provider">OpenAI</span>

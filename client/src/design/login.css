@@ -1,4 +1,4 @@
-/* Nontrivial Login — split-screen, sage palette. Ported from design bundle. */
+/* Observable Intuition Login — split-screen, sage palette. Ported from design bundle. */
 
 .l-page {
   display: grid;
@@ -12,7 +12,7 @@
   display: flex; flex-direction: column;
   padding: 52px 64px 36px;
   background:
-    radial-gradient(1200px 600px at -10% -10%, oklch(0.96 0.02 160 / 0.5), transparent 60%),
+    radial-gradient(1200px 600px at -10% -10%, oklch(0.96 0.02 266 / 0.5), transparent 60%),
     linear-gradient(180deg, #fbf8f2, #f2eee6);
   border-right: 1px solid var(--hairline);
 }
@@ -30,17 +30,17 @@
   gap: 10px; margin-bottom: 8px; align-self: flex-start;
 }
 .l-mark {
-  width: 28px; height: 28px; border-radius: 8px;
-  background: linear-gradient(145deg, oklch(0.92 0.03 160), oklch(0.68 0.07 165));
+  width: 28px; height: 28px; border-radius: 5px;
+  background: linear-gradient(145deg, oklch(0.92 0.03 266), oklch(0.68 0.07 266));
   display: grid; place-items: center;
   box-shadow:
     inset 0 0 0 1px oklch(1 0 0 / 0.35),
-    inset 0 -2px 3px oklch(0.4 0.06 170 / 0.3),
-    0 2px 6px oklch(0.5 0.07 165 / 0.25);
+    inset 0 -2px 3px oklch(0.4 0.06 266 / 0.3),
+    0 2px 6px oklch(0.5 0.07 266 / 0.25);
 }
 .l-mark-dot {
   width: 8px; height: 8px; border-radius: 50%;
-  background: radial-gradient(circle at 30% 28%, #fff, oklch(0.55 0.08 165) 90%);
+  background: radial-gradient(circle at 30% 28%, #fff, oklch(0.55 0.08 266) 90%);
 }
 .l-word {
   font-size: 21px; font-weight: 500; letter-spacing: -0.02em;
@@ -66,7 +66,7 @@
   padding: 4px;
   background: rgba(255, 255, 255, 0.55);
   border: 1px solid var(--hairline);
-  border-radius: 11px;
+  border-radius: 5px;
   margin-top: 4px;
 }
 .l-tabs button {
@@ -74,7 +74,7 @@
   padding: 9px 0;
   font-size: 13px; font-weight: 500;
   color: var(--text-dim);
-  border-radius: 8px;
+  border-radius: 5px;
   transition: color 180ms;
 }
 .l-tabs button.active { color: var(--text); }
@@ -83,8 +83,8 @@
   top: 4px; left: 4px;
   width: calc(50% - 4px); height: calc(100% - 8px);
   background: #fff;
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(20, 14, 40, 0.04), 0 2px 8px rgba(20, 14, 40, 0.06);
+  border-radius: 5px;
+  box-shadow: 0 1px 2px rgba(17, 17, 20, 0.04), 0 2px 8px rgba(17, 17, 20, 0.06);
   transition: transform 240ms cubic-bezier(0.4, 0.1, 0.2, 1);
 }
 .l-tab-slider[data-pos="1"] { transform: translateX(100%); }
@@ -95,7 +95,7 @@
   padding: 10px 14px 12px;
   background: rgba(255, 255, 255, 0.65);
   border: 1px solid var(--hairline);
-  border-radius: 12px;
+  border-radius: 5px;
   transition: border-color 180ms, background 180ms, box-shadow 180ms;
 }
 .l-field.focus {
@@ -125,15 +125,15 @@
 .l-eye {
   width: 28px; height: 28px;
   display: grid; place-items: center;
-  border-radius: 7px;
+  border-radius: 5px;
   color: var(--text-mute);
   transition: background 150ms, color 150ms;
 }
-.l-eye:hover { background: rgba(20, 14, 40, 0.05); color: var(--text-dim); }
+.l-eye:hover { background: rgba(17, 17, 20, 0.05); color: var(--text-dim); }
 
 .l-alert {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 10px 13px; border-radius: 10px;
+  padding: 10px 13px; border-radius: 5px;
   font-size: 13px; line-height: 1.5;
   animation: l-slide-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -153,8 +153,8 @@
 .l-alert.err .l-alert-dot { background: oklch(0.58 0.17 25); }
 .l-alert.ok {
   background: var(--accent-soft);
-  color: oklch(0.42 0.07 165);
-  border: 1px solid oklch(0.58 0.07 160 / 0.2);
+  color: oklch(0.42 0.07 266);
+  border: 1px solid oklch(0.58 0.07 266 / 0.2);
 }
 .l-alert.ok .l-alert-dot { background: var(--accent); }
 
@@ -199,8 +199,8 @@
 .l-submit {
   margin-top: 4px;
   height: 46px;
-  border-radius: 12px;
-  background: linear-gradient(180deg, oklch(0.6 0.07 163), oklch(0.5 0.07 165));
+  border-radius: 5px;
+  background: linear-gradient(180deg, oklch(0.6 0.07 266), oklch(0.5 0.07 266));
   color: #fff;
   font-size: 14.5px; font-weight: 500;
   letter-spacing: -0.005em;
@@ -208,16 +208,16 @@
   gap: 10px;
   box-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.2),
-    inset 0 -1px 0 oklch(0.3 0.05 170 / 0.3),
-    0 4px 14px oklch(0.5 0.07 165 / 0.25);
+    inset 0 -1px 0 oklch(0.3 0.05 266 / 0.3),
+    0 4px 14px oklch(0.5 0.07 266 / 0.25);
   transition: transform 120ms, box-shadow 180ms, filter 180ms;
 }
 .l-submit:hover:not(:disabled) {
   filter: brightness(1.04);
   box-shadow:
     inset 0 1px 0 oklch(1 0 0 / 0.25),
-    inset 0 -1px 0 oklch(0.3 0.05 170 / 0.3),
-    0 8px 22px oklch(0.5 0.07 165 / 0.32);
+    inset 0 -1px 0 oklch(0.3 0.05 266 / 0.3),
+    0 8px 22px oklch(0.5 0.07 266 / 0.32);
 }
 .l-submit:disabled { opacity: 0.55; cursor: not-allowed; }
 .l-spin {
@@ -231,7 +231,7 @@
 
 .l-google {
   height: 44px;
-  border-radius: 12px;
+  border-radius: 5px;
   background: #fff; color: var(--text);
   border: 1px solid var(--hairline-strong);
   font-size: 14px; font-weight: 500;
@@ -261,7 +261,7 @@
 
 .l-right {
   position: relative; overflow: hidden;
-  background: linear-gradient(155deg, oklch(0.45 0.04 168) 0%, oklch(0.3 0.04 180) 45%, oklch(0.22 0.03 200) 100%);
+  background: linear-gradient(155deg, oklch(0.45 0.04 266) 0%, oklch(0.3 0.04 266) 45%, oklch(0.22 0.03 200) 100%);
   color: #fff;
   display: flex; align-items: center; justify-content: center;
   padding: 48px 56px;
@@ -274,7 +274,7 @@
 }
 .l-blob-1 {
   width: 420px; height: 420px;
-  background: oklch(0.7 0.12 155);
+  background: oklch(0.7 0.12 266);
   top: -80px; left: -80px;
 }
 .l-blob-2 {
@@ -311,17 +311,17 @@
   position: relative;
   width: 180px; height: 180px; border-radius: 50%;
   background: radial-gradient(circle at 32% 28%,
-    oklch(0.98 0.02 160) 0%,
-    oklch(0.82 0.06 160) 16%,
-    oklch(0.6 0.08 163) 48%,
-    oklch(0.38 0.07 175) 85%,
+    oklch(0.98 0.02 266) 0%,
+    oklch(0.82 0.06 266) 16%,
+    oklch(0.6 0.08 266) 48%,
+    oklch(0.38 0.07 266) 85%,
     oklch(0.28 0.05 190) 100%);
   box-shadow:
     inset -12px -18px 32px oklch(0.22 0.04 190 / 0.65),
-    inset 8px 10px 24px oklch(0.98 0.02 160 / 0.4),
+    inset 8px 10px 24px oklch(0.98 0.02 266 / 0.4),
     0 4px 1px oklch(1 0 0 / 0.15),
-    0 24px 60px oklch(0.3 0.07 170 / 0.55),
-    0 40px 100px oklch(0.3 0.07 170 / 0.35);
+    0 24px 60px oklch(0.3 0.07 266 / 0.55),
+    0 40px 100px oklch(0.3 0.07 266 / 0.35);
   animation: l-float 7s ease-in-out infinite;
   z-index: 3;
 }
