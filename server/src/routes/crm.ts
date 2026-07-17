@@ -930,16 +930,15 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     return legacy ?? "";
   };
 
-  for (const r of rows) {
-    // Don't burn an Apollo call on anyone whose email is already filled
-    // — whether that's in the legacy field or in the user's custom
-    // Email column.
+  // Skip anyone whose email is already filled (legacy field or the user's
+  // custom Email column) — no point burning an Apollo call on them.
+  const candidates = rows.filter((r) => {
     const existingEmail = readCell(r, r.email, targets.email);
-    if (existingEmail && existingEmail.trim().length > 0) {
-      alreadyHad++;
-      continue;
-    }
+    return !(existingEmail && existingEmail.trim().length > 0);
+  });
+  alreadyHad = rows.length - candidates.length;
 
+  const processRow = async (r: typeof rows[number]) => {
     const params: Parameters<typeof apolloMatchPerson>[0] = {};
     const parts = r.name.split(/\s+/).filter(Boolean);
     if (parts.length >= 2) {
@@ -959,7 +958,7 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     } catch (err) {
       console.warn("apollo match failed:", (err as Error).message);
     }
-    if (!person) { skipped++; continue; }
+    if (!person) { skipped++; return; }
 
     // Build two patches: legacy DB-field updates (for backward compat
     // with the contact drawer's mailto/LinkedIn pills + CSV export)
@@ -1013,7 +1012,7 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
       }
     }
 
-    if (fieldsTouched.length === 0) { skipped++; continue; }
+    if (fieldsTouched.length === 0) { skipped++; return; }
 
     if (Object.keys(customMerge).length > 0) {
       const current = (r.custom_fields ?? {}) as Record<string, string>;
@@ -1023,10 +1022,27 @@ router.post("/boards/:boardId/enrich", async (req: AuthedRequest, res) => {
     }
     await db.updateTable("crm_contacts").set(legacyPatch).where("id", "=", r.id).execute();
     enriched++;
-  }
+  };
+
+  // Run the Apollo calls concurrently, but stop launching new ones once we
+  // approach the platform's request-timeout. A large board (hundreds of
+  // contacts) can't be enriched in a single request without the gateway
+  // 502'ing, so we do as much as fits the budget and report how many are
+  // left — the client re-runs "Get email" to continue where we stopped.
+  const DEADLINE = Date.now() + 25_000;
+  const CONCURRENCY = 6;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < candidates.length && Date.now() < DEADLINE) {
+      const r = candidates[cursor++]!;
+      await processRow(r);
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+  const remaining = Math.max(0, candidates.length - cursor);
 
   if (enriched > 0) notifyBoard(req.params.boardId, "contact");
-  res.json({ enriched, skipped, alreadyHad, total: rows.length });
+  res.json({ enriched, skipped, alreadyHad, total: rows.length, remaining });
 });
 
 /**

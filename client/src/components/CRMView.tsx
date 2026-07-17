@@ -4579,16 +4579,18 @@ export function CRMView({
     if (needEmail === 0) { onFlash("Every contact already has an email — nothing to enrich."); return; }
     setEnriching(true);
     try {
-      const r = await api.post<{ enriched: number; skipped: number; alreadyHad?: number; total: number }>(
+      const r = await api.post<{ enriched: number; skipped: number; alreadyHad?: number; total: number; remaining?: number }>(
         `/api/crm/boards/${activeId}/enrich`,
       );
       const fresh = await api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`);
       setContacts(fresh.contacts);
       const had = r.alreadyHad ?? 0;
+      const remaining = r.remaining ?? 0;
       onFlash(
         `Got email for ${r.enriched}` +
         (r.skipped ? ` · ${r.skipped} no match` : "") +
-        (had ? ` · ${had} already had one` : ""),
+        (had ? ` · ${had} already had one` : "") +
+        (remaining ? ` · ${remaining} left — run Get email again to continue` : ""),
       );
     } catch (e) {
       onFlash(`Get email failed: ${(e as Error).message}`);
