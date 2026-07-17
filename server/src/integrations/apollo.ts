@@ -16,6 +16,49 @@ import type { UserKeys } from "../ai/user-keys.js";
 
 const BASE = "https://api.apollo.io/api/v1";
 
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+
+/**
+ * POST to Apollo with a hard per-call timeout and a couple of retries on
+ * transient gateway errors (502/503/504) or network blips. Without the
+ * timeout a hung Apollo request stalls the whole HTTP request until the
+ * platform gateway kills it with a 502; without the retry a single transient
+ * 502 fails an entire enrichment batch.
+ */
+async function apolloPost(path: string, apiKey: string, body: unknown): Promise<Response> {
+  const MAX_ATTEMPTS = 3;
+  const TIMEOUT_MS = 15_000;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    try {
+      const r = await fetch(`${BASE}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache",
+          "X-Api-Key": apiKey,
+        },
+        body: JSON.stringify(body),
+        signal: ctrl.signal,
+      });
+      if ((r.status === 502 || r.status === 503 || r.status === 504) && attempt < MAX_ATTEMPTS) {
+        lastErr = new Error(`apollo ${r.status}`);
+        await sleep(300 * attempt);
+        continue;
+      }
+      return r;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < MAX_ATTEMPTS) { await sleep(300 * attempt); continue; }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("apollo request failed");
+}
+
 export function apolloConfigured(userKeys?: UserKeys): boolean {
   return !!(userKeys?.apollo ?? env.APOLLO_API_KEY);
 }
@@ -70,20 +113,12 @@ export async function apolloPeopleSearch(params: {
   if (!apiKey) throw new Error("APOLLO_API_KEY not set");
   const byok = !!params.userKeys?.apollo;
 
-  const r = await fetch(`${BASE}/mixed_people/search`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-cache",
-      "X-Api-Key": apiKey,
-    },
-    body: JSON.stringify({
-      q_keywords: params.q,
-      organization_name: params.company,
-      person_titles: params.title ? [params.title] : undefined,
-      page: params.page ?? 1,
-      per_page: 25,
-    }),
+  const r = await apolloPost("/mixed_people/search", apiKey, {
+    q_keywords: params.q,
+    organization_name: params.company,
+    person_titles: params.title ? [params.title] : undefined,
+    page: params.page ?? 1,
+    per_page: 25,
   });
   if (!r.ok) throw new Error(`apollo search ${r.status}: ${await r.text()}`);
   const data = (await r.json()) as ApolloSearchResponse;
@@ -121,15 +156,7 @@ export async function apolloMatchPerson(params: {
   if (params.organizationName) body.organization_name = params.organizationName;
   if (params.linkedinUrl) body.linkedin_url = params.linkedinUrl;
 
-  const r = await fetch(`${BASE}/people/match`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-cache",
-      "X-Api-Key": apiKey,
-    },
-    body: JSON.stringify(body),
-  });
+  const r = await apolloPost("/people/match", apiKey, body);
   if (!r.ok) {
     if (r.status === 404) return null;
     throw new Error(`apollo match ${r.status}: ${await r.text()}`);
