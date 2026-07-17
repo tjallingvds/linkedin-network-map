@@ -67,7 +67,6 @@ export function LoginPage() {
       <div className="l-left">
         <form className="l-form" onSubmit={submit} noValidate>
           <div className="l-wordmark">
-            <span className="l-mark"><span className="l-mark-dot" /></span>
             <span className="l-word">Observable Intuition</span>
           </div>
 
@@ -147,12 +146,6 @@ export function LoginPage() {
           <div className="l-blob l-blob-3" />
         </div>
         <div className="l-stage">
-          <div className="l-orb-wrap">
-            <div className="l-ring l-ring-1" />
-            <div className="l-ring l-ring-2" />
-            <div className="l-ring l-ring-3" />
-            <div className="l-orb" />
-          </div>
           <div className="l-stage-caption">
             <h2>Research, reach out, and&nbsp;close —<br />all in one quiet&nbsp;place.</h2>
           </div>
