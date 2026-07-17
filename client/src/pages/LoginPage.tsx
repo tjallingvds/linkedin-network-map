@@ -138,19 +138,6 @@ export function LoginPage() {
           <div className="l-legal">© 2026 Observable Intuition</div>
         </form>
       </div>
-
-      <div className="l-right">
-        <div className="l-ambient">
-          <div className="l-blob l-blob-1" />
-          <div className="l-blob l-blob-2" />
-          <div className="l-blob l-blob-3" />
-        </div>
-        <div className="l-stage">
-          <div className="l-stage-caption">
-            <h2>Research, reach out, and&nbsp;close —<br />all in one quiet&nbsp;place.</h2>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
