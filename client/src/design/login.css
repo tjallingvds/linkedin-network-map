@@ -11,9 +11,7 @@
   position: relative;
   display: flex; flex-direction: column;
   padding: 52px 64px 36px;
-  background:
-    radial-gradient(1200px 600px at -10% -10%, oklch(0.96 0.02 266 / 0.5), transparent 60%),
-    linear-gradient(180deg, #fbf8f2, #f2eee6);
+  background: var(--shell);
   border-right: 1px solid var(--hairline);
 }
 .l-form {
@@ -30,26 +28,24 @@
   gap: 10px; margin-bottom: 8px; align-self: flex-start;
 }
 .l-mark {
-  width: 28px; height: 28px; border-radius: 5px;
-  background: linear-gradient(145deg, oklch(0.92 0.03 266), oklch(0.68 0.07 266));
+  width: 26px; height: 26px; border-radius: 5px;
+  background: var(--accent);
   display: grid; place-items: center;
-  box-shadow:
-    inset 0 0 0 1px oklch(1 0 0 / 0.35),
-    inset 0 -2px 3px oklch(0.4 0.06 266 / 0.3),
-    0 2px 6px oklch(0.5 0.07 266 / 0.25);
 }
 .l-mark-dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: radial-gradient(circle at 30% 28%, #fff, oklch(0.55 0.08 266) 90%);
+  width: 10px; height: 10px; border-radius: 3px;
+  background: transparent;
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
 }
 .l-word {
-  font-size: 21px; font-weight: 500; letter-spacing: -0.02em;
+  font-size: 16px; font-weight: 550; letter-spacing: -0.01em;
   color: var(--text);
 }
 
 .l-heading { display: flex; flex-direction: column; gap: 7px; }
 .l-title {
-  font-size: 40px; line-height: 1.05; font-weight: 400;
+  font-family: var(--font-display);
+  font-size: 40px; line-height: 1.05; font-weight: 500;
   letter-spacing: -0.025em; color: var(--text);
   margin: 0; text-wrap: balance;
 }
@@ -64,7 +60,7 @@
   position: relative;
   display: grid; grid-template-columns: 1fr 1fr;
   padding: 4px;
-  background: rgba(255, 255, 255, 0.55);
+  background: var(--panel-2);
   border: 1px solid var(--hairline);
   border-radius: 5px;
   margin-top: 4px;
@@ -93,15 +89,15 @@
 .l-field {
   display: flex; flex-direction: column; gap: 6px;
   padding: 10px 14px 12px;
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--panel-2);
   border: 1px solid var(--hairline);
   border-radius: 5px;
   transition: border-color 180ms, background 180ms, box-shadow 180ms;
 }
 .l-field.focus {
   border-color: var(--accent);
-  background: #fff;
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  background: var(--shell);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 .l-field.err {
   border-color: var(--danger);
@@ -198,28 +194,19 @@
 
 .l-submit {
   margin-top: 4px;
-  height: 46px;
+  height: 44px;
   border-radius: 5px;
-  background: linear-gradient(180deg, oklch(0.6 0.07 266), oklch(0.5 0.07 266));
-  color: #fff;
-  font-size: 14.5px; font-weight: 500;
+  background: var(--text);
+  color: var(--on-dark, #fff);
+  font-size: 14px; font-weight: 500;
   letter-spacing: -0.005em;
   display: inline-flex; align-items: center; justify-content: center;
   gap: 10px;
-  box-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 0.2),
-    inset 0 -1px 0 oklch(0.3 0.05 266 / 0.3),
-    0 4px 14px oklch(0.5 0.07 266 / 0.25);
-  transition: transform 120ms, box-shadow 180ms, filter 180ms;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition: opacity 150ms, background 150ms;
 }
-.l-submit:hover:not(:disabled) {
-  filter: brightness(1.04);
-  box-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 0.25),
-    inset 0 -1px 0 oklch(0.3 0.05 266 / 0.3),
-    0 8px 22px oklch(0.5 0.07 266 / 0.32);
-}
-.l-submit:disabled { opacity: 0.55; cursor: not-allowed; }
+.l-submit:hover:not(:disabled) { background: var(--true-black, #000); }
+.l-submit:disabled { opacity: 0.45; cursor: not-allowed; }
 .l-spin {
   width: 16px; height: 16px;
   border-radius: 50%;
@@ -261,39 +248,30 @@
 
 .l-right {
   position: relative; overflow: hidden;
-  background: linear-gradient(155deg, oklch(0.45 0.04 266) 0%, oklch(0.3 0.04 266) 45%, oklch(0.22 0.03 200) 100%);
+  background:
+    radial-gradient(120% 90% at 50% 0%, oklch(0.28 0.05 266), transparent 60%),
+    linear-gradient(180deg, #16161c 0%, #0d0d11 100%);
   color: #fff;
   display: flex; align-items: center; justify-content: center;
   padding: 48px 56px;
 }
 .l-ambient { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+/* Subtle, static ambient wash — no drifting animation. */
 .l-blob {
   position: absolute; border-radius: 50%;
-  filter: blur(80px); opacity: 0.55;
-  animation: l-drift 24s ease-in-out infinite;
+  filter: blur(100px); opacity: 0.22;
 }
 .l-blob-1 {
-  width: 420px; height: 420px;
-  background: oklch(0.7 0.12 266);
-  top: -80px; left: -80px;
+  width: 460px; height: 460px;
+  background: var(--accent);
+  top: -120px; left: -100px;
 }
 .l-blob-2 {
-  width: 380px; height: 380px;
-  background: oklch(0.6 0.1 200);
-  bottom: -100px; right: -60px;
-  animation-delay: -8s;
+  width: 360px; height: 360px;
+  background: oklch(0.5 0.10 266);
+  bottom: -120px; right: -80px;
 }
-.l-blob-3 {
-  width: 260px; height: 260px;
-  background: oklch(0.75 0.1 130);
-  top: 40%; right: 30%; opacity: 0.3;
-  animation-delay: -14s;
-}
-@keyframes l-drift {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -20px) scale(1.1); }
-  66% { transform: translate(-20px, 30px) scale(0.95); }
-}
+.l-blob-3 { display: none; }
 
 .l-stage {
   position: relative; z-index: 2;
@@ -304,47 +282,26 @@
 }
 .l-orb-wrap {
   position: relative;
-  width: 260px; height: 260px;
+  width: 96px; height: 96px;
   display: grid; place-items: center;
 }
+/* Flat brand tile — the same mark language as the rest of the app, no gloss,
+   no float. */
 .l-orb {
   position: relative;
-  width: 180px; height: 180px; border-radius: 50%;
-  background: radial-gradient(circle at 32% 28%,
-    oklch(0.98 0.02 266) 0%,
-    oklch(0.82 0.06 266) 16%,
-    oklch(0.6 0.08 266) 48%,
-    oklch(0.38 0.07 266) 85%,
-    oklch(0.28 0.05 190) 100%);
-  box-shadow:
-    inset -12px -18px 32px oklch(0.22 0.04 190 / 0.65),
-    inset 8px 10px 24px oklch(0.98 0.02 266 / 0.4),
-    0 4px 1px oklch(1 0 0 / 0.15),
-    0 24px 60px oklch(0.3 0.07 266 / 0.55),
-    0 40px 100px oklch(0.3 0.07 266 / 0.35);
-  animation: l-float 7s ease-in-out infinite;
+  width: 96px; height: 96px; border-radius: 20px;
+  background: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 12px 40px oklch(0.3 0.07 266 / 0.4);
+  display: grid; place-items: center;
   z-index: 3;
 }
 .l-orb::after {
   content: '';
-  position: absolute;
-  top: 14%; left: 22%;
-  width: 32%; height: 26%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at 40% 40%, oklch(1 0 0 / 0.85), oklch(1 0 0 / 0.15) 55%, transparent 80%);
-  transform: rotate(-20deg);
+  width: 34px; height: 34px; border-radius: 10px;
+  border: 3px solid rgba(255, 255, 255, 0.95);
 }
-.l-ring {
-  position: absolute;
-  border-radius: 50%;
-  border: 1px solid oklch(1 0 0 / 0.1);
-  animation: l-ring-rotate 30s linear infinite;
-}
-.l-ring-1 { width: 220px; height: 220px; border-color: oklch(1 0 0 / 0.14); }
-.l-ring-2 { width: 260px; height: 260px; border-color: oklch(1 0 0 / 0.08); border-style: dashed; animation-duration: 45s; animation-direction: reverse; }
-.l-ring-3 { width: 320px; height: 320px; border-color: oklch(1 0 0 / 0.05); animation-duration: 60s; }
-@keyframes l-ring-rotate { to { transform: rotate(360deg); } }
-@keyframes l-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+/* Rings removed for the flat look. */
+.l-ring { display: none; }
 
 .l-stage-caption { text-align: center; max-width: 480px; }
 .l-kicker {
@@ -355,12 +312,14 @@
   margin-bottom: 14px;
 }
 .l-stage-caption h2 {
-  font-weight: 300;
-  font-size: 30px; line-height: 1.25;
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 30px; line-height: 1.22;
   letter-spacing: -0.02em;
-  color: oklch(1 0 0 / 0.92);
+  color: oklch(1 0 0 / 0.94);
   margin: 0; text-wrap: balance;
 }
+.l-stage-caption h2 em { font-style: italic; color: oklch(0.8 0.09 266); }
 
 @media (max-width: 960px) {
   .l-page { grid-template-columns: 1fr; }
