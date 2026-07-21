@@ -50,7 +50,12 @@ export function Sidebar({
           lines up with the topbar's bottom border across the whole app. */}
       <div className="sidebar-header">
         <div className="brand-l">
-          {!collapsed && <span className="brand-name">Observable Intuition</span>}
+          {!collapsed && (
+            <div className="brand-meta">
+              <span className="brand-name">Observable Intuition</span>
+              <span className="brand-sub">Workspace</span>
+            </div>
+          )}
         </div>
         {!collapsed && (
           <button className="icon-btn" title="Collapse sidebar" onClick={onToggleCollapse}>
@@ -296,12 +301,8 @@ function UsageCard({ usage, onOpenSettings }: { usage: UsageBucket[]; onOpenSett
         ))}
       </div>
       <button
-        style={{
-          width: "100%", marginTop: 12, padding: "6px 12px",
-          borderRadius: 8, background: "transparent",
-          color: "var(--text-dim)", fontSize: 11.5,
-          border: "1px solid var(--hairline)",
-        }}
+        className="pill-btn"
+        style={{ width: "100%", marginTop: 12, justifyContent: "center", fontSize: 12 }}
         onClick={onOpenSettings}
       >
         Manage API keys
