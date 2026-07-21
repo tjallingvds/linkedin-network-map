@@ -1794,11 +1794,13 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
   const runQuery = async (sq: string): Promise<QueryOutcome> => {
     const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, " ").trim();
     try {
-      // 1. Advanced + include_domains: linkedin.com
+      // 1. Advanced + include_domains: linkedin.com. rawContent mines the full
+      // result text (a LinkedIn search-results page can list several profiles).
       const linked = await budgetedSearch(cleanQuery, {
         depth: "advanced",
         maxResults: maxPerQuery,
         includeDomains: ["linkedin.com"],
+        rawContent: true,
         userId,
         userKeys,
       });
@@ -1808,9 +1810,12 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
       // BASIC depth (1 credit) not advanced (2): this is a last-chance attempt
       // on a query that already missed, so it's not worth full price. Small
       // recall cost on hard-to-find firms, ~half the cost of every dry query.
+      // rawContent here is where the density pays off — open-web "top N" /
+      // leadership pages list many people the snippet never mentions.
       const open = await budgetedSearch(`${cleanQuery} LinkedIn profile`, {
         depth: "basic",
         maxResults: maxPerQuery,
+        rawContent: true,
         userId,
         userKeys,
       });
@@ -1932,7 +1937,10 @@ function normalizeForGrounding(s: string): string {
 
 function buildSnippetHaystack(results: TavilyResult[]): string {
   return normalizeForGrounding(
-    results.map((r) => `${r.title ?? ""} ${r.url ?? ""} ${r.content ?? ""}`).join(" \n "),
+    // Include rawContent so names the extractor pulled from a dense page's
+    // FULL text still pass the "appears verbatim" grounding check — otherwise
+    // everyone beyond the short snippet would be dropped as ungrounded.
+    results.map((r) => `${r.title ?? ""} ${r.url ?? ""} ${r.content ?? ""} ${r.rawContent ?? ""}`).join(" \n "),
   );
 }
 
@@ -1975,9 +1983,10 @@ async function extractChunk(args: {
   userKeys?: UserKeys;
 }): Promise<Candidate[]> {
   const { provider, chunk, extractionHint, userId, userKeys } = args;
-  // Legacy passed r.content verbatim (no slicing).
+  // Mine the FULL page text when we asked for it (dense list/leadership pages
+  // hold many people the snippet never names); fall back to the snippet.
   const context = chunk
-    .map((r) => `[${r.title}] (${r.url})\n${r.content ?? ""}`)
+    .map((r) => `[${r.title}] (${r.url})\n${r.rawContent ?? r.content ?? ""}`)
     .join("\n\n---\n\n");
 
   try {

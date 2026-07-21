@@ -9,6 +9,11 @@ export interface TavilyResult {
   title: string;
   url: string;
   content: string;
+  /** Full page text — only present when the call passes rawContent: true.
+   *  A directory / "top N" / leadership page has many people in here that the
+   *  short `content` snippet never mentions, so the extractor mines this when
+   *  present. Capped by the caller to keep token cost bounded. */
+  rawContent?: string;
   score?: number;
 }
 
@@ -90,6 +95,9 @@ export async function tavilySearch(
     maxResults?: number;
     depth?: "basic" | "advanced";
     includeDomains?: string[];
+    /** Ask Tavily for each result's full page text (`raw_content`). Costs the
+     *  same credits; use for breadth passes that mine dense list pages. */
+    rawContent?: boolean;
     userId?: string;
     userKeys?: UserKeys;
   } = {},
@@ -107,6 +115,9 @@ export async function tavilySearch(
   };
   if (opts.includeDomains && opts.includeDomains.length > 0) {
     body.include_domains = opts.includeDomains;
+  }
+  if (opts.rawContent) {
+    body.include_raw_content = true;
   }
 
   // Hard timeout — without this, a hung Tavily request sits forever while
@@ -170,7 +181,9 @@ export async function tavilySearch(
     }
     throw new Error(`tavily ${r.status}: ${text}`);
   }
-  const data = (await r.json()) as { results: TavilyResult[] };
+  const data = (await r.json()) as {
+    results: Array<TavilyResult & { raw_content?: string }>;
+  };
 
   if (opts.userId) {
     await recordUsage({
@@ -182,5 +195,13 @@ export async function tavilySearch(
     });
   }
 
-  return data.results ?? [];
+  return (data.results ?? []).map((x) => ({
+    title: x.title,
+    url: x.url,
+    content: x.content,
+    score: x.score,
+    // Tavily returns snake_case raw_content; normalise + cap to keep the
+    // extractor's token cost bounded (list pages can be huge).
+    rawContent: x.raw_content ? x.raw_content.slice(0, 6000) : undefined,
+  }));
 }
