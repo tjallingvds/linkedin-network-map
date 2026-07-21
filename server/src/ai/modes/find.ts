@@ -121,6 +121,10 @@ export async function runFind(
    *  they're deliberately re-pulling those accounts and suppressing everyone
    *  already saved would return almost nothing. */
   crmExcludeNames: string[] = [],
+  /** Live progress reporter — called at pipeline checkpoints so the chat can
+   *  show the REAL funnel (discovered / qualified / filtered) as it runs,
+   *  instead of canned "thinking" steps. Optional; a no-op when absent. */
+  onProgress?: (note: string) => void,
 ): Promise<CompletionResult> {
   assertKeys(provider, userKeys);
 
@@ -432,6 +436,7 @@ export async function runFind(
   // searchBudget is declared above (shared with the firm-discovery stage) so
   // discovery + all people-search rounds draw from one ceiling.
 
+  onProgress?.(`Searching the web for ${targetCount} matches…`);
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const remaining = targetCount - allPeople.length;
     if (remaining <= 0) break;
@@ -540,6 +545,16 @@ export async function runFind(
     }
 
     console.log(`[find] round ${round + 1}: ${roundPeople.length} raw, ${newCount} new (total ${allPeople.length}/${targetCount})`);
+
+    // Live funnel to the chat: how many the web surfaced, how many survived the
+    // relevance filters, how many were dropped (irrelevant / competitors / too
+    // junior). Reads as real progress toward the target.
+    const filteredOut =
+      funnelTotals.extracted - funnelTotals.afterArchetypeGate;
+    onProgress?.(
+      `Discovered ${funnelTotals.extracted} · ${allPeople.length}/${targetCount} qualified` +
+        (filteredOut > 0 ? ` · ${filteredOut} filtered out` : ""),
+    );
 
     // Only stop early when a round adds ZERO new people — that means the
     // query generator + Tavily are returning pure dupes, so the web is

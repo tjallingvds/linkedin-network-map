@@ -388,6 +388,10 @@ export function DiscoverPage() {
   const [nodes, setNodes] = useState<Map<string, ChatNode>>(new Map());
   const [activeChild, setActiveChild] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<Pending | null>(null);
+  // Live search progress — replaces the canned "thinking" steps with the real
+  // funnel note the server streams (discovered / qualified / filtered).
+  const reportProgress = (note: string) =>
+    setPending((p) => (p ? { ...p, steps: [note] } : p));
   // Monotonic order counter so the newest sibling is the default-active one.
   const orderRef = useRef(0);
   // Read current nodes synchronously inside async send handlers.
@@ -773,7 +777,7 @@ export function DiscoverPage() {
         body.previousBrief = `${lastBrief}\n\nRefinement: ${text}${companyAnchor}`;
       }
       // Long budget: a single search now digs for up to ~2 min server-side.
-      const resp = await api.completion<CompletionResp>(id, body);
+      const resp = await api.completion<CompletionResp>(id, body, { onProgress: reportProgress });
       // On first send, rename the sidebar row NO MATTER WHAT — either to the
       // server's AI-generated title, or a truncated fallback so it never
       // stays stuck as "New search".
@@ -809,7 +813,7 @@ export function DiscoverPage() {
         content, mode: "discover_more", parentId, matchBreadth,
         previousProspects: lastProspects,
         previousBrief: lastBrief,
-      });
+      }, { onProgress: reportProgress });
       commitResult(resp, ctx, lastBrief);
     } catch (err) {
       commitError(err, ctx);
