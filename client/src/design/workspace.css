@@ -76,17 +76,18 @@
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {
-  font-family: 'Source Sans 3', 'Source Sans Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: #fafafa;
   color: var(--text);
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.5;
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* flowviz body metrics — tight tracking + its OpenType feature set. */
-  letter-spacing: -0.005em;
-  font-feature-settings: "ss01", "cv11", "cv05", "cv01";
+  /* Inter, tuned the way Linear runs it — tight tracking + the modern
+     character variants (single-story a/g, tabular figures). */
+  letter-spacing: -0.011em;
+  font-feature-settings: "cv01", "cv02", "cv03", "cv04", "cv11", "ss03", "tnum", "calt";
 }
 [data-theme="dark"] body { background: #0b0a10; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
@@ -124,8 +125,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   --sidebar-w: 248px;
   grid-template-columns: var(--sidebar-w) 1fr;
   overflow: hidden;
-  transition: --sidebar-w 360ms cubic-bezier(0.65, 0, 0.35, 1);
+  transition: --sidebar-w 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
+/* Rail content never wraps as the column narrows — it clips cleanly. */
+.sidebar, .sidebar-header, .sidebar-body { min-width: 0; }
+.sidebar-header, .nav-item, .nav-label, .brand-name, .brand-sub { white-space: nowrap; }
 .app.collapsed { --sidebar-w: 56px; }
 [data-theme="dark"] .app { box-shadow: none; }
 
@@ -612,12 +616,13 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
    border-bottom) so the top divider is a continuous line across the app. */
 .sidebar-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 6px 2px;
+  /* 14px left so the wordmark lines up with the section labels + nav rows
+     (which sit at body-padding 6px + row-padding 8px = 14px). */
+  padding: 12px 12px 6px 14px;
   box-sizing: border-box;
   flex: 0 0 auto;
-  transition: padding 320ms cubic-bezier(0.65, 0, 0.35, 1);
 }
-.sidebar.collapsed .sidebar-header { padding: 6px; justify-content: center; }
+.sidebar.collapsed .sidebar-header { padding: 12px 6px 6px; justify-content: center; }
 .sidebar.collapsed .brand-l { justify-content: center; }
 
 .sidebar-body {
@@ -627,8 +632,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .sidebar.collapsed .sidebar-body { padding: 8px; align-items: center; }
 
-/* Text labels fade as the sidebar collapses. */
+/* Everything textual is hidden in the collapsed rail. brand-meta covers the
+   whole wordmark block (name + "Workspace") so nothing lingers mid-collapse. */
+.sidebar.collapsed .brand-meta,
 .sidebar.collapsed .brand-name,
+.sidebar.collapsed .brand-sub,
 .sidebar.collapsed .new-chat span,
 .sidebar.collapsed .search-input,
 .sidebar.collapsed .nav-section,
@@ -823,6 +831,10 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   min-width: 0;
   scrollbar-width: none;
 }
+/* CRM mode has no breadcrumb, so the top row is near-empty — shrink it and
+   the canvas top padding so the board title isn't stranded under a blank strip. */
+.main.crm .topbar { min-height: 40px; padding: 6px 18px; }
+.main.crm .canvas { padding-top: 8px; }
 .canvas::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 /* Empty Discover state: the composer stays pinned at the bottom (its own grid

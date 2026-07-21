@@ -1198,7 +1198,7 @@ export function DiscoverPage() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div className="main">
+        <div className={`main${appMode === "crm" ? " crm" : ""}`}>
           <div className="topbar">
             <div className="crumbs">
               {appMode !== "crm" && (
