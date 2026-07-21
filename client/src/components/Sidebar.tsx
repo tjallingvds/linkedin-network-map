@@ -81,8 +81,31 @@ export function Sidebar({
           </>
         ) : (
           <>
+            {/* Primary action — start a new discovery search that feeds the CRM. */}
+            <button className="nav-item nav-primary" onClick={onNewChat} title="New search">
+              <IconNewChat size={14} />
+              <span className="label">New search</span>
+            </button>
+
+            <div className="nav-divider" />
+
+            {/* Boards first — the CRM is the home base. */}
             <NavSection
-              label="Past searches"
+              label="Boards"
+              items={lists}
+              icon={<IconUsers size={13} />}
+              activeNav={activeNav}
+              onSelect={onSelect}
+              emptyMsg={lists.length === 0 ? "Create your first board" : undefined}
+              onRename={onRenameBoard}
+              onDelete={onDeleteBoard}
+              onAdd={onNewBoard}
+              addTitle="New board"
+            />
+
+            {/* Search history, demoted below the boards and scrollable. */}
+            <NavSection
+              label="Recent"
               items={savedSearches}
               icon={<IconSearch size={13} />}
               activeNav={activeNav}
@@ -93,19 +116,6 @@ export function Sidebar({
               onAdd={onNewChat}
               addTitle="New search"
               scrollable
-            />
-
-            <NavSection
-              label="CRM boards"
-              items={lists}
-              icon={<IconUsers size={13} />}
-              activeNav={activeNav}
-              onSelect={onSelect}
-              emptyMsg={lists.length === 0 ? "Create your first board" : undefined}
-              onRename={onRenameBoard}
-              onDelete={onDeleteBoard}
-              onAdd={onNewBoard}
-              addTitle="New board"
             />
 
             <div className="sidebar-spacer" />
