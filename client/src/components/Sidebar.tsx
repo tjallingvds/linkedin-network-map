@@ -103,6 +103,8 @@ export function Sidebar({
               addTitle="New board"
             />
 
+            <div className="nav-divider" />
+
             {/* Search history, demoted below the boards and scrollable. */}
             <NavSection
               label="Recent"
@@ -117,6 +119,8 @@ export function Sidebar({
               addTitle="New search"
               scrollable
             />
+
+            <div className="nav-divider" />
 
             <div className="sidebar-spacer" />
 
