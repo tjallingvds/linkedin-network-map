@@ -649,7 +649,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   border: 1.5px solid rgba(255,255,255,0.95);
 }
 .brand-name {
-  font-weight: 550; letter-spacing: -0.01em; font-size: 15px;
+  font-weight: 600; letter-spacing: -0.02em; font-size: 14px;
   color: var(--text); line-height: 1;
 }
 .icon-btn {
@@ -1670,8 +1670,10 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .tbl-row .tbl-cell .ed-input {
   width: calc(100% + 20px); padding: 6px 10px; margin: -6px -10px;
-  border: 1px solid var(--accent); border-radius: 0;
-  box-shadow: inset 0 0 0 2px var(--accent-soft);
+  border-radius: 0;
+  border: none;
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  background: var(--shell);
 }
 
 /* Hover affordance lives on the .tbl-cell itself so the highlight
@@ -1679,11 +1681,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
    styling of its own in table contexts — we don't want a second box
    inside the cell. */
 .tbl-row:not(.tbl-head) .tbl-cell {
-  transition: background 100ms, box-shadow 100ms;
+  transition: background 100ms;
 }
+/* Quiet neutral cell hover — a table shouldn't flash indigo on every cell. */
 .tbl-row:not(.tbl-head) .tbl-cell:hover {
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px oklch(0.72 0.14 266 / 0.3);
+  background: var(--hover);
 }
 .tbl-row .tbl-cell .ed-cell:hover,
 .tbl-row .tbl-cell .stage-cell:hover {
