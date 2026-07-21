@@ -477,10 +477,21 @@ export function DiscoverPage() {
   // clicking "New search" (and then never typing) left empty "New search"
   // rows cluttering the sidebar. sendSearch/sendDraft now ensure a chat exists.
 
-  // Load boards so the "Add to board" menu has options.
+  // Land on the CRM board on first load — the CRM is the home base, not the
+  // empty search hero. Fires once; if the user navigates first, it's skipped.
+  const didInitialLand = useRef(false);
   useEffect(() => {
     api.get<{ boards: CrmBoard[] }>("/api/crm/boards")
-      .then((r) => setBoards(r.boards))
+      .then((r) => {
+        setBoards(r.boards);
+        if (!didInitialLand.current && r.boards.length > 0) {
+          didInitialLand.current = true;
+          const b = r.boards[0]!;
+          setActiveBoardId(b.id);
+          setActiveNav(`board:${b.id}`);
+          setAppMode("crm");
+        }
+      })
       .catch(() => { /* offline */ });
   }, []);
 
