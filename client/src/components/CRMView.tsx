@@ -4061,7 +4061,6 @@ export function CRMView({
   const closePage = () => setEditingPage(null);
   const [loading, setLoading] = useState(true);
   const [enriching, setEnriching] = useState(false);
-  const [backgrounding, setBackgrounding] = useState(false);
   const [classifyingSkill, setClassifyingSkill] = useState(false);
   const [classifyingCountry, setClassifyingCountry] = useState(false);
   const [classifyingCity, setClassifyingCity] = useState(false);
@@ -4600,33 +4599,6 @@ export function CRMView({
     }
   };
 
-  /** "Find backgrounds" — for every contact without a background, search
-   *  the web and ask the LLM to pull 2-4 specific, cited facts (recent
-   *  posts, talks, notable opinions). Stored in contact.background. */
-  const findBackgrounds = async () => {
-    if (!activeId || backgrounding) return;
-    if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
-    const needBg = contacts.filter((c) => !c.background || !c.background.trim()).length;
-    if (needBg === 0) { onFlash("Every contact already has a background — nothing to research."); return; }
-    setBackgrounding(true);
-    try {
-      const r = await api.post<{ filled: number; skipped: number; alreadyHad?: number; total: number }>(
-        `/api/crm/boards/${activeId}/background`,
-      );
-      const fresh = await api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`);
-      setContacts(fresh.contacts);
-      const had = r.alreadyHad ?? 0;
-      onFlash(
-        `Researched ${r.filled}` +
-        (r.skipped ? ` · ${r.skipped} no sources found` : "") +
-        (had ? ` · ${had} already had one` : ""),
-      );
-    } catch (e) {
-      onFlash(`Find backgrounds failed: ${(e as Error).message}`);
-    } finally {
-      setBackgrounding(false);
-    }
-  };
 
   /** "Classify skill" — for every contact whose Skill cell is empty, search
    *  LinkedIn via Tavily and ask the LLM to pick the closest dropdown value
@@ -4890,12 +4862,6 @@ export function CRMView({
               Getting emails…
             </span>
           )}
-          {backgrounding && (
-            <span className="crm-progress-pill" role="status" aria-live="polite">
-              <span className="crm-spinner" aria-hidden="true" />
-              Researching backgrounds…
-            </span>
-          )}
           {classifyingSkill && (
             <span className="crm-progress-pill" role="status" aria-live="polite">
               <span className="crm-spinner" aria-hidden="true" />
@@ -4958,14 +4924,6 @@ export function CRMView({
                   title="Fill email for contacts that don't have one yet (via Apollo.io)"
                 >
                   <IconMail size={12} />{enriching ? "Getting email…" : "Get email"}
-                </button>
-                <button
-                  className="pill-btn"
-                  disabled={backgrounding}
-                  onClick={() => { close(); findBackgrounds(); }}
-                  title="Research each contact on the web — posts, talks, notable things they've said — with inline source links"
-                >
-                  <IconSparkle size={12} />{backgrounding ? "Researching…" : "Find backgrounds"}
                 </button>
                 {skillCol && (
                   <button
