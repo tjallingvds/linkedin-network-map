@@ -648,9 +648,15 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   content: ''; width: 9px; height: 9px; border-radius: 2px;
   border: 1.5px solid rgba(255,255,255,0.95);
 }
+.brand-meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .brand-name {
-  font-weight: 600; letter-spacing: -0.02em; font-size: 14px;
-  color: var(--text); line-height: 1;
+  font-weight: 600; letter-spacing: -0.015em; font-size: 13.5px;
+  color: var(--text); line-height: 1.1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.brand-sub {
+  font-size: 11px; font-weight: 450; letter-spacing: 0.01em;
+  color: var(--text-mute); line-height: 1;
 }
 .icon-btn {
   width: 26px; height: 26px; display: grid; place-items: center;
@@ -722,14 +728,17 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .sidebar-spacer { flex: 1; }
 
 .upgrade {
-  margin-top: auto; padding: 14px 12px 12px;
-  border-radius: var(--r-lg);
+  margin-top: auto; padding: 12px;
+  border-radius: 6px;
   background: var(--panel-2); border: 1px solid var(--hairline);
   position: relative; overflow: hidden;
 }
 [data-theme="dark"] .upgrade { background: rgba(255,255,255,0.02); }
-.upgrade h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
-.upgrade p { margin: 0 0 10px; font-size: 11.5px; line-height: 1.5; color: var(--text-dim); }
+.upgrade h4 {
+  margin: 0; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-mute);
+}
+.upgrade p { margin: 6px 0 12px; font-size: 11.5px; line-height: 1.5; color: var(--text-dim); }
 .upgrade-btn {
   width: 100%; padding: 7px 12px; border-radius: 5px;
   background: var(--text); color: var(--shell);
@@ -1524,21 +1533,21 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
    value, like a Notion card property. Each row gets a tiny label and
    the value styled per type. */
 .kc-field {
-  display: flex; flex-direction: column; gap: 1px;
-  margin-top: 6px;
+  display: flex; flex-direction: column; gap: 0;
+  margin-top: 3px;
   min-width: 0;
 }
-.kc-field-label {
-  font-size: 9.5px; font-weight: 500;
-  letter-spacing: 0.06em; text-transform: uppercase;
-  color: var(--text-mute);
-}
+/* The per-field labels ("ROLE"/"COMPANY") repeated on every card were pure
+   clutter — the values speak for themselves. Hidden for a clean card. */
+.kc-field-label { display: none; }
 .kc-field-value {
-  font-size: 12px; color: var(--text);
-  line-height: 1.35;
+  font-size: 12px; color: var(--text-dim);
+  line-height: 1.4;
   word-break: break-word;
   overflow: hidden;
 }
+/* First field under the name reads as the primary subtitle. */
+.kc-field:first-of-type .kc-field-value { color: var(--text); }
 .kc-field-multi {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
