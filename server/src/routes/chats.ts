@@ -156,7 +156,7 @@ interface CompletionPayload {
   assistantMessageId?: string;
 }
 type CompletionJob =
-  | { status: "running"; userId: string; createdAt: number }
+  | { status: "running"; userId: string; createdAt: number; progress?: string }
   | { status: "done"; userId: string; createdAt: number; payload: CompletionPayload }
   | { status: "error"; userId: string; createdAt: number; message: string };
 const completionJobs = new Map<string, CompletionJob>();
@@ -349,11 +349,11 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
 
   // All context (chat, branch, priorMessages, exclusions, titlePromise) is
   // captured by closure — the background work needs no request object.
-  const execute = async (): Promise<CompletionPayload> => {
+  const execute = async (onProgress?: (note: string) => void): Promise<CompletionPayload> => {
     let result: CompletionResult;
     try {
       if (parsed.data.mode === "find") {
-        result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqChatShown, matchBreadth, uniqCrm);
+        result = await runFind(provider, parsed.data.content, userId, userKeys, priorMessages, uniqChatShown, matchBreadth, uniqCrm, onProgress);
       } else if (parsed.data.mode === "network") {
         result = await runNetwork(provider, parsed.data.content, userId, userKeys);
       } else if (parsed.data.mode === "enrich") {
@@ -424,11 +424,20 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   };
 
   const jobId = randomUUID();
-  completionJobs.set(jobId, { status: "running", userId, createdAt: Date.now() });
+  const jobCreatedAt = Date.now();
+  completionJobs.set(jobId, { status: "running", userId, createdAt: jobCreatedAt });
+  // Live progress — the search calls this at funnel checkpoints; we stash the
+  // latest note on the running job so the poll endpoint can hand it to the chat.
+  const onProgress = (note: string) => {
+    const j = completionJobs.get(jobId);
+    if (j && j.status === "running") {
+      completionJobs.set(jobId, { ...j, progress: note });
+    }
+  };
   // Fire-and-forget — the job store carries the outcome to the poll endpoint.
   // The .catch ensures a failed search can never become an unhandledRejection.
-  void execute()
-    .then((payload) => { completionJobs.set(jobId, { status: "done", userId, createdAt: Date.now(), payload }); })
+  void execute(onProgress)
+    .then((payload) => { completionJobs.set(jobId, { status: "done", userId, createdAt: jobCreatedAt, payload }); })
     .catch((err) => {
       console.error("[completion] job failed:", (err as Error).message);
       completionJobs.set(jobId, {
@@ -451,7 +460,7 @@ router.get("/:id/completion/:jobId", async (req: AuthedRequest, res) => {
       message: "That search expired or the server restarted before it finished — re-run it.",
     });
   }
-  if (job.status === "running") return res.json({ status: "running" });
+  if (job.status === "running") return res.json({ status: "running", progress: job.progress });
   if (job.status === "error") return res.json({ status: "error", message: job.message });
   return res.json({ status: "done", ...job.payload });
 });

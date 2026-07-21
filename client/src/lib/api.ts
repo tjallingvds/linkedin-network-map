@@ -194,7 +194,7 @@ async function request<T>(method: string, path: string, body?: unknown, opts?: {
 async function completion<T>(
   chatId: string,
   body: unknown,
-  opts?: { pollMs?: number; maxWaitMs?: number },
+  opts?: { pollMs?: number; maxWaitMs?: number; onProgress?: (note: string) => void },
 ): Promise<T> {
   const pollMs = opts?.pollMs ?? 2500;
   const maxWaitMs = opts?.maxWaitMs ?? 600_000; // 10-minute hard ceiling
@@ -228,7 +228,12 @@ async function completion<T>(
       continue;
     }
     pollErrors = 0;
-    if (s.status === "running") continue;
+    if (s.status === "running") {
+      if (opts?.onProgress && typeof s.progress === "string" && s.progress) {
+        opts.onProgress(s.progress);
+      }
+      continue;
+    }
     if (s.status === "error") throw new ApiError(0, s, s.message || "Search failed");
     // Done — carry the userMessageId from the start response if the final
     // payload omitted it (it shouldn't, but be safe).
@@ -243,5 +248,5 @@ export const api = {
   patch: <T>(p: string, body?: unknown) => request<T>("PATCH", p, body),
   del: <T>(p: string) => request<T>("DELETE", p),
   /** Start + poll a background completion job. See completion() above. */
-  completion: <T>(chatId: string, body: unknown, opts?: { pollMs?: number; maxWaitMs?: number }) => completion<T>(chatId, body, opts),
+  completion: <T>(chatId: string, body: unknown, opts?: { pollMs?: number; maxWaitMs?: number; onProgress?: (note: string) => void }) => completion<T>(chatId, body, opts),
 };
