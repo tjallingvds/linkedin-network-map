@@ -4064,6 +4064,7 @@ export function CRMView({
   const [backgrounding, setBackgrounding] = useState(false);
   const [classifyingSkill, setClassifyingSkill] = useState(false);
   const [classifyingCountry, setClassifyingCountry] = useState(false);
+  const [classifyingCity, setClassifyingCity] = useState(false);
   const [search, setSearch] = useState("");
   // Deferred for filtering — the input itself stays controlled by `search`
   // (so typing is always instant), but the table/kanban filter recomputes
@@ -4656,6 +4657,13 @@ export function CRMView({
     [columns],
   );
 
+  const cityCol = useMemo(
+    () => columns.find(
+      (c) => !c.builtin && (c.type === "text" || c.type === "dropdown") && (c.label ?? "").trim().toLowerCase() === "city",
+    ),
+    [columns],
+  );
+
   const classifyCountry = async () => {
     if (!activeId || classifyingCountry) return;
     if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
@@ -4704,6 +4712,55 @@ export function CRMView({
       onFlash(`Classify country failed: ${(e as Error).message}`);
     } finally {
       setClassifyingCountry(false);
+    }
+  };
+
+  const classifyCity = async () => {
+    if (!activeId || classifyingCity) return;
+    if (contacts.length === 0) { onFlash("No contacts on this board yet."); return; }
+
+    // No City column yet — offer to create one inline (same UX as country).
+    let col = cityCol;
+    if (!col) {
+      const ok = window.confirm(
+        "This board has no \"City\" column.\n\n" +
+        "Add a Text column called \"City\" now and run the classifier?",
+      );
+      if (!ok) return;
+      const newCol: CrmColumnDef = {
+        id: makeCustomColId("City"),
+        builtin: false,
+        label: "City",
+        type: "text",
+        width: "160px",
+      };
+      const next = [...columns, newCol];
+      await saveColumns(next);
+      col = newCol;
+    }
+
+    const needCity = contacts.filter((c) => {
+      const cf = (c.customFields ?? {}) as Record<string, string>;
+      return !((cf[col!.id] ?? "").trim());
+    }).length;
+    if (needCity === 0) { onFlash("Every contact already has a City value — nothing to classify."); return; }
+    setClassifyingCity(true);
+    try {
+      const r = await api.post<{ classified: number; skipped: number; alreadyHad?: number; total: number }>(
+        `/api/crm/boards/${activeId}/classify-city`,
+      );
+      const fresh = await api.get<{ contacts: CrmContact[] }>(`/api/crm/boards/${activeId}/contacts`);
+      setContacts(fresh.contacts);
+      const had = r.alreadyHad ?? 0;
+      onFlash(
+        `Found city for ${r.classified}` +
+        (r.skipped ? ` · ${r.skipped} too thin to call` : "") +
+        (had ? ` · ${had} already had one` : ""),
+      );
+    } catch (e) {
+      onFlash(`Find city failed: ${(e as Error).message}`);
+    } finally {
+      setClassifyingCity(false);
     }
   };
 
@@ -4849,6 +4906,12 @@ export function CRMView({
               Classifying country…
             </span>
           )}
+          {classifyingCity && (
+            <span className="crm-progress-pill" role="status" aria-live="polite">
+              <span className="crm-spinner" aria-hidden="true" />
+              Finding city…
+            </span>
+          )}
           <ActionsMenu>
             {(close) => (
               <>
@@ -4923,6 +4986,18 @@ export function CRMView({
                   }
                 >
                   <IconSparkle size={12} />{classifyingCountry ? "Classifying…" : "Classify country"}
+                </button>
+                <button
+                  className="pill-btn"
+                  disabled={classifyingCity}
+                  onClick={() => { close(); classifyCity(); }}
+                  title={
+                    cityCol
+                      ? `Auto-fill the "${cityCol.label ?? "City"}" column by finding each contact's city on the web.`
+                      : "Adds a City column to this board and fills it with each contact's city, found on the web."
+                  }
+                >
+                  <IconSparkle size={12} />{classifyingCity ? "Finding…" : "Find city"}
                 </button>
                 <button className="pill-btn" onClick={() => { close(); setImportOpen(true); }}>
                   <IconUpload size={12} />Import CSV

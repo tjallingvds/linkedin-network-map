@@ -1542,6 +1542,175 @@ Return ONLY {"country": "<the country, or null>", "reason": "<one short sentence
   res.json({ ...totals, total: rows.length });
 });
 
+/**
+ * Auto-fill the board's "City" column. Mirrors /classify-country: web-search
+ * each contact (LinkedIn-first) and have the LLM read the location out of the
+ * snippets. Text column → free-form city; dropdown → snap to an option.
+ */
+router.post("/boards/:boardId/classify-city", async (req: AuthedRequest, res) => {
+  const userKeys = extractUserKeys(req);
+  const tavilyKey = userKeys?.tavily ?? env.TAVILY_API_KEY;
+  if (!tavilyKey) {
+    return res.status(501).json({
+      error: "tavily_not_configured",
+      message: "Tavily key missing — add it in Settings → API keys to enable city classification.",
+    });
+  }
+  const provider = availableProviders(userKeys)[0];
+  if (!provider) {
+    return res.status(501).json({
+      error: "llm_not_configured",
+      message: "No LLM provider configured — add an OpenAI / Anthropic / DeepSeek key in Settings.",
+    });
+  }
+  const board = await ensureBoard(req.user!.id, req.params.boardId);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+
+  const boardRow = await db
+    .selectFrom("crm_boards")
+    .select("columns")
+    .where("id", "=", req.params.boardId)
+    .executeTakeFirst();
+  type Col = { id: string; builtin?: boolean; label?: string; type?: string; options?: Array<{ value: string }> };
+  const columns: Col[] = Array.isArray(boardRow?.columns) ? (boardRow!.columns as Col[]) : [];
+  const cityCol = columns.find(
+    (c) => !c.builtin && (c.type === "text" || c.type === "dropdown") && (c.label ?? "").trim().toLowerCase() === "city",
+  );
+  if (!cityCol) {
+    return res.status(400).json({
+      error: "city_column_missing",
+      message: "Add a Text or Dropdown column called \"City\" before running this.",
+    });
+  }
+  const isDropdown = cityCol.type === "dropdown";
+  const options = isDropdown
+    ? (cityCol.options ?? []).map((o) => (o.value ?? "").trim()).filter((v) => v.length > 0)
+    : [];
+  if (isDropdown && options.length === 0) {
+    return res.status(400).json({
+      error: "city_options_missing",
+      message: "The City dropdown needs at least one option before it can be auto-classified.",
+    });
+  }
+
+  const rows = await db
+    .selectFrom("crm_contacts")
+    .selectAll()
+    .where("board_id", "=", req.params.boardId)
+    .execute();
+
+  const CONCURRENCY = 5;
+  let cursor = 0;
+  const totals = { classified: 0, skipped: 0, alreadyHad: 0 };
+
+  const processOne = async (r: typeof rows[number]): Promise<void> => {
+    const cf = (r.custom_fields ?? {}) as Record<string, string>;
+    const existing = (cf[cityCol.id] ?? "").trim();
+    if (existing.length > 0) { totals.alreadyHad++; return; }
+
+    const linkedin = (r.linkedin ?? "").trim();
+    const company = (r.company ?? "").trim();
+    const queryParts = linkedin ? [linkedin] : [r.name, company].filter(Boolean);
+    const q = queryParts.join(" ");
+    let results: Awaited<ReturnType<typeof tavilySearch>> = [];
+    try {
+      results = await tavilySearch(q, {
+        depth: "advanced",
+        maxResults: 6,
+        includeDomains: ["linkedin.com"],
+        userId: req.user!.id,
+        userKeys,
+      });
+      if (results.length === 0) {
+        results = await tavilySearch(`${q} location city based`, {
+          depth: "advanced",
+          maxResults: 6,
+          userId: req.user!.id,
+          userKeys,
+        });
+      }
+    } catch (err) {
+      console.warn(`[classify-city] tavily failed for ${r.name}:`, (err as Error).message);
+    }
+    if (results.length === 0) { totals.skipped++; return; }
+
+    const context = results
+      .map((x) => `[${x.title}](${x.url})\n${(x.content ?? "").slice(0, 1500)}`)
+      .join("\n\n---\n\n");
+
+    const dropdownInstruction = isDropdown
+      ? `Pick EXACTLY ONE city from this list (copy verbatim — case and spacing matter): ${options.map((o) => `"${o}"`).join(", ")}. If the snippets clearly indicate a city NOT in the list, return null rather than forcing a wrong match.`
+      : `Return just the city name in plain English (e.g. "London", "New York", "San Francisco", "Amsterdam"). City only — no state or country suffix.`;
+
+    let pick: string | null = null;
+    try {
+      const out = await aiJson<{ city: string | null; reason: string }>(
+        provider,
+        `You determine which city a person is currently based in for a CRM column.
+
+${dropdownInstruction}
+
+Decide from the snippets below. Look for:
+  - LinkedIn location field (e.g. "London, England, United Kingdom" → London; "Greater New York City Area" → New York; "San Francisco Bay Area" → San Francisco).
+  - Current employer's office location, when the snippets specify a city.
+  - Statements like "based in", "lives in", "from".
+
+If the snippets are too thin or contradictory to call confidently, return city: null. Better blank than wrong.
+
+Return ONLY {"city": "<the city, or null>", "reason": "<one short sentence citing the evidence>"}.`,
+        `Person: ${r.name}${r.title ? ", " + r.title : ""}${company ? " @ " + company : ""}\n\nSnippets:\n${context}`,
+        { maxTokens: 300, userId: req.user!.id, userKeys },
+      );
+      const raw = (out.city ?? "").trim();
+      if (raw) {
+        if (isDropdown) {
+          const exact = options.find((o) => o === raw);
+          const ci = exact ?? options.find((o) => o.toLowerCase() === raw.toLowerCase()) ?? null;
+          if (ci) pick = ci;
+        } else {
+          pick = raw;
+        }
+      }
+    } catch (err) {
+      console.warn(`[classify-city] aiJson failed for ${r.name}:`, (err as Error).message);
+    }
+
+    if (!pick) { totals.skipped++; return; }
+
+    try {
+      const merged = { ...cf, [cityCol.id]: pick };
+      const writeResult = await db
+        .updateTable("crm_contacts")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .set({ custom_fields: merged as any, updated_at: new Date() as any })
+        .where("id", "=", r.id)
+        .execute();
+      const rowsAffected = Number(writeResult[0]?.numUpdatedRows ?? 0);
+      if (rowsAffected === 0) {
+        console.warn(`[classify-city] 0 rows updated for ${r.name} — write skipped`);
+        totals.skipped++;
+        return;
+      }
+      totals.classified++;
+    } catch (err) {
+      console.error(`[classify-city] DB write failed for ${r.name}:`, (err as Error).message);
+      totals.skipped++;
+    }
+  };
+
+  const workers = Array.from({ length: Math.min(CONCURRENCY, rows.length) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= rows.length) return;
+      await processOne(rows[i]!);
+    }
+  });
+  await Promise.all(workers);
+
+  if (totals.classified > 0) notifyBoard(req.params.boardId, "contact");
+  res.json({ ...totals, total: rows.length });
+});
+
 router.delete("/contacts/:id", async (req: AuthedRequest, res) => {
   // Two-way collab: any board member can delete, not just the row's creator.
   const existing = await db
