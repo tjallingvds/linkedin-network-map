@@ -697,19 +697,19 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
    the past-searches list into an unreadable sliver. */
 .nav-scroll > * { flex-shrink: 0; }
 .nav-label {
-  font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--text-mute); font-weight: 500; padding: 16px 9px 6px;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-mute); font-weight: 600; padding: 14px 8px 4px;
   display: flex; justify-content: space-between; align-items: center;
 }
-.nav-label .add { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; color: var(--text-mute); }
+.nav-label .add { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 4px; color: var(--text-mute); }
 .nav-label .add:hover { background: var(--hover); color: var(--text); }
 
-/* flowviz nav item — full --text colour, differentiated by WEIGHT not hue.
-   Hover and active share the same quiet --hover wash. */
+/* Sidebar nav is chrome — it should sit quieter than page content. 13px,
+   differentiated by weight, on a quiet hover/active wash. */
 .nav-item {
-  display: flex; align-items: center; gap: 11px;
-  padding: 6px 9px; border-radius: 5px;
-  color: var(--text); font-size: 15px; font-weight: 400;
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 8px; border-radius: 5px;
+  color: var(--text-dim); font-size: 13px; font-weight: 400;
   letter-spacing: -0.005em;
   transition: background 120ms, color 120ms;
   text-align: left; width: 100%; position: relative;
@@ -718,8 +718,9 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .nav-item.active { background: var(--hover); color: var(--text); font-weight: 500; }
 [data-theme="dark"] .nav-item:hover { background: rgba(255,255,255,0.04); }
 [data-theme="dark"] .nav-item.active { background: rgba(255,255,255,0.07); }
+.nav-item svg { color: var(--text-mute); flex-shrink: 0; }
 .nav-item .count {
-  margin-left: auto; font-size: 13px; font-weight: 500;
+  margin-left: auto; font-size: 11.5px; font-weight: 500;
   color: var(--text-mute); font-variant-numeric: tabular-nums;
   background: none; padding: 0; border-radius: 0;
 }
