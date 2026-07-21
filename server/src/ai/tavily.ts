@@ -200,8 +200,10 @@ export async function tavilySearch(
     url: x.url,
     content: x.content,
     score: x.score,
-    // Tavily returns snake_case raw_content; normalise + cap to keep the
-    // extractor's token cost bounded (list pages can be huge).
-    rawContent: x.raw_content ? x.raw_content.slice(0, 6000) : undefined,
+    // Tavily returns snake_case raw_content; normalise + cap. Kept modest
+    // because the extractor batches ~40 results per LLM call — at 2.5k chars
+    // each that's ~25k tokens/call (safe for smaller models), while still
+    // being 5-10× the snippet so dense pages surface their full roster.
+    rawContent: x.raw_content ? x.raw_content.slice(0, 2500) : undefined,
   }));
 }
