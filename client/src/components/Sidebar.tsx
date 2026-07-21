@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import {
-  IconNewChat, IconSidebar, IconSearch, IconUsers, IconSparkle, IconClose,
+  IconNewChat, IconSidebar, IconUsers, IconSparkle, IconClose,
 } from "../design/icons";
 import { useModal } from "./Modal";
 
@@ -109,7 +109,7 @@ export function Sidebar({
             <NavSection
               label="Recent"
               items={savedSearches}
-              icon={<IconSearch size={13} />}
+              icon={null}
               activeNav={activeNav}
               onSelect={onSelect}
               emptyMsg={savedSearches.length === 0 ? "Your searches appear here" : undefined}
