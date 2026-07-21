@@ -734,6 +734,18 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .nav-item.active .count { background: none; color: var(--text-mute); }
 
+/* Primary "New search" action — full-strength text + accent icon so it reads
+   as the main action, sitting above the boards. */
+.nav-primary { color: var(--text); font-weight: 500; }
+.nav-primary svg { color: var(--accent); }
+.nav-primary:hover { background: var(--accent-soft); }
+
+/* Thin zone divider between the action and the lists. */
+.nav-divider {
+  height: 1px; background: var(--hairline);
+  margin: 6px 8px 2px;
+}
+
 .sidebar-spacer { flex: 1; }
 
 .upgrade {
