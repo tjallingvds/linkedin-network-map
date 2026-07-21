@@ -6,6 +6,7 @@ import {
   Tooltip, XAxis, YAxis,
 } from "recharts";
 import { IconArrowR, IconClose, IconUpload, IconSparkle } from "../design/icons";
+import { useModal } from "../components/Modal";
 import { api } from "../lib/api";
 import {
   parseLinkedIn,
@@ -89,6 +90,7 @@ export function SalesAnalysisPage() {
   const [uploads, setUploads] = useState<UploadRow[]>([]);
   const [showUpload, setShowUpload] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
+  const modal = useModal();
 
   const refreshUploads = async () => {
     try {
@@ -110,7 +112,13 @@ export function SalesAnalysisPage() {
   }, [flash]);
 
   const deleteUpload = async (id: string) => {
-    if (!confirm("Delete this upload? All its connections and messages will be removed.")) return;
+    const ok = await modal.confirm({
+      title: "Delete this upload?",
+      message: "All of its connections and messages will be permanently removed.",
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await api.del<{ ok: true }>(`/api/sales/uploads/${id}`);
       setFlash("Upload deleted");

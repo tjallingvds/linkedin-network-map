@@ -466,7 +466,7 @@ export function DiscoverPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openProspect, setOpenProspect] = useState<Prospect | null>(null);
   const [outreachFor, setOutreachFor] = useState<{ prospects: Prospect[]; drafts?: OutreachDraft[] } | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ msg: string; kind: "success" | "error" } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [connectionsImportOpen, setConnectionsImportOpen] = useState(false);
   const [boardMenuOpen, setBoardMenuOpen] = useState(false);
@@ -513,9 +513,11 @@ export function DiscoverPage() {
     [thread],
   );
 
-  const flash = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2800);
+  const flash = (msg: string, kind?: "success" | "error") => {
+    // Auto-detect failures so an error never shows a reassuring green check.
+    const k = kind ?? (/\b(fail(ed|s)?|error|couldn'?t|could not|missing|invalid|denied|no match)\b/i.test(msg) ? "error" : "success");
+    setToast({ msg, kind: k });
+    setTimeout(() => setToast(null), k === "error" ? 4200 : 2800);
   };
 
   const handleNewChat = async () => {
@@ -1556,7 +1558,12 @@ export function DiscoverPage() {
         />
       )}
       {toast && (
-        <div className="toast"><IconCheck size={14} />{toast}</div>
+        <div className={`toast toast-${toast.kind}`}>
+          {toast.kind === "error"
+            ? <span className="toast-ico" aria-hidden><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth={1.6}><circle cx="7" cy="7" r="5.5" /><line x1="7" y1="4" x2="7" y2="7.5" /><circle cx="7" cy="10" r="0.6" fill="currentColor" stroke="none" /></svg></span>
+            : <IconCheck size={14} />}
+          {toast.msg}
+        </div>
       )}
     </div>
   );

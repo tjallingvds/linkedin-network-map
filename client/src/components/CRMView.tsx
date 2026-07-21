@@ -4673,10 +4673,11 @@ export function CRMView({
     // column behavior, but auto-creates the column on confirm.
     let col = countryCol;
     if (!col) {
-      const ok = window.confirm(
-        "This board has no \"Country\" column.\n\n" +
-        "Add a Text column called \"Country\" now and run the classifier?",
-      );
+      const ok = await modal.confirm({
+        title: "Add a Country column?",
+        message: "This board has no \"Country\" column yet. Add a Text column called \"Country\" and fill it in?",
+        confirmLabel: "Add & classify",
+      });
       if (!ok) return;
       const newCol: CrmColumnDef = {
         id: makeCustomColId("Country"),
@@ -4722,10 +4723,11 @@ export function CRMView({
     // No City column yet — offer to create one inline (same UX as country).
     let col = cityCol;
     if (!col) {
-      const ok = window.confirm(
-        "This board has no \"City\" column.\n\n" +
-        "Add a Text column called \"City\" now and run the classifier?",
-      );
+      const ok = await modal.confirm({
+        title: "Add a City column?",
+        message: "This board has no \"City\" column yet. Add a Text column called \"City\" and fill it in?",
+        confirmLabel: "Add & find",
+      });
       if (!ok) return;
       const newCol: CrmColumnDef = {
         id: makeCustomColId("City"),
