@@ -134,14 +134,15 @@ export async function runFind(
     .join("\n");
   const fullBrief = priorUserText ? `${priorUserText}\n${userInput}` : userInput;
 
-  // Chat-turn dedup always applies; CRM exclusion applies UNLESS the user
-  // locked the search to firms they named (then they want those people even
-  // if already saved). `effectiveShown` is the exclusion set used everywhere
-  // below (seeding + the per-round "do not return these" query hints).
-  const lockedToNamedFirms = looksLockedToNamedFirms(fullBrief);
-  const effectiveShown = lockedToNamedFirms
-    ? alreadyShownNames
-    : [...alreadyShownNames, ...crmExcludeNames];
+  // Exclusion set used everywhere below (seeding + the per-round "do not
+  // return these" query hints). Chat-turn dedup, the user's uploaded
+  // first-degree connections, AND their saved CRM contacts are ALL always
+  // excluded: the point of a search is to find NEW people, so we never
+  // re-surface someone they already know or have saved — even when the brief
+  // is locked to firms they named. (Previously CRM names were dropped in the
+  // locked-firm case to "re-pull named accounts", which surfaced already-saved
+  // contacts and uploaded connections — flagged as wrong.)
+  const effectiveShown = [...alreadyShownNames, ...crmExcludeNames];
 
   // ── CRM-read fast path ──────────────────────────────────────────────────
   // "what's in my Banks board?" / "list the technical people in my CRM" /
@@ -227,6 +228,13 @@ export async function runFind(
   // through clarify and ask for a count, not silently default to 50.
   const saysAll = /\b(?:all|every(?:one|body)?|each)\s+(?:of\s+the\s+)?(?:people|person|employees|contacts|prospects|staff|folks)?\b/i.test(fullBrief);
   if (saysAll && !requestedCount) {
+    requestedCount = 50;
+  }
+  // A brief LOCKED to specific named firms ("find the CTOs at Stripe, Plaid,
+  // Brex") is a coverage request, not a headcount one — don't bounce the user
+  // through "how many?". Seed a sizing default and let company-coverage mode
+  // (below) decide how long to run; the output is NOT capped at this number.
+  if (!requestedCount && looksLockedToNamedFirms(fullBrief)) {
     requestedCount = 50;
   }
 
@@ -432,31 +440,81 @@ export async function runFind(
   // another round, and time/budget/exhaustion still cap a thin niche brief.
   const satisfyingFloor = Math.ceil(targetCount * 0.9);
   const searchStartedAt = Date.now();
-  const MAX_ROUNDS = 12;
+
+  // ── Company-coverage mode ────────────────────────────────────────────────
+  // When the user LOCKED the search to firms they named ("find the people at
+  // [these companies]"), the goal isn't a headcount — it's covering EVERY
+  // named company. Drive the loop by per-firm coverage instead of a target
+  // count: keep digging until every firm has surfaced someone or has been
+  // individually exhausted, focus each round on the firms still missing, and
+  // never cap the output at 50. This is the fix for "found 18, couldn't
+  // surface 50, gave up" on a clear company-list brief.
+  const coverageMode = looksLockedToNamedFirms(fullBrief) && (parsed?.firms.length ?? 0) > 0;
+  const normFirm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const firmByKey = new Map<string, string>();
+  if (coverageMode) for (const f of parsed!.firms) { const k = normFirm(f); if (k) firmByKey.set(k, f); }
+  const namedFirmKeys = [...firmByKey.keys()];
+  const coveredFirms = new Set<string>();
+  const firmAttempts = new Map<string, number>();
+  const exhaustedFirms = new Set<string>();
+  // Loose both-ways substring match so "JPMorgan" ↔ "JPMorgan Chase & Co" pair.
+  const firmKeyOf = (companyName: string): string | null => {
+    const co = normFirm(companyName);
+    if (!co) return null;
+    for (const fk of namedFirmKeys) if (fk && (co.includes(fk) || fk.includes(co))) return fk;
+    return null;
+  };
+  const uncoveredFirms = (): string[] =>
+    namedFirmKeys.filter((fk) => !coveredFirms.has(fk) && !exhaustedFirms.has(fk));
+  // Enough budget to actually reach every firm: ~4 Tavily calls per named
+  // firm, never below what targetCount already implied.
+  if (coverageMode) {
+    searchBudget.remaining = Math.min(300, Math.max(searchBudget.remaining, namedFirmKeys.length * 4));
+  }
+  // One round can target ~48 firms (16 queries × ~3 firms), so 12 rounds
+  // covers big lists; give coverage mode a little more headroom for retries.
+  const MAX_ROUNDS = coverageMode ? Math.min(24, Math.max(12, namedFirmKeys.length)) : 12;
   // searchBudget is declared above (shared with the firm-discovery stage) so
   // discovery + all people-search rounds draw from one ceiling.
 
-  onProgress?.(`Searching the web for ${targetCount} matches…`);
+  onProgress?.(coverageMode
+    ? `Searching ${namedFirmKeys.length} companies…`
+    : `Searching the web for ${targetCount} matches…`);
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const remaining = targetCount - allPeople.length;
-    if (remaining <= 0) break;
+    // Count-driven briefs stop once the ask is met; coverage-driven briefs
+    // stop once every firm is covered or exhausted (checked below).
+    if (!coverageMode && remaining <= 0) break;
     // Stop conditions are checked at the START of each round (after round 0,
     // which always runs): an in-flight round is always allowed to finish.
     if (round > 0) {
       if (searchBudget.remaining <= 0) {
-        console.log(`[find] search budget exhausted (${allPeople.length}/${targetCount}) — stopping`);
+        console.log(`[find] search budget exhausted (${allPeople.length} found) — stopping`);
         break;
       }
-      if (allPeople.length >= satisfyingFloor) {
+      if (coverageMode) {
+        if (uncoveredFirms().length === 0) {
+          console.log(`[find] all ${namedFirmKeys.length} companies covered/exhausted — stopping`);
+          break;
+        }
+      } else if (allPeople.length >= satisfyingFloor) {
         console.log(`[find] reached satisfying floor (${allPeople.length}/${targetCount}) — stopping`);
         break;
       }
       const elapsed = Date.now() - searchStartedAt;
       if (elapsed >= SEARCH_TIME_BUDGET_MS) {
-        console.log(`[find] time budget spent (${Math.round(elapsed / 1000)}s, ${allPeople.length}/${targetCount}) — stopping`);
+        console.log(`[find] time budget spent (${Math.round(elapsed / 1000)}s, ${allPeople.length} found) — stopping`);
         break;
       }
     }
+
+    // Coverage mode: after round 0, narrow the query generator to the firms
+    // still missing so it chases the uncovered companies instead of re-finding
+    // people at the easy ones. Round 0 always sweeps all firms.
+    const roundUncovered = coverageMode && round > 0 ? uncoveredFirms() : [];
+    const roundFirmNames = roundUncovered.map((k) => firmByKey.get(k)!).filter(Boolean);
+    const roundParsed = roundFirmNames.length > 0 ? { ...parsed!, firms: roundFirmNames } : parsed;
+    const roundExtractCtx = roundFirmNames.length > 0 ? buildExtractCtx(roundParsed) : extractCtx;
 
     // When round > 0, include the names we've found THIS request in the
     // exclusion list for the query generator. When pre-seed has entries,
@@ -465,20 +523,28 @@ export async function runFind(
     const priorShownSlice = round === 0 && effectiveShown.length > 0
       ? `\n\n(Already shown in earlier chat turns — do NOT return these: ${effectiveShown.slice(0, 80).join(", ")}.)`
       : "";
+    const coverageHint = roundFirmNames.length > 0
+      ? `\n\n(FOCUS THIS ROUND on these companies still missing people: ${roundFirmNames.join(", ")}.)`
+      : "";
     const roundQuery = round === 0
       ? `${fullBrief}${priorShownSlice}`
-      : `${fullBrief}\n\n(ROUND ${round + 1}: Find DIFFERENT people. Already found: ${
+      : `${fullBrief}${coverageHint}\n\n(ROUND ${round + 1}: Find DIFFERENT people. Already found: ${
           allPeople.map((p) => p.name).join(", ")
         }${effectiveShown.length ? "; Also already shown earlier: " + effectiveShown.slice(0, 40).join(", ") : ""}. Do NOT return these again.)`;
+    // Coverage rounds size the ask by how many firms still need people, not by
+    // a global headcount that's already irrelevant.
+    const roundTarget = coverageMode
+      ? Math.max(8, (roundFirmNames.length || namedFirmKeys.length) * 3)
+      : remaining;
 
     let roundResult: HandleDiscoveryResult;
     try {
       roundResult = await handleDiscovery({
         provider,
         query: roundQuery,
-        targetCount: remaining,
-        extractionHint: extractCtx,
-        parsed,
+        targetCount: roundTarget,
+        extractionHint: roundExtractCtx,
+        parsed: roundParsed,
         userId,
         userKeys,
         matchBreadth,
@@ -535,6 +601,8 @@ export async function runFind(
         seenNames.add(key);
         allPeople.push(p);
         newCount++;
+        // Mark the firm this candidate works at as covered.
+        if (coverageMode) { const fk = firmKeyOf(p.company || ""); if (fk) coveredFirms.add(fk); }
       } else if (key) {
         // Candidate passed all the filters but was deduped against either
         // the user's CRM or an earlier chat turn. Count it so the summary
@@ -544,29 +612,56 @@ export async function runFind(
       }
     }
 
-    console.log(`[find] round ${round + 1}: ${roundPeople.length} raw, ${newCount} new (total ${allPeople.length}/${targetCount})`);
+    // Coverage bookkeeping: count an attempt against every firm we FOCUSED on
+    // this round (round 0 is a broad sweep and doesn't burn an attempt). A
+    // firm still missing after 2 focused rounds is treated as exhausted so the
+    // loop doesn't spin on a company the web simply won't yield.
+    if (coverageMode && round > 0) {
+      for (const fk of roundUncovered) {
+        if (coveredFirms.has(fk)) continue;
+        const n = (firmAttempts.get(fk) ?? 0) + 1;
+        firmAttempts.set(fk, n);
+        if (n >= 2) exhaustedFirms.add(fk);
+      }
+    }
+
+    console.log(`[find] round ${round + 1}: ${roundPeople.length} raw, ${newCount} new` +
+      (coverageMode
+        ? ` (${coveredFirms.size}/${namedFirmKeys.length} companies covered)`
+        : ` (total ${allPeople.length}/${targetCount})`));
 
     // Live funnel to the chat: how many the web surfaced, how many survived the
     // relevance filters, how many were dropped (irrelevant / competitors / too
-    // junior). Reads as real progress toward the target.
+    // junior). Coverage briefs show companies-covered; count briefs show the
+    // qualified count toward the target.
     const filteredOut =
       funnelTotals.extracted - funnelTotals.afterArchetypeGate;
-    onProgress?.(
-      `Discovered ${funnelTotals.extracted} · ${allPeople.length}/${targetCount} qualified` +
-        (filteredOut > 0 ? ` · ${filteredOut} filtered out` : ""),
-    );
+    onProgress?.(coverageMode
+      ? `${coveredFirms.size}/${namedFirmKeys.length} companies covered · ${allPeople.length} people` +
+          (filteredOut > 0 ? ` · ${filteredOut} filtered out` : "")
+      : `Discovered ${funnelTotals.extracted} · ${allPeople.length}/${targetCount} qualified` +
+          (filteredOut > 0 ? ` · ${filteredOut} filtered out` : ""));
 
     // Only stop early when a round adds ZERO new people — that means the
     // query generator + Tavily are returning pure dupes, so the web is
     // exhausted for this brief and more rounds won't help. Otherwise keep
-    // digging toward the half-target / time budget checked at the top of the
-    // loop. (The old "stop once you have 30% and a round added <3" break is
-    // gone — that's what made big briefs give up early.)
+    // digging toward the target / coverage / time budget checked at the top of
+    // the loop. (The old "stop once you have 30% and a round added <3" break
+    // is gone — that's what made big briefs give up early.)
     if (newCount === 0) break;
   }
 
+  // Count-driven briefs cap at the ask; coverage-driven briefs return
+  // everyone found across all covered companies (no 50 cap).
+  //
+  // NO enrichment here on purpose: Apollo (email/phone/LinkedIn) only runs
+  // AFTER a lead is confirmed good — i.e. when the user adds it to the CRM
+  // (auto-enrich-on-add in routes/crm.ts). Resolving at search time would
+  // burn credits on people the user never keeps.
+  const finalPeople = coverageMode ? allPeople : allPeople.slice(0, targetCount);
+
   // ── Map Candidate → Prospect ─────────────────────────────────────────────
-  const prospects: Prospect[] = allPeople.slice(0, targetCount).map((c, i) => {
+  const prospects: Prospect[] = finalPeople.map((c, i) => {
     const signals: ProspectSignal[] = [];
     if (c.evidence) signals.push({ kind: "match", text: c.evidence, when: "" });
     return {
@@ -613,7 +708,23 @@ export async function runFind(
     return { kind: "prospects", summary, prospects: fallback };
   }
 
-  const summary = composeFindSummary(prospects.length, targetCount, funnelTotals, parsed);
+  // Coverage briefs report against companies, not a headcount the user never
+  // gave — "covered 11/12 companies · 43 people" instead of the misleading
+  // "found 43, couldn't surface 50".
+  let summary: string;
+  if (coverageMode) {
+    const covered = coveredFirms.size;
+    const total = namedFirmKeys.length;
+    const missing = uncoveredFirms().map((k) => firmByKey.get(k)!).filter(Boolean);
+    summary = covered >= total
+      ? `Found ${prospects.length} people across all ${total} companies.`
+      : `Found ${prospects.length} people across ${covered} of ${total} companies` +
+        (missing.length > 0 && missing.length <= 8
+          ? ` — no public matches for ${missing.join(", ")}. Try "find more" or broaden the roles for those.`
+          : `. Try "find more" for another pass at the ${missing.length} still missing.`);
+  } else {
+    summary = composeFindSummary(prospects.length, targetCount, funnelTotals, parsed);
+  }
 
   return { kind: "prospects", summary, prospects };
 }
