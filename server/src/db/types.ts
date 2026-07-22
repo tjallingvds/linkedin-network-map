@@ -20,6 +20,7 @@ export interface Database {
   sales_analysis_connections: SalesConnectionsTable;
   sales_analysis_messages: SalesMessagesTable;
   sales_analysis_pinned: SalesPinnedAnalysesTable;
+  completion_jobs: CompletionJobsTable;
 }
 
 type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
@@ -272,6 +273,23 @@ export interface SalesPinnedAnalysesTable {
   spec: unknown;
   position: Generated<number>;
   created_at: Generated<Timestamp>;
+}
+
+/** Durable background-search jobs — survives a process restart so the client's
+ *  poll still resolves after a Railway redeploy/OOM. See the 20260721 migration. */
+export interface CompletionJobsTable {
+  /** Caller-supplied job id (the route generates it, not the DB). */
+  id: string;
+  user_id: string;
+  chat_id: string | null;
+  /** 'running' | 'done' | 'error'. */
+  status: Generated<string>;
+  progress: string | null;
+  /** Full CompletionPayload JSON once done; null while running / on error. */
+  result: unknown | null;
+  error: string | null;
+  created_at: Generated<Timestamp>;
+  updated_at: Generated<Timestamp>;
 }
 
 export interface CrmAttachmentsTable {
