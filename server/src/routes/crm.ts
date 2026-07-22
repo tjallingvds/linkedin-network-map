@@ -580,7 +580,9 @@ async function autoEnrichContact(args: {
     phone:    pickCustomCol(columns, "phone", ["phone", "mobile"]),
     title:    pickCustomCol(columns, "text",  ["title", "role", "position", "job title"]),
     company:  pickCustomCol(columns, "text",  ["company", "organization", "org", "firm", "employer"]),
-    location: pickCustomCol(columns, "text",  ["location", "city", "based", "based in", "country"]),
+    // NB: "city"/"country" are handled by the dedicated classifier below, so
+    // don't let Apollo's combined location string claim those columns.
+    location: pickCustomCol(columns, "text",  ["location", "based", "based in"]),
   };
   const cf = (r.custom_fields ?? {}) as Record<string, string>;
   const readCell = (legacy: string | null | undefined, customId: string | null) =>
@@ -660,6 +662,53 @@ async function autoEnrichContact(args: {
         }
       } catch (err) {
         console.warn(`[auto-enrich] background failed for ${r.name}:`, (err as Error).message);
+      }
+    }
+  }
+
+  // ── City / Country classification ───────────────────────────────────────
+  // The dedicated City/Country columns aren't filled by Apollo's location
+  // string — run the same classifier the Actions button does, but ONCE (one
+  // web search + one LLM extracting both) so auto-enrich stays cheap. Only
+  // fires when a City or Country column exists and is empty.
+  const cityCol = pickCustomCol(columns, "text", ["city"]);
+  const countryCol = pickCustomCol(columns, "text", ["country"]);
+  const needCity = cityCol && !readCell(null, cityCol) && !customMerge[cityCol];
+  const needCountry = countryCol && !readCell(null, countryCol) && !customMerge[countryCol];
+  if (needCity || needCountry) {
+    const tavilyKey = userKeys?.tavily ?? env.TAVILY_API_KEY;
+    const provider = availableProviders(userKeys)[0];
+    if (tavilyKey && provider) {
+      try {
+        const company = readCell(r.company, targets.company);
+        const q = linkedin || [r.name, company].filter(Boolean).join(" ");
+        let results = await tavilySearch(q, {
+          depth: "advanced", maxResults: 6, includeDomains: ["linkedin.com"], userId, userKeys,
+        });
+        if (results.length === 0) {
+          results = await tavilySearch(`${q} location city country based`, {
+            depth: "advanced", maxResults: 6, userId, userKeys,
+          });
+        }
+        if (results.length > 0) {
+          const context = results
+            .map((x) => `[${x.title}](${x.url})\n${(x.content ?? "").slice(0, 1500)}`)
+            .join("\n\n---\n\n");
+          const out = await aiJson<{ city: string | null; country: string | null }>(
+            provider,
+            "You determine where a person is currently based for a CRM, from the snippets below. " +
+            "Read the LinkedIn location (e.g. \"London, England, United Kingdom\" → city London, country United Kingdom; " +
+            "\"Greater New York City Area\" → city New York, country United States). Use full country names, city only for city. " +
+            "If the snippets are too thin to call a field confidently, return null for it — better blank than wrong.",
+            `Person: ${r.name}${r.title ? ", " + r.title : ""}${company ? " @ " + company : ""}\n\nSnippets:\n${context}\n\n` +
+            `Return ONLY {"city": "<city or null>", "country": "<country or null>"}.`,
+            { maxTokens: 200, userId, userKeys },
+          );
+          if (needCity && out.city && out.city.trim()) customMerge[cityCol!] = out.city.trim();
+          if (needCountry && out.country && out.country.trim()) customMerge[countryCol!] = out.country.trim();
+        }
+      } catch (err) {
+        console.warn(`[auto-enrich] city/country classify failed for ${r.name}:`, (err as Error).message);
       }
     }
   }
