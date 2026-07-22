@@ -145,9 +145,18 @@ const completionSchema = z.object({
 // duration reset, not an idle timeout — heartbeats can't dodge it). Long
 // searches blew past it and surfaced as "Failed to fetch". So a completion no
 // longer runs on the request: POST starts a background job and returns a job
-// id; the client polls the GET endpoint below. In-memory is fine for a single
-// instance — the assistant message is persisted to the DB when the job
-// finishes, so the result survives even if the job map is lost on restart.
+// id; the client polls the GET endpoint below.
+//
+// Job state is persisted to Postgres (completion_jobs table), NOT held in
+// memory: a process restart (Railway redeploy / OOM / autoscale) used to drop
+// every in-flight and recently-finished job, so a completed search 404'd on the
+// next poll. With the row in the DB, a finished result survives a restart and
+// the poll still resolves. The heavy work still runs in THIS process (execute()
+// closes over the user's BYOK API keys, which are deliberately never persisted),
+// so a restart mid-run can't auto-resume — instead the poll detects a stale
+// 'running' row and returns a clean "re-run" prompt rather than spinning
+// forever. The assistant message is also persisted independently when the job
+// finishes, so the chat rebuilds on reload even after the job row is reaped.
 interface CompletionPayload {
   result: CompletionResult;
   provider: AiProvider;
@@ -155,17 +164,24 @@ interface CompletionPayload {
   userMessageId?: string;
   assistantMessageId?: string;
 }
-type CompletionJob =
-  | { status: "running"; userId: string; createdAt: number; progress?: string }
-  | { status: "done"; userId: string; createdAt: number; payload: CompletionPayload }
-  | { status: "error"; userId: string; createdAt: number; message: string };
-const completionJobs = new Map<string, CompletionJob>();
-/** Drop jobs older than 10 min so the map can't grow unbounded. Kept (not
- *  deleted on read) so a re-poll after a network blip still gets the result. */
-function reapCompletionJobs(): void {
-  const now = Date.now();
-  for (const [id, j] of completionJobs) {
-    if (now - j.createdAt > 10 * 60 * 1000) completionJobs.delete(id);
+/** A 'running' row older than this is assumed dead — its owning process died
+ *  mid-run. The poll marks it errored so the user gets a re-run prompt. Must
+ *  exceed the longest possible search (coverage time budget ~6 min + overhead). */
+const JOB_STALE_MS = 10 * 60 * 1000;
+/** Rows older than this are deleted. The result also lives in `messages`, so the
+ *  chat still rebuilds on reload after a job row is reaped. */
+const JOB_REAP_MS = 30 * 60 * 1000;
+/** Delete aged-out job rows so the table can't grow unbounded. Fire-and-forget
+ *  on each new job; failures are non-fatal (the next create retries). */
+async function reapCompletionJobs(): Promise<void> {
+  try {
+    await db
+      .deleteFrom("completion_jobs")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .where("created_at", "<", new Date(Date.now() - JOB_REAP_MS) as any)
+      .execute();
+  } catch (err) {
+    console.warn("[completion] reap failed:", (err as Error).message);
   }
 }
 
@@ -443,45 +459,87 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
   };
 
   const jobId = randomUUID();
-  const jobCreatedAt = Date.now();
-  completionJobs.set(jobId, { status: "running", userId, createdAt: jobCreatedAt });
-  // Live progress — the search calls this at funnel checkpoints; we stash the
-  // latest note on the running job so the poll endpoint can hand it to the chat.
+  // Persist the job row BEFORE returning so an immediate poll always finds it.
+  await db
+    .insertInto("completion_jobs")
+    .values({ id: jobId, user_id: userId, chat_id: chat.id, status: "running" })
+    .execute();
+  // Live progress — the search calls this at funnel checkpoints; we write the
+  // latest note to the job row so the poll endpoint can hand it to the chat.
+  // Fire-and-forget so a slow UPDATE never stalls the search; a dropped note is
+  // cosmetic. Guarded on status='running' so a completed job can't be reopened.
   const onProgress = (note: string) => {
-    const j = completionJobs.get(jobId);
-    if (j && j.status === "running") {
-      completionJobs.set(jobId, { ...j, progress: note });
-    }
+    void db
+      .updateTable("completion_jobs")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .set({ progress: note, updated_at: new Date() as any })
+      .where("id", "=", jobId)
+      .where("status", "=", "running")
+      .execute()
+      .catch((err) => console.warn("[completion] progress write failed:", (err as Error).message));
   };
-  // Fire-and-forget — the job store carries the outcome to the poll endpoint.
+  // Fire-and-forget — the job row carries the outcome to the poll endpoint.
   // The .catch ensures a failed search can never become an unhandledRejection.
   void execute(onProgress)
-    .then((payload) => { completionJobs.set(jobId, { status: "done", userId, createdAt: jobCreatedAt, payload }); })
-    .catch((err) => {
+    .then(async (payload) => {
+      await db
+        .updateTable("completion_jobs")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .set({ status: "done", result: payload as any, updated_at: new Date() as any })
+        .where("id", "=", jobId)
+        .execute();
+    })
+    .catch(async (err) => {
       console.error("[completion] job failed:", (err as Error).message);
-      completionJobs.set(jobId, {
-        status: "error", userId, createdAt: Date.now(),
-        message: (err as Error).message || "Search failed",
-      });
+      await db
+        .updateTable("completion_jobs")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .set({ status: "error", error: (err as Error).message || "Search failed", updated_at: new Date() as any })
+        .where("id", "=", jobId)
+        .execute()
+        .catch((e) => console.error("[completion] failed to persist job error:", (e as Error).message));
     });
 
-  reapCompletionJobs();
+  void reapCompletionJobs();
   return res.json({ jobId, userMessageId: createdUserMessage ? currentUserMessageId : undefined });
 });
 
 // Poll a background completion job. Each poll is sub-second, so a search of any
 // length finishes without holding one long HTTP request past the platform cap.
 router.get("/:id/completion/:jobId", async (req: AuthedRequest, res) => {
-  const job = completionJobs.get(req.params.jobId);
-  if (!job || job.userId !== req.user!.id) {
+  const job = await db
+    .selectFrom("completion_jobs")
+    .select(["id", "user_id", "status", "progress", "result", "error", "created_at"])
+    .where("id", "=", req.params.jobId)
+    .executeTakeFirst();
+  if (!job || job.user_id !== req.user!.id) {
     return res.status(404).json({
       error: "job_not_found",
-      message: "That search expired or the server restarted before it finished — re-run it.",
+      message: "That search expired — re-run it.",
     });
   }
-  if (job.status === "running") return res.json({ status: "running", progress: job.progress });
-  if (job.status === "error") return res.json({ status: "error", message: job.message });
-  return res.json({ status: "done", ...job.payload });
+  if (job.status === "running") {
+    // A 'running' row that's outlived any possible search means the process
+    // that owned it died mid-run (a restart). We can't resume it — the user's
+    // BYOK keys were never persisted — so flip it to an error and surface a
+    // clean re-run prompt instead of letting the client poll forever.
+    const ageMs = Date.now() - new Date(job.created_at as unknown as string).getTime();
+    if (ageMs > JOB_STALE_MS) {
+      const message = "The server restarted before this search finished — re-run it.";
+      await db
+        .updateTable("completion_jobs")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .set({ status: "error", error: message, updated_at: new Date() as any })
+        .where("id", "=", job.id)
+        .where("status", "=", "running")
+        .execute()
+        .catch(() => {});
+      return res.json({ status: "error", message });
+    }
+    return res.json({ status: "running", progress: job.progress ?? undefined });
+  }
+  if (job.status === "error") return res.json({ status: "error", message: job.error ?? "Search failed" });
+  return res.json({ status: "done", ...(job.result as CompletionPayload) });
 });
 
 /** After we flushed headers (for the heartbeat), Express's default error
