@@ -433,9 +433,13 @@ export async function runFind(
   // The search runs in a BACKGROUND JOB now (chats.ts), not on the HTTP
   // request, so it's no longer bound by the platform's ~60-90s request cap —
   // we can dig for the full budget without the socket being reset. The client
-  // polls a status endpoint, so a long run just means more polls, not a
-  // "Failed to fetch".
-  const SEARCH_TIME_BUDGET_MS = 120_000;
+  // polls a status endpoint (each poll sub-second), so a long run just means
+  // more polls, not a "Failed to fetch". The result is persisted to Postgres
+  // when done regardless of polling, so it survives the client navigating away.
+  // The time budget is defined below, after coverageMode is known, because a
+  // coverage run must scale its budget to the number of companies to stay
+  // exhaustive (a flat 2 min can't cover 20 firms). It stays comfortably under
+  // the job store's reap TTL so a still-running job is never dropped.
   // Dig toward ~90% of the ask, not 50%. The remaining handful rarely warrants
   // another round, and time/budget/exhaustion still cap a thin niche brief.
   const satisfyingFloor = Math.ceil(targetCount * 0.9);
@@ -476,6 +480,18 @@ export async function runFind(
   const MAX_ROUNDS = coverageMode ? Math.min(24, Math.max(12, namedFirmKeys.length)) : 12;
   // searchBudget is declared above (shared with the firm-discovery stage) so
   // discovery + all people-search rounds draw from one ceiling.
+  //
+  // Time budget. Count-driven briefs keep the original ~2 min. Coverage briefs
+  // scale ~12s per named firm so a 20-company list gets ~4 min instead of being
+  // guillotined at 2 — the "keep going until every company is done" fix would
+  // be pointless if the clock cut it off first. Capped at 6 min, which stays
+  // safely below the completion-job reap TTL (10 min in chats.ts) so a running
+  // job is never reaped mid-flight. This budget is a CEILING, not a target:
+  // per-firm exhaustion, the credit budget, and MAX_ROUNDS all still end a run
+  // early when the web is dry. Off the HTTP request, so no platform cap applies.
+  const SEARCH_TIME_BUDGET_MS = coverageMode
+    ? Math.min(360_000, Math.max(120_000, namedFirmKeys.length * 12_000))
+    : 120_000;
 
   onProgress?.(coverageMode
     ? `Searching ${namedFirmKeys.length} companies…`
@@ -592,7 +608,13 @@ export async function runFind(
     funnelTotals.afterSeniorityGate += roundFunnel.afterSeniorityGate;
     funnelTotals.afterArchetypeGate += roundFunnel.afterArchetypeGate;
 
-    if (roundPeople.length === 0) break;
+    // Count-driven briefs treat an empty round as "web exhausted" and stop.
+    // Coverage-driven briefs must NOT: a round that focused on the hard-to-find
+    // firms can legitimately return nobody while OTHER named companies are still
+    // uncovered. Keep going — the per-firm exhaustion counter (2 focused
+    // attempts) + budget/time/round caps are what end a coverage run, not one
+    // dry round. This is the "keep going until every company is covered" fix.
+    if (!coverageMode && roundPeople.length === 0) break;
 
     let newCount = 0;
     for (const p of roundPeople) {
@@ -648,7 +670,12 @@ export async function runFind(
     // digging toward the target / coverage / time budget checked at the top of
     // the loop. (The old "stop once you have 30% and a round added <3" break
     // is gone — that's what made big briefs give up early.)
-    if (newCount === 0) break;
+    //
+    // Coverage mode is exempt: a round can add zero NEW people (dupes of firms
+    // already covered) while other named companies still have nobody. Ending
+    // there would abandon the uncovered firms — the exact "gave up before it
+    // finished the list" bug. Let the per-firm exhaustion counter + caps decide.
+    if (!coverageMode && newCount === 0) break;
   }
 
   // Count-driven briefs cap at the ask; coverage-driven briefs return
@@ -923,17 +950,30 @@ function buildExtractCtx(parsed: ParsedBrief | null): string {
 }
 
 /** True when the brief explicitly restricts the search to the firms the user
- *  named — "only at Stripe", "just these companies", "no other firms". When
- *  set (and firms are actually named), the firm-discovery stage is skipped so
- *  the search stays anchored to exactly what the user listed. Errs toward NOT
- *  locking — discovery is the default the user asked for. */
+ *  named — "only at Stripe", "just these companies", "no other firms", OR a
+ *  pasted list of named companies referenced as "these/those/the listed
+ *  companies". When set (and firms are actually named), the firm-discovery
+ *  stage is skipped so the search stays anchored to exactly what the user
+ *  listed, and company-coverage mode drives the loop per-firm. Errs toward NOT
+ *  locking — discovery is the default the user asked for — EXCEPT when the user
+ *  clearly handed us the account list ("… at these companies"), which is a
+ *  coverage request, not a discovery one. */
 function looksLockedToNamedFirms(brief: string): boolean {
   const hay = brief.toLowerCase();
+  const orgNoun = "(?:compan(?:y|ies)|firms?|orgs?|organi[sz]ations?|accounts?|employers?|businesses|institutions?)";
   return (
     /\b(only|just|solely|exclusively|strictly)\b[^.\n]{0,40}\b(at|from|within|in)\b/.test(hay) ||
     /\bonly\s+(these|those|the\s+(?:following|named|listed))\b/.test(hay) ||
     /\b(no|not|never)\s+(other|additional|new)\s+(firms?|companies|orgs?|organi[sz]ations?)\b/.test(hay) ||
-    /\b(don'?t|do\s*not)\s+(add|expand|include|widen|discover)\b[^.\n]{0,30}\b(firms?|companies|orgs?)\b/.test(hay)
+    /\b(don'?t|do\s*not)\s+(add|expand|include|widen|discover)\b[^.\n]{0,30}\b(firms?|companies|orgs?)\b/.test(hay) ||
+    // Pasted account list: "find … at these companies", "across the listed
+    // firms", "for those accounts". The user already gave us the exact set to
+    // cover — treat it as locked so we neither expand it nor stop short of
+    // covering every one. Guarded downstream by `parsed.firms.length > 0`, so a
+    // vague "these fintech companies" with no extractable firms stays in
+    // discovery mode.
+    new RegExp(`\\b(?:at|for|across|within|among|from|to)\\s+(?:these|those|the\\s+(?:above|following|listed|named))\\s+${orgNoun}\\b`).test(hay) ||
+    new RegExp(`\\b(?:these|those|the\\s+(?:above|following|listed|named))\\s+${orgNoun}\\b\\s*[.?!]?\\s*$`).test(hay)
   );
 }
 
@@ -1562,8 +1602,10 @@ async function gateByArchetype(args: {
   const breadthBlock = matchBreadth === "broad"
     ? `MATCH BREADTH: BROAD (default).
 - The ROLE ARCHETYPES above are EXAMPLES of the kind of person wanted, NOT an exhaustive whitelist. Briefs routinely end archetype lists with "etc." — honour that intent.
-- Match on the FUNCTION + SENIORITY, not the exact title string. ACCEPT adjacent / sibling senior roles in the same function family as a listed archetype. E.g. if an archetype is "Head of AI / Head of AI Transformation", also ACCEPT: Chief AI Officer, Chief Data & AI Officer, Chief Data Officer (with an AI remit), VP/SVP/Head of AI, Head of ML / Data Science, Head of Applied AI, AI/GenAI leads at director level and above, Head of AI Risk/Governance, and similar senior owners of the AI agenda.
-- Default to ACCEPT when a candidate is a plausible senior owner of the archetype's function. Reject ONLY when the role is clearly a DIFFERENT function (e.g. Head of Sales, Marketing, Legal) or trips a positively-evidenced anti-pattern.
+- Match on the FUNCTION + SENIORITY, not the exact title string. ACCEPT adjacent / sibling senior roles in the same function family as a listed archetype: the same underlying responsibility carried under a different or broader title.
+- KEYWORD ABSENCE IS NOT A MISMATCH. The archetype's own keyword often does NOT appear verbatim in the title of the person who actually owns that function — the broader a leader's remit, the less likely their title names any single sub-function within it. The senior leader whose scope plausibly ENCOMPASSES the archetype's function is the intended target, even when the archetype word is absent from their title. Judge by what the role plausibly OWNS, derived from the brief's own archetype description — do not require the archetype's label to be spelled out.
+- "The title doesn't literally say <archetype keyword>", "not <archetype>-specific", and "no explicit evidence they personally own the <archetype> agenda" are NEVER valid rejection reasons in broad mode. Absence of evidence is not evidence of a mismatch (see the anti-pattern discipline above).
+- Default to ACCEPT when a candidate is a plausible senior owner of the archetype's function. Reject ONLY when the evidence POSITIVELY shows a clearly DIFFERENT function, or the candidate trips a positively-evidenced anti-pattern.
 - Seniority floor still applies: drop people clearly junior to the archetype's level.`
     : `MATCH BREADTH: STRICT.
 - Match ONLY the role archetypes exactly as written. Do NOT widen to adjacent, sibling, or "close enough" titles.
