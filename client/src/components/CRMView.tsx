@@ -58,7 +58,7 @@ function defaultColumns(): CrmColumnDef[] {
 }
 
 /** Numeric columns get monospace + center-align by default. */
-const NUMERIC_TYPES: readonly CrmColumnType[] = ["number"];
+const NUMERIC_TYPES: readonly CrmColumnType[] = ["number", "counter"];
 
 /** Backward-compat shape for components that still consume `CustomColumn[]`
  *  (KanbanCard, KanbanFieldsMenu, CRMDrawer). Derived from the column schema. */
@@ -1190,6 +1190,7 @@ const TYPE_LABELS: Record<CrmColumnType, string> = {
   text: "Text",
   longtext: "Long text",
   number: "Number",
+  counter: "Counter",
   dropdown: "Dropdown",
   email: "Email",
   phone: "Phone",
@@ -1209,7 +1210,7 @@ const TYPE_LABELS: Record<CrmColumnType, string> = {
  *  Built-in types like "stage", "temp", "person", "select" are excluded — those
  *  are reserved for built-in columns and have specialized rendering. */
 const USER_PICKABLE_TYPES: CrmColumnType[] = [
-  "text", "longtext", "number", "dropdown", "email", "phone", "link", "date", "checkbox", "page", "file",
+  "text", "longtext", "number", "counter", "dropdown", "email", "phone", "link", "date", "checkbox", "page", "file",
 ];
 
 const DROPDOWN_PALETTE = [
@@ -1242,6 +1243,26 @@ function NumberCellEditor({
       align="center"
       onSave={(v) => onSave(Number(v) || 0)}
     />
+  );
+}
+
+/** Counter cell — a tally you bump one at a time (e.g. "Follow-ups sent").
+ *  Shows the count with −/+ steppers; clicking a stepper writes immediately
+ *  and never opens a text editor. Floors at 0. */
+function CounterCellEditor({
+  value, onSave,
+}: { value: number | null | undefined; onSave: (n: number) => void }) {
+  const n = value ?? 0;
+  const step = (delta: number) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSave(Math.max(0, n + delta));
+  };
+  return (
+    <div className="counter-cell" onClick={(e) => e.stopPropagation()}>
+      <button className="counter-btn" onClick={step(-1)} disabled={n <= 0} aria-label="Decrease" title="Decrease">−</button>
+      <span className="counter-val">{n}</span>
+      <button className="counter-btn" onClick={step(1)} aria-label="Increase" title="Increase">+</button>
+    </div>
   );
 }
 
@@ -3048,6 +3069,7 @@ function TableView({
       const setOptions = (next: CrmDropdownOption[]) => replaceCol({ ...col, options: next });
       switch (col.type) {
         case "number":   return <NumberCellEditor value={val ? Number(val) : null} onSave={(n) => setVal(String(n))} />;
+        case "counter":  return <CounterCellEditor value={val ? Number(val) : null} onSave={(n) => setVal(String(n))} />;
         case "dropdown": return <DropdownCellEditor value={val} options={col.options ?? []} onSave={setVal} onOptionsChange={setOptions} />;
         case "email":    return <EmailCellEditor value={val} onSave={setVal} />;
         case "phone":    return <EditableCell value={val} onSave={setVal} />;
@@ -3822,6 +3844,7 @@ export function CRMDrawer({
         : undefined;
       switch (col.type) {
         case "number":   return <NumberCellEditor value={val ? Number(val) : null} onSave={(n) => setVal(String(n))} />;
+        case "counter":  return <CounterCellEditor value={val ? Number(val) : null} onSave={(n) => setVal(String(n))} />;
         case "dropdown": return <DropdownCellEditor value={val} options={col.options ?? []} onSave={setVal} onOptionsChange={setOptions} />;
         case "email":    return <EmailCellEditor value={val} onSave={setVal} />;
         case "link":     return <LinkCellEditor value={val} onSave={setVal} />;

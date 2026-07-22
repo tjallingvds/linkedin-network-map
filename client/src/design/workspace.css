@@ -2455,6 +2455,26 @@ button:focus-visible { outline-offset: 3px; }
   color: white;
 }
 
+/* Counter cell — tally with subtle −/+ steppers (e.g. "Follow-ups sent"). */
+.counter-cell {
+  display: inline-flex; align-items: center; gap: 5px;
+  width: 100%; justify-content: center;
+}
+.counter-val {
+  min-width: 16px; text-align: center;
+  font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text);
+}
+.counter-btn {
+  width: 18px; height: 18px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 4px; border: 1px solid var(--hairline);
+  background: transparent; color: var(--text-mute);
+  font-size: 13px; line-height: 1; cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.counter-btn:hover { background: var(--panel-2); color: var(--text); border-color: var(--hairline-strong); }
+.counter-btn:disabled { opacity: 0.35; cursor: default; }
+
 /* Sticky Person (first data column) — stays pinned to the left when the
    table scrolls horizontally. Now that _select is gone, Person sits at
    nth-child(1). Solid backgrounds + a higher z-index than non-sticky
