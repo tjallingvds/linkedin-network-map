@@ -229,6 +229,9 @@ export type CrmColumnType =
   | "text"
   | "longtext"
   | "number"
+  /** A number cell with +/- steppers — for tallies like "Follow-ups sent"
+   *  that you bump one at a time rather than type. Stored as a number. */
+  | "counter"
   | "dropdown"
   | "email"
   | "phone"
