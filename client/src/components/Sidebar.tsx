@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import {
-  IconNewChat, IconSidebar, IconUsers, IconSparkle, IconClose,
+  IconNewChat, IconSearch, IconSidebar, IconUsers, IconSparkle, IconClose,
 } from "../design/icons";
 import { useModal } from "./Modal";
 
@@ -81,13 +81,12 @@ export function Sidebar({
           </>
         ) : (
           <>
-            {/* Primary action — start a new discovery search that feeds the CRM. */}
-            <button className="nav-item nav-primary" onClick={onNewChat} title="New search">
-              <IconNewChat size={14} />
-              <span className="label">New search</span>
+            {/* Primary action — a search-field-styled pill that starts a new
+                discovery search feeding the CRM. */}
+            <button className="nav-search" onClick={onNewChat} title="New search">
+              <IconSearch size={14} />
+              <span className="nav-search-label">New search…</span>
             </button>
-
-            <div className="nav-divider" />
 
             {/* Boards first — the CRM is the home base. */}
             <NavSection
