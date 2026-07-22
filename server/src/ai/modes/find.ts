@@ -496,6 +496,10 @@ export async function runFind(
   onProgress?.(coverageMode
     ? `Searching ${namedFirmKeys.length} companies…`
     : `Searching the web for ${targetCount} matches…`);
+  // Consecutive rounds that surfaced nobody new. Coverage mode keeps sweeping
+  // for MORE people per firm (depth) after breadth is done and only stops once
+  // this hits 2 — genuine exhaustion, not one unlucky focused pass.
+  let dryRounds = 0;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const remaining = targetCount - allPeople.length;
     // Count-driven briefs stop once the ask is met; coverage-driven briefs
@@ -508,15 +512,17 @@ export async function runFind(
         console.log(`[find] search budget exhausted (${allPeople.length} found) — stopping`);
         break;
       }
-      if (coverageMode) {
-        if (uncoveredFirms().length === 0) {
-          console.log(`[find] all ${namedFirmKeys.length} companies covered/exhausted — stopping`);
-          break;
-        }
-      } else if (allPeople.length >= satisfyingFloor) {
+      if (!coverageMode && allPeople.length >= satisfyingFloor) {
         console.log(`[find] reached satisfying floor (${allPeople.length}/${targetCount}) — stopping`);
         break;
       }
+      // Coverage mode does NOT stop the moment every firm is covered-or-
+      // exhausted: the brief asked for ALL the people at each company, so once
+      // breadth is done we keep sweeping the covered firms for MORE people
+      // (depth). Termination is the dry-round counter below (two rounds with
+      // nobody new) plus the credit / time / MAX_ROUNDS caps — that's what
+      // "done" means. (Previously it broke as soon as uncoveredFirms() emptied,
+      // capping the result at roughly one person per company.)
       const elapsed = Date.now() - searchStartedAt;
       if (elapsed >= SEARCH_TIME_BUDGET_MS) {
         console.log(`[find] time budget spent (${Math.round(elapsed / 1000)}s, ${allPeople.length} found) — stopping`);
@@ -671,11 +677,19 @@ export async function runFind(
     // the loop. (The old "stop once you have 30% and a round added <3" break
     // is gone — that's what made big briefs give up early.)
     //
-    // Coverage mode is exempt: a round can add zero NEW people (dupes of firms
-    // already covered) while other named companies still have nobody. Ending
-    // there would abandon the uncovered firms — the exact "gave up before it
-    // finished the list" bug. Let the per-firm exhaustion counter + caps decide.
-    if (!coverageMode && newCount === 0) break;
+    // Coverage mode is exempt from the single-round rule: one dry round can be a
+    // focused pass at a couple of stubborn firms while productive firms still
+    // have more people to surface. Only stop after TWO consecutive rounds add
+    // nobody new — genuine exhaustion, whether in the breadth or the depth phase.
+    if (newCount === 0) {
+      if (!coverageMode) break;
+      if (++dryRounds >= 2) {
+        console.log(`[find] coverage: 2 dry rounds — exhausted (${allPeople.length} people, ${coveredFirms.size}/${namedFirmKeys.length} companies) — stopping`);
+        break;
+      }
+    } else {
+      dryRounds = 0;
+    }
   }
 
   // Count-driven briefs cap at the ask; coverage-driven briefs return
@@ -742,13 +756,23 @@ export async function runFind(
   if (coverageMode) {
     const covered = coveredFirms.size;
     const total = namedFirmKeys.length;
-    const missing = uncoveredFirms().map((k) => firmByKey.get(k)!).filter(Boolean);
-    summary = covered >= total
-      ? `Found ${prospects.length} people across all ${total} companies.`
-      : `Found ${prospects.length} people across ${covered} of ${total} companies` +
-        (missing.length > 0 && missing.length <= 8
-          ? ` — no public matches for ${missing.join(", ")}. Try "find more" or broaden the roles for those.`
-          : `. Try "find more" for another pass at the ${missing.length} still missing.`);
+    // "Missing" = companies that surfaced NOBODY, regardless of whether the loop
+    // flagged them 'exhausted'. Using uncoveredFirms() here (which excludes
+    // exhausted firms) produced the contradiction "12 of 20 companies … 0 still
+    // missing" once the tail was all-exhausted — covered-vs-total is the truth.
+    const missing = namedFirmKeys
+      .filter((fk) => !coveredFirms.has(fk))
+      .map((k) => firmByKey.get(k)!)
+      .filter(Boolean);
+    const ppl = `${prospects.length} ${prospects.length === 1 ? "person" : "people"}`;
+    if (covered >= total) {
+      summary = `Found ${ppl} across all ${total} companies.`;
+    } else {
+      const lead = `Found ${ppl} across ${covered} of ${total} companies`;
+      summary = missing.length <= 8
+        ? `${lead} — no public matches found for ${missing.join(", ")}. Try "find more" or broaden the roles for those.`
+        : `${lead}. ${missing.length} companies had no public matches — try "find more" or broaden the roles.`;
+    }
   } else {
     summary = composeFindSummary(prospects.length, targetCount, funnelTotals, parsed);
   }
@@ -2181,7 +2205,7 @@ THE ONLY SOURCE OF TRUTH IS THE SNIPPETS BELOW.
 
 MANDATORY FILTERS — every candidate must pass ALL of these:
 1. FULL NAME: Written verbatim in a snippet. Real first AND last name (skip initials, "John S.").
-2. CURRENT EMPLOYER: Stated in the snippet as their current employer. ${extractionHint ? "If filters above list TARGET FIRMS, current employer must match one. If filters list PAST EMPLOYER TARGETS instead, current employer must NOT be any of those past-target firms — the person has LEFT." : ""}
+2. CURRENT EMPLOYER: Stated in the snippet as where they work NOW — not a role they once held. Press articles, award lists, conference bios, and book blurbs are frequently years out of date and name a job the person has since left. Treat the target-firm role as PAST and REJECT if ANY of these hold: the snippet uses past-tense or leaver language about that role ("was", "former", "ex-", "previously", "until 20xx", "left/departed"); the SAME snippet or an adjacent one names a DIFFERENT, later employer for the person; or a visible source date is old enough that the role has likely turned over. Surfacing a former employee as current is a hard failure — when currency is unclear, reject rather than guess. ${extractionHint ? "If filters above list TARGET FIRMS, the person's CURRENT employer must match one. If filters list PAST EMPLOYER TARGETS instead, current employer must NOT be any of those past-target firms — the person has LEFT." : ""}
 3. CURRENT TITLE: Stated in the snippet (LinkedIn headline, bio line, press quote attribution). Do NOT infer from article context.
 4. LINKEDIN PROFILE: Strongly prefer candidates with a linkedin.com/in/ URL in the snippet.
 ${extractionHint && /PAST EMPLOYER TARGETS/.test(extractionHint) ? `5. PAST EMPLOYMENT at a target: The snippet must name the candidate's prior role at one of the PAST EMPLOYER TARGETS — "ex-Celonis", "previously VP Sales at UiPath", a LinkedIn experience line, a departure announcement, etc. If this isn't in the snippet, reject.\n6. MUST HAVE LEFT: Evidence the person is no longer at the target firm — a newer role at a different company, a "left/departed/joined X from Y" mention, or a LinkedIn headline that names a non-target company. Still-employed candidates fail this filter.\n` : ""}
@@ -2191,7 +2215,7 @@ FAILURE MODES TO AVOID:
 - CLUSTER HARVESTING: If an article mentions 5 people at an event, do NOT extract all 5. Each must independently appear with their own name+title+employer.
 - KEYWORD CONFLATION: A profile mentioning "AI" at a "bank" is NOT automatically qualified. Check the actual title and actual employer.
 - ARTICLE AUTHORS/COMMENTERS: Writers of articles about the persona are NOT leads.
-- STALE DATA: If the source is old, the person may have moved on. Exclude or mark medium.
+- STALE / FORMER ROLE: A person named at the target firm in an OLD source may have moved on. If anything suggests the role is historical — past tense, "former/ex-", a later position elsewhere, an out-of-date article — REJECT rather than guess. A wrong "currently at X" is worse than a miss: the person was surfaced for a company they've already left.
 
 CONFIDENCE SCORING — be strict:
 - "high": Name, current employer (= target firm), current title (= target title), and LinkedIn URL all appear in the same snippet.
