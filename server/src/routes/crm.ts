@@ -523,6 +523,160 @@ router.get("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
   res.json({ contacts: rows.map(toCamelContact) });
 });
 
+/**
+ * Fire-and-forget enrichment for a single freshly-added contact — the
+ * "I shouldn't have to press Get email / Find background" path. Runs ONLY
+ * when the contact has a LinkedIn URL (the strong identifier Apollo needs
+ * for a confident 1:1 match, and the signal the user asked us to gate on).
+ *
+ * Fills any EMPTY contact-info fields (email / phone / title / company /
+ * location) from Apollo, then writes a short background brief from a Tavily +
+ * LLM pass — the same two enrichers the board-level /enrich and /background
+ * buttons run, but scoped to one row and triggered automatically on add.
+ *
+ * Deliberately async + swallowed: the POST /contacts response has already
+ * returned 201 by the time this runs, and the board's SSE subscribers get a
+ * "contact" push when it lands so the row updates live. Any failure is logged
+ * and dropped — auto-enrich is a bonus, never a reason the add itself fails.
+ */
+type BoardCol = { id: string; builtin?: boolean; label?: string; type?: string };
+
+function pickCustomCol(columns: BoardCol[], type: string, labelHints: string[]): string | null {
+  const customs = columns.filter((c) => !c.builtin);
+  const lc = labelHints.map((h) => h.toLowerCase()).filter(Boolean);
+  const exact = customs.find((c) => lc.includes((c.label ?? "").toLowerCase()));
+  if (exact) return exact.id;
+  const partial = customs.find((c) => {
+    const l = (c.label ?? "").toLowerCase();
+    return lc.some((h) => l.includes(h));
+  });
+  if (partial) return partial.id;
+  const sameType = customs.filter((c) => c.type === type);
+  if (sameType.length === 1) return sameType[0]!.id;
+  return null;
+}
+
+async function autoEnrichContact(args: {
+  contactId: string;
+  boardId: string;
+  columns: BoardCol[];
+  userId: string;
+  userKeys: ReturnType<typeof extractUserKeys>;
+}): Promise<void> {
+  const { contactId, boardId, columns, userId, userKeys } = args;
+  // Re-read the row so we patch against the persisted state (the caller may
+  // have written mapped custom-fields after the form values came in).
+  const r = await db
+    .selectFrom("crm_contacts")
+    .selectAll()
+    .where("id", "=", contactId)
+    .executeTakeFirst();
+  if (!r) return;
+  const linkedin = (r.linkedin ?? "").trim();
+  if (!linkedin) return; // gate: LinkedIn URL required
+
+  const targets = {
+    email:    pickCustomCol(columns, "email", ["email"]),
+    phone:    pickCustomCol(columns, "phone", ["phone", "mobile"]),
+    title:    pickCustomCol(columns, "text",  ["title", "role", "position", "job title"]),
+    company:  pickCustomCol(columns, "text",  ["company", "organization", "org", "firm", "employer"]),
+    location: pickCustomCol(columns, "text",  ["location", "city", "based", "based in", "country"]),
+  };
+  const cf = (r.custom_fields ?? {}) as Record<string, string>;
+  const readCell = (legacy: string | null | undefined, customId: string | null) =>
+    (customId ? (cf[customId] ?? "") : (legacy ?? "")).trim();
+
+  const legacyPatch: Record<string, unknown> = {};
+  const customMerge: Record<string, string> = {};
+
+  // ── Apollo: contact info ────────────────────────────────────────────────
+  if (apolloConfigured(userKeys)) {
+    try {
+      const parts = r.name.split(/\s+/).filter(Boolean);
+      const person = await apolloMatchPerson({
+        firstName: parts.length >= 2 ? parts[0] : undefined,
+        lastName: parts.length >= 2 ? parts.slice(1).join(" ") : undefined,
+        name: parts.length < 2 ? r.name : undefined,
+        organizationName: readCell(r.company, targets.company) || undefined,
+        linkedinUrl: linkedin,
+        userId,
+        userKeys,
+      });
+      if (person) {
+        const tryWrite = (
+          legacyKey: "email" | "phone" | "title" | "company",
+          legacyVal: string | null | undefined,
+          apolloVal: string | null | undefined,
+          customId: string | null,
+        ) => {
+          const value = (apolloVal ?? "").trim();
+          if (!value) return;
+          if (readCell(legacyVal, customId)) return; // don't clobber a value already there
+          if (!legacyVal || !legacyVal.trim()) legacyPatch[legacyKey] = value;
+          if (customId) customMerge[customId] = value;
+        };
+        tryWrite("email",   r.email,   person.email, targets.email);
+        const phone = person.phone_numbers?.[0]?.sanitized_number ?? person.phone_numbers?.[0]?.raw_number;
+        tryWrite("phone",   r.phone,   phone, targets.phone);
+        tryWrite("title",   r.title,   person.title, targets.title);
+        tryWrite("company", r.company, person.organization?.name, targets.company);
+        if (targets.location && !readCell(null, targets.location)) {
+          const loc = [person.city, person.state, person.country]
+            .map((s) => (s ?? "").trim()).filter(Boolean).join(", ");
+          if (loc) customMerge[targets.location] = loc;
+        }
+      }
+    } catch (err) {
+      console.warn(`[auto-enrich] apollo match failed for ${r.name}:`, (err as Error).message);
+    }
+  }
+
+  // ── Tavily + LLM: background brief ──────────────────────────────────────
+  if (!(r.background && r.background.trim().length > 0)) {
+    const tavilyKey = userKeys?.tavily ?? env.TAVILY_API_KEY;
+    const provider = availableProviders(userKeys)[0];
+    if (tavilyKey && provider) {
+      try {
+        const q = [r.name, r.company, "posts OR talk OR interview"].filter(Boolean).join(" ");
+        const results = await tavilySearch(q, { depth: "advanced", maxResults: 5, userId, userKeys });
+        if (results.length > 0) {
+          const context = results
+            .map((x) => `[${x.title}](${x.url})\n${(x.content ?? "").slice(0, 1500)}`)
+            .join("\n\n---\n\n");
+          const out = await aiJson<{ background: string }>(
+            provider,
+            "You write a short, factual background brief for a sales/BD rep about a single prospect. " +
+            "Pull 2-4 specific, recent, CONCRETE things from the search results: a post they wrote, a talk they gave, " +
+            "a product they shipped, a notable opinion or anecdote. Prefer the quirky and specific over generic platitudes. " +
+            "Cite EACH item inline with a markdown link to the source URL. " +
+            "Never invent facts not in the sources. Keep total length under 600 characters. " +
+            "No greeting, no preamble, no meta-commentary — just the bullet list.",
+            `Prospect: ${r.name}${r.title ? ", " + r.title : ""}${r.company ? " @ " + r.company : ""}\n\nSearch results:\n${context}\n\n` +
+            `Return {"background": "<markdown bullet list with inline [links](url), under 600 chars>"}.`,
+            { maxTokens: 900, userId, userKeys },
+          );
+          const trimmed = out.background?.trim();
+          if (trimmed) legacyPatch.background = trimmed;
+        }
+      } catch (err) {
+        console.warn(`[auto-enrich] background failed for ${r.name}:`, (err as Error).message);
+      }
+    }
+  }
+
+  if (Object.keys(customMerge).length > 0) {
+    legacyPatch.custom_fields = { ...cf, ...customMerge } as unknown as object;
+  }
+  if (Object.keys(legacyPatch).length === 0) return; // nothing new to write
+  legacyPatch.updated_at = new Date();
+  try {
+    await db.updateTable("crm_contacts").set(legacyPatch).where("id", "=", contactId).execute();
+    notifyBoard(boardId, "contact");
+  } catch (err) {
+    console.warn(`[auto-enrich] persist failed for ${contactId}:`, (err as Error).message);
+  }
+}
+
 router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
   const board = await ensureBoard(req.user!.id, req.params.boardId);
   if (!board) return res.status(404).json({ error: "board_not_found" });
@@ -641,6 +795,20 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
     .executeTakeFirstOrThrow();
   notifyBoard(board.id, "contact");
   res.status(201).json(toCamelContact(row));
+
+  // Auto-enrich on add: if the contact has a LinkedIn URL, fill empty
+  // contact-info fields + a background brief in the background so the user
+  // doesn't have to press "Get email" / "Find background". Fire-and-forget —
+  // the response is already sent; the board's live push updates the row.
+  if ((row.linkedin ?? "").trim()) {
+    void autoEnrichContact({
+      contactId: row.id,
+      boardId: board.id,
+      columns,
+      userId: req.user!.id,
+      userKeys: extractUserKeys(req),
+    });
+  }
 });
 
 router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) => {

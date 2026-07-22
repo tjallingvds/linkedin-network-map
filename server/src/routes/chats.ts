@@ -287,6 +287,25 @@ router.post("/:id/completion", async (req: AuthedRequest, res) => {
     console.warn("[chats] crm exclusion lookup failed:", (err as Error).message);
   }
 
+  // Also exclude the user's uploaded first-degree LinkedIn connections — they
+  // already know these people, so surfacing them in a discovery search wastes
+  // a result slot. Folded into the same exclusion set as CRM contacts (Find
+  // always applies it). Names are stored split (first/last) in the sales
+  // upload table; rejoin them the way Find compares names.
+  try {
+    const connRows = await db
+      .selectFrom("sales_analysis_connections")
+      .select(["first_name", "last_name"])
+      .where("user_id", "=", req.user!.id)
+      .execute();
+    for (const row of connRows) {
+      const name = [row.first_name, row.last_name].map((s) => (s ?? "").trim()).filter(Boolean).join(" ");
+      if (name) crmNames.push(name);
+    }
+  } catch (err) {
+    console.warn("[chats] connection exclusion lookup failed:", (err as Error).message);
+  }
+
   // Dedupe each set (case-insensitive) — same person can appear across turns
   // or on multiple boards.
   const dedupe = (names: string[]): string[] =>
