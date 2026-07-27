@@ -789,9 +789,20 @@ async function main() {
     eq("a reachable check reports success", okRes.ok, true);
     ok("and says how many it looked at", typeof okRes.checked === "number", okRes);
 
-    // Point the client at a dead port: the run must fail loudly, not read as clean.
-    const realBase = process.env.SMARTLEAD_BASE_URL;
-    process.env.SMARTLEAD_BASE_URL = "http://127.0.0.1:1/api/v1";
+    // A campaign whose leads can't be read must never be reported as a clean
+    // run: "checked 0, everything matches" is the most dangerous thing this
+    // screen could say, because it looks like reassurance.
+    // Needs a live campaign to read from — earlier sections removed it.
+    await db.insertInto("outreach_campaigns").values({
+      user_id: userId, board_id: boardId, provider_campaign_id: "4821", tier: "B", name: "Tier B",
+    }).onConflict((oc: any) => oc.doNothing()).execute();
+
+    fake.failNextLeadFetch = true;
+    const broken: any = await (await authed(`/api/outreach/board/${boardId}/reconcile`, { method: "POST" })).json();
+    eq("an unreadable campaign is counted", broken.unreadable >= 1, true);
+    eq("and nothing was checked", broken.checked, 0);
+    fake.failNextLeadFetch = false;
+
     const board2 = await db.insertInto("crm_boards")
       .values({ user_id: userId, name: "Unconnected", emoji: "📭" })
       .returning("id").executeTakeFirstOrThrow();
@@ -799,7 +810,6 @@ async function main() {
     eq("an unconnected board says so", noAcct.ok, false);
     ok("in words, not a stack trace", /connected/i.test(noAcct.error ?? ""), noAcct.error);
     await db.deleteFrom("crm_boards").where("id", "=", board2.id).execute();
-    process.env.SMARTLEAD_BASE_URL = realBase;
   }
 
   console.log("\n── Accounted for ──");

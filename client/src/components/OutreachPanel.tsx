@@ -272,10 +272,12 @@ export function OutreachPanel({
             <span>{st!.lastEvent ? "✓" : "…"}</span>
             <div>
               {st!.lastEvent
-                ? <>Smartlead last reached us <b>{timeAgo(st!.lastEvent.at)}</b> ({st!.lastEvent.type.toLowerCase().replace(/_/g, " ")}).</>
-                : <>Nothing has arrived from Smartlead yet. Until it does, replies and bounces
-                   won’t stop sending — check the URL above is saved in Smartlead and those
-                   four events are ticked.</>}
+                ? <>Smartlead has called this webhook — last <b>{timeAgo(st!.lastEvent.at)}</b>{" "}
+                   ({st!.lastEvent.type.toLowerCase().replace(/_/g, " ")}).</>
+                : <><b>Smartlead has never called this webhook.</b> That's separate from your API
+                   key: “Re-check with Smartlead” asks them questions and works on the key alone,
+                   but replies and bounces only stop sending when Smartlead calls <i>us</i>. Save
+                   the URL above in Smartlead and tick those four events.</>}
             </div>
           </div>
           <div className="au-actions">
@@ -291,16 +293,21 @@ export function OutreachPanel({
               try {
                 const c = await api.post<{
                   ok: boolean; error?: string; checked: number; campaigns: number;
-                  releaks: number; repliesRecovered: number;
+                  releaks: number; repliesRecovered: number; unreadable: number;
                 }>(`/api/outreach/board/${boardId}/reconcile`);
                 if (!c.ok) { onFlash(`Couldn’t reach Smartlead — ${c.error ?? "unknown error"}`); return; }
+                if (c.unreadable) {
+                  onFlash(`Couldn’t read ${c.unreadable} of ${c.campaigns} campaigns from Smartlead — check the API key.`);
+                  return;
+                }
+                if (!c.campaigns) { onFlash("No campaign is mapped to a group yet, so there was nothing to check."); return; }
                 const fixed = [
                   c.releaks ? `stopped ${c.releaks}` : "",
                   c.repliesRecovered ? `found ${c.repliesRecovered} missed ${c.repliesRecovered === 1 ? "reply" : "replies"}` : "",
                 ].filter(Boolean);
                 onFlash(fixed.length
-                  ? `Checked ${c.checked} with Smartlead — ${fixed.join(", ")}.`
-                  : `Checked ${c.checked} with Smartlead — everything matches.`);
+                  ? `Asked Smartlead about ${c.checked} ${c.checked === 1 ? "person" : "people"} — ${fixed.join(", ")}.`
+                  : `Asked Smartlead about ${c.checked} ${c.checked === 1 ? "person" : "people"} — everything matches.`);
                 await load();
               } catch (e) { onFlash(`Couldn’t reach Smartlead — ${(e as Error).message}`); }
               finally { setChecking(false); }

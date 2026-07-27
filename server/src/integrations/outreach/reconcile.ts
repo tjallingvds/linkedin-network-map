@@ -27,10 +27,13 @@ export interface ReconcileCounts {
   corrected: number;
   repliesRecovered: number;
   bounceAlerts?: number;
+  /** Campaigns whose leads couldn't be read from Smartlead. Reported, because
+   *  a run that checked nothing must never be described as "all matches". */
+  unreadable: number;
 }
 
 const zero = (): ReconcileCounts =>
-  ({ campaigns: 0, checked: 0, releaks: 0, corrected: 0, repliesRecovered: 0 });
+  ({ campaigns: 0, checked: 0, releaks: 0, corrected: 0, repliesRecovered: 0, unreadable: 0 });
 
 /** Reconcile a single connected board. */
 export async function reconcileAccount(account: OutreachAccount): Promise<ReconcileCounts> {
@@ -51,6 +54,7 @@ export async function reconcileAccount(account: OutreachAccount): Promise<Reconc
       slLeads = await getCampaignLeads(campaign.provider_campaign_id, apiKey);
     } catch (err) {
       console.error(`[reconcile] campaign ${campaign.provider_campaign_id} fetch failed:`, (err as Error).message);
+      counts.unreadable++;
       continue;
     }
     const byLeadId = new Map(slLeads.filter((l) => l.leadId).map((l) => [l.leadId as string, l]));

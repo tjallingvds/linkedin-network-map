@@ -21,6 +21,8 @@ export class FakeSmartlead {
   calls: Recorded[] = [];
   /** campaignId -> leads Smartlead "knows about" */
   leads = new Map<string, CampaignLeadState[]>();
+  /** Make the next lead-list read fail, to exercise the unreadable path. */
+  failNextLeadFetch = false;
   private nextId = 1000;
 
   constructor() {
@@ -75,6 +77,7 @@ export class FakeSmartlead {
 
     // GET /campaigns/{id}/leads — paginated list
     if (m && req.method === "GET") {
+      if (this.failNextLeadFetch) return json(500, { message: "Smartlead is having a moment" });
       const cid = m[1];
       const all = this.leads.get(cid) ?? [];
       const offset = Number(url.searchParams.get("offset") ?? 0);
