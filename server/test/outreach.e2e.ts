@@ -324,6 +324,18 @@ async function main() {
     .where("id", "=", cDoctor).executeTakeFirst();
   eq("a card past that stage is left where it is", doctorStage.stage, "Meeting");
 
+  // Smartlead's own spelling, straight from the list of events it offers,
+  // through the real route. If this is ignored — as it was when we matched the
+  // raw uppercase string — nobody is ever marked contacted and no card moves.
+  const raviLead = fake.leads.get("4821")!.find((l) => l.email.toLowerCase() === "r.mehta@acme.com")!;
+  await post({ event_type: "First Email Sent", campaign_id: 4821, lead_id: raviLead.id,
+               to_email: "r.mehta@acme.com" }, { reqId: "req-sent-label" });
+  await new Promise((r) => setTimeout(r, 500));
+  const raviRow: any = await db.selectFrom("crm_contacts").select(["outreach_status", "stage"])
+    .where("id", "=", cDupA).executeTakeFirst();
+  eq('"First Email Sent" is understood', raviRow?.outreach_status, "contacted");
+  eq("and it moved the card", raviRow?.stage, "Contacted");
+
   const sashaLead = fake.leads.get("4821")!.find((l) => l.email === "s.lim@acme.com")!;
   eq("valid signature accepted",
     (await post({ event_type: "EMAIL_REPLY", campaign_id: 4821, lead_id: sashaLead.id,

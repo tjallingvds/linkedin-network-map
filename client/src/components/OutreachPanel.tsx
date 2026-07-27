@@ -229,7 +229,9 @@ export function OutreachPanel({
             ? <Row label="Secret" value={setup.webhookSecret} onCopy={copy} secret />
             : <div className="au-note">The secret is shown once — when you connect, or make a new one.</div>}
           <div className="au-note">
-            Events: <code>EMAIL_SENT, EMAIL_REPLY, EMAIL_BOUNCE, LEAD_UNSUBSCRIBED, LEAD_CATEGORY_UPDATED</code>
+            Tick these four events: <b>First Email Sent</b>, <b>Email Reply</b>, <b>Email Bounce</b>,{" "}
+            <b>Lead Unsubscribed</b>. Without the first one nobody is ever marked contacted;
+            without the other three, sending never stops by itself.
           </div>
           <div className="au-actions">
             <button className="pill-btn" onClick={async () => {

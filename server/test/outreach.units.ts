@@ -22,6 +22,7 @@ import { stageStopsSending } from "../src/integrations/outreach/stage-hook.ts";
 import { acceptGroup } from "../src/integrations/outreach/openers/sort.ts";
 import { parseGroups, describedGroups } from "../src/integrations/outreach/groups.ts";
 import { parseRules, ruleFor } from "../src/integrations/outreach/stage-rules.ts";
+import { eventTypeOf } from "../src/integrations/outreach/events.ts";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => { cond ? pass++ : fail++; console.log(`${cond ? "✓" : "✗"} ${name}`); };
@@ -170,6 +171,25 @@ eq("old shape without rules", parseRules({ noSend: ["Replied"] }), []);
 eq("unknown trigger dropped", parseRules({ rules: [{ when: "opened", to: "x" }] }), []);
 eq("missing destination dropped", parseRules({ rules: [{ when: "sent", to: "  " }] }), []);
 eq("capped at 20", parseRules({ rules: Array.from({ length: 30 }, () => ({ when: "sent", to: "x" })) }).length, 20);
+
+// ── Webhook event names ────────────────────────────────────────────────────
+// Smartlead labels these "First Email Sent", "Email Reply", "Email Bounce",
+// "Lead Unsubscribed". If a spelling doesn't fold onto the constant we switch
+// on, the event is silently ignored: nobody is marked contacted and no card
+// moves. Every plausible spelling must land on the same name.
+console.log("\n— webhook event names —");
+const ev = (v: string) => eventTypeOf({ event_type: v } as never);
+
+eq("Smartlead's own label", ev("First Email Sent"), "FIRST_EMAIL_SENT");
+eq("the underscored constant", ev("FIRST_EMAIL_SENT"), "FIRST_EMAIL_SENT");
+eq("lower snake case", ev("first_email_sent"), "FIRST_EMAIL_SENT");
+eq("hyphenated", ev("first-email-sent"), "FIRST_EMAIL_SENT");
+eq("padded and doubled separators", ev("  first  email__sent "), "FIRST_EMAIL_SENT");
+eq("Email Reply", ev("Email Reply"), "EMAIL_REPLY");
+eq("Email Bounce", ev("Email Bounce"), "EMAIL_BOUNCE");
+eq("Lead Unsubscribed", ev("Lead Unsubscribed"), "LEAD_UNSUBSCRIBED");
+eq("the `event` key is read too", eventTypeOf({ event: "Email Reply" } as never), "EMAIL_REPLY");
+eq("nothing at all", eventTypeOf({} as never), "");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

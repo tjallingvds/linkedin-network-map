@@ -36,8 +36,22 @@ export interface SmartleadWebhookPayload {
   [k: string]: unknown;
 }
 
+/**
+ * Normalise an event name to the FIRST_EMAIL_SENT form we switch on.
+ *
+ * Smartlead names these events "First Email Sent", "Email Reply", "Email
+ * Bounce", "Lead Unsubscribed" in its own UI, and the payload has been seen
+ * carrying either that spacing or the underscored constant. Matching on the
+ * raw uppercase string means a webhook that says "First Email Sent" silently
+ * falls through to `ignored` — nobody would ever be marked contacted and no
+ * card would ever move. Fold spaces, hyphens and repeats to single
+ * underscores so every spelling lands on the same case.
+ */
 export function eventTypeOf(p: SmartleadWebhookPayload): string {
-  return String(p.event_type ?? p.event ?? "").toUpperCase();
+  return String(p.event_type ?? p.event ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }
 function emailOf(p: SmartleadWebhookPayload): string | null {
   const e = p.to_email ?? p.email ?? p.lead_email;

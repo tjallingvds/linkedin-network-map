@@ -23,9 +23,16 @@ import { uid, webhookUrl, ownedBoard, stopStagesOf } from "./shared.js";
 
 const router = Router();
 
-/** Events a board's webhook must be subscribed to in Smartlead. */
+/**
+ * The events to tick in Smartlead, named as Smartlead names them.
+ *
+ * These four are what the engine needs: the send marks people contacted and
+ * fires "when the email is sent" card moves; the other three stop sending and
+ * move cards. Smartlead's reply-category and bounce-threshold events are also
+ * handled if they arrive, but nothing depends on them being switched on.
+ */
 const WEBHOOK_EVENTS = [
-  "EMAIL_SENT", "EMAIL_REPLY", "EMAIL_BOUNCE", "LEAD_UNSUBSCRIBED", "LEAD_CATEGORY_UPDATED",
+  "First Email Sent", "Email Reply", "Email Bounce", "Lead Unsubscribed",
 ];
 
 /** Every board, with whether it's connected and switched on. */
