@@ -80,11 +80,18 @@ export function ruleFor(
  * hook a human drag does, which is what keeps "moved into a stop stage" and
  * "stopped sending" from drifting apart.
  */
+export type StageMoveOutcome =
+  /** Moved to this stage. */
+  | { moved: string }
+  /** Nothing happened, and why — so a caller can say so out loud instead of
+   *  leaving "the card didn't move" to look like a broken feature. */
+  | { moved: null; why: "board-off" | "no-rules" | "no-match" | "already-there" | "error" };
+
 export async function applyStageRule(
   userId: string,
   contactId: string,
   trigger: StageTrigger,
-): Promise<string | null> {
+): Promise<StageMoveOutcome> {
   try {
     const row = await db
       .selectFrom("crm_contacts as c")
@@ -92,10 +99,18 @@ export async function applyStageRule(
       .select(["c.stage as stage", "b.outreach_stage_map as map", "b.outreach_enabled as enabled"])
       .where("c.id", "=", contactId)
       .executeTakeFirst();
-    if (!row?.enabled) return null;
+    if (!row?.enabled) return { moved: null, why: "board-off" };
 
-    const rule = ruleFor(parseRules(row.map), trigger, row.stage ?? null);
-    if (!rule) return null;
+    const rules = parseRules(row.map);
+    if (!rules.length) return { moved: null, why: "no-rules" };
+
+    const rule = ruleFor(rules, trigger, row.stage ?? null);
+    if (!rule) {
+      // Distinguish "no rule for this" from "already where it would go" — the
+      // second is correct behaviour, the first usually means none was written.
+      const anyForTrigger = rules.some((r) => r.when === trigger);
+      return { moved: null, why: anyForTrigger ? "already-there" : "no-match" };
+    }
 
     // There is no server-side list of a board's stages to validate against —
     // stages live with the board on the client — so the destination is trusted
@@ -110,9 +125,9 @@ export async function applyStageRule(
     // Same path as a human drag: if the destination is a stop-sending stage,
     // the sequence pauses too.
     await onStageChange(userId, contactId, rule.to);
-    return rule.to;
+    return { moved: rule.to };
   } catch (err) {
     console.error(`[stage-rules] ${trigger} for ${contactId} failed:`, (err as Error).message);
-    return null;
+    return { moved: null, why: "error" };
   }
 }

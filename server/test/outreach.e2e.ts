@@ -888,6 +888,42 @@ async function main() {
 
   // A board Smartlead never calls has nothing else watching for replies, so it
   // is swept hourly — and stops being swept once real events show up.
+  // A card that should have moved but didn't — because the rule was written
+  // after the send was noticed — must be picked up on a later pass, not left
+  // behind for ever because the status only flips once.
+  console.log("\n── Card moves catch up ──");
+  {
+    const late = await add("Late Rule", "late.rule@acme.com", "B");
+    await db.updateTable("crm_contacts")
+      .set({ stage: "New", outreach_status: "contacted" })   // already caught up
+      .where("id", "=", late).execute();
+    await db.insertInto("outreach_campaign_memberships").values({
+      user_id: userId, contact_id: late,
+      campaign_id: (await db.selectFrom("outreach_campaigns").select("id")
+        .where("board_id", "=", boardId).executeTakeFirstOrThrow()).id,
+      provider_campaign_id: "4821", provider_lead_id: "77001", state: "active",
+    } as never).execute();
+    fake.leads.get("4821")!.push({ id: "77001", email: "late.rule@acme.com", status: "INPROGRESS" });
+
+    await authed(`/api/outreach/board/${boardId}/stage-rules`, {
+      method: "POST",
+      body: JSON.stringify({ rules: [{ when: "sent", from: "New", to: "Contacted" }] }),
+    });
+
+    const r: any = await (await authed(`/api/outreach/board/${boardId}/reconcile`, { method: "POST" })).json();
+    ok("a late rule still moves the card", r.cardsMoved >= 1, r);
+    const moved: any = await db.selectFrom("crm_contacts").select("stage")
+      .where("id", "=", late).executeTakeFirst();
+    eq("the card is where the rule says", moved?.stage, "Contacted");
+
+    // Running again must be a no-op, not a repeated move.
+    const again: any = await (await authed(`/api/outreach/board/${boardId}/reconcile`, { method: "POST" })).json();
+    eq("and a second pass moves nothing", again.cardsMoved, 0);
+
+    await db.deleteFrom("outreach_campaign_memberships").where("contact_id", "=", late).execute();
+    await db.deleteFrom("crm_contacts").where("id", "=", late).execute();
+  }
+
   console.log("\n── Hourly sweep when no webhook arrives ──");
   {
     const { reconcileWebhookless } = await import(`${R}/integrations/outreach/reconcile.ts`);

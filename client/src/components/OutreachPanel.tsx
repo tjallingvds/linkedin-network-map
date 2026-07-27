@@ -242,7 +242,12 @@ export function OutreachPanel({
         defaultPrompt={st!.defaultPrompt}
         disabled={!on} onChanged={load} onFlash={onFlash} />
 
-      {/* Excluded + stop rules live behind one popup. */}
+      <Sec title="Card moves">
+        <StageRules boardId={boardId} stages={stages} current={st!.stageRules ?? []}
+          onChanged={load} onFlash={onFlash} />
+      </Sec>
+
+      {/* Excluded + stop-sending stages live behind one popup. */}
       <div className="au-inline-row">
         <button className="pill-btn" onClick={() => setSkipOpen(true)}>
           {excluded?.length ?? 0} contacts excluded
@@ -301,7 +306,8 @@ export function OutreachPanel({
               try {
                 const c = await api.post<{
                   ok: boolean; error?: string; checked: number; campaigns: number;
-                  releaks: number; repliesRecovered: number; sendsNoticed: number; unreadable: number;
+                  releaks: number; repliesRecovered: number; sendsNoticed: number;
+                  cardsMoved: number; noRule: number; unreadable: number;
                 }>(`/api/outreach/board/${boardId}/reconcile`);
                 if (!c.ok) { onFlash(`Couldn’t reach Smartlead — ${c.error ?? "unknown error"}`); return; }
                 if (c.unreadable) {
@@ -311,9 +317,14 @@ export function OutreachPanel({
                 if (!c.campaigns) { onFlash("No campaign is mapped to a group yet, so there was nothing to check."); return; }
                 const fixed = [
                   c.sendsNoticed ? `caught up ${c.sendsNoticed} already emailed` : "",
+                  c.cardsMoved ? `moved ${c.cardsMoved} ${c.cardsMoved === 1 ? "card" : "cards"}` : "",
                   c.releaks ? `stopped ${c.releaks}` : "",
                   c.repliesRecovered ? `found ${c.repliesRecovered} missed ${c.repliesRecovered === 1 ? "reply" : "replies"}` : "",
                 ].filter(Boolean);
+                // Silence is how "the cards didn't move" turns into a mystery.
+                if (c.noRule && !c.cardsMoved) {
+                  fixed.push(`${c.noRule} had no card-move rule to match`);
+                }
                 onFlash(fixed.length
                   ? `Asked Smartlead about ${c.checked} ${c.checked === 1 ? "person" : "people"} — ${fixed.join(", ")}.`
                   : `Asked Smartlead about ${c.checked} ${c.checked === 1 ? "person" : "people"} — everything matches.`);
@@ -768,9 +779,6 @@ function SkipModal({ boardId, excluded, stages, stopStages, stageRules, onClose,
           <StopStages boardId={boardId} stages={stages} current={stopStages}
             onChanged={onChanged} onFlash={onFlash} />
 
-          <StageRules boardId={boardId} stages={stages} current={stageRules}
-            onChanged={onChanged} onFlash={onFlash} />
-
           <div className="au-modal-sec">
             <h4 className="au-sec-title">Not being emailed</h4>
             <span className="au-sec-hint">{excluded?.length ?? 0} people, and why.</span>
@@ -851,9 +859,8 @@ function StageRules({ boardId, stages, current, onChanged, onFlash }: {
 
   return (
     <>
-      <div className="au-modal-sec">
-        <h4 className="au-sec-title">Move the card automatically when…</h4>
-        <span className="au-sec-hint">First matching rule wins. Nothing moves unless a rule says so.</span>
+      <div className="au-hint" style={{ marginBottom: 8 }}>
+        First matching rule wins. Nothing moves unless a rule says so.
       </div>
       {!rules.length && <div className="au-empty">No automatic moves. Cards stay where you put them.</div>}
       {rules.map((r, i) => (
