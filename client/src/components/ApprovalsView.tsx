@@ -18,7 +18,7 @@ interface Pending {
   id: string; name: string; company: string | null; title: string | null;
   email: string | null; openingLine: string | null; source: string | null;
   status: string | null;
-  boardId: string; boardName: string; group: string;
+  boardId: string; boardName: string; group: string; groupName: string;
   /** False = no personal line; this person would get the plain template. */
   hasLine: boolean;
 }
@@ -162,7 +162,7 @@ export function ApprovalsView({ onFlash }: { onFlash: (m: string) => void }) {
                       <td className="au-t-name">
                         {r.name}
                         <div className="au-sub">{[r.title, r.company].filter(Boolean).join(" · ")}</div>
-                        <div className="au-sub">Group {r.group}</div>
+                        <div className="au-sub">{r.groupName || r.group}</div>
                       </td>
                       <td>
                         <textarea className="au-line" rows={2}

@@ -19,7 +19,9 @@ import { encryptSecret, decryptSecret } from "../src/integrations/crypto.ts";
 import { mapLeadStatusToState } from "../src/integrations/smartlead.ts";
 import { deriveName } from "../src/integrations/outreach/gate.ts";
 import { stageStopsSending } from "../src/integrations/outreach/stage-hook.ts";
-import { acceptGroup, hasDescriptions } from "../src/integrations/outreach/openers/sort.ts";
+import { acceptGroup } from "../src/integrations/outreach/openers/sort.ts";
+import { parseGroups, describedGroups } from "../src/integrations/outreach/groups.ts";
+import { parseRules, ruleFor } from "../src/integrations/outreach/stage-rules.ts";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => { cond ? pass++ : fail++; console.log(`${cond ? "✓" : "✗"} ${name}`); };
@@ -113,21 +115,61 @@ eq("unrelated id does not match", stageStopsSending("new", renamed), false);
 // Being in a group is what makes someone emailable, so a wrong "yes" here
 // mails the wrong person. Every uncertain answer must land on null.
 console.log("\n— group sorting —");
-const defs = { A: "Heads of AI at banks", B: "  ", C: "Everyone else in insurance" };
+const defs = parseGroups([
+  { id: "a1b2", name: "Bank AI leads", description: "Heads of AI at banks", prompt: "" },
+  { id: "c3d4", name: "Undescribed", description: "  ", prompt: "" },
+  { id: "e5f6", name: "Insurance ops", description: "Everyone else in insurance", prompt: "" },
+]);
 
-eq("accepts a described group", acceptGroup("A", defs), "A");
-eq("accepts lowercase", acceptGroup("c", defs), "C");
-eq("accepts padded", acceptGroup(" a ", defs), "A");
-eq("refuses a group with a blank description", acceptGroup("B", defs), null);
-eq("refuses an invented group", acceptGroup("D", defs), null);
-eq("refuses a sentence", acceptGroup("probably group A", defs), null);
+eq("accepts a described group", acceptGroup("a1b2", defs), "a1b2");
+eq("accepts different casing", acceptGroup("A1B2", defs), "a1b2");
+eq("accepts padded", acceptGroup(" e5f6 ", defs), "e5f6");
+eq("accepts the group's name", acceptGroup("Insurance ops", defs), "e5f6");
+eq("refuses a group with a blank description", acceptGroup("c3d4", defs), null);
+eq("refuses that group by name too", acceptGroup("Undescribed", defs), null);
+eq("refuses an invented id", acceptGroup("zzzz", defs), null);
+eq("refuses a sentence", acceptGroup("probably the bank one", defs), null);
 eq("refuses null", acceptGroup(null, defs), null);
 eq("refuses a number", acceptGroup(1, defs), null);
-eq("refuses everything when nothing is described", acceptGroup("A", {}), null);
+eq("refuses everything when nothing is described", acceptGroup("a1b2", []), null);
 
-eq("descriptions present", hasDescriptions(defs), true);
-eq("whitespace is not a description", hasDescriptions({ A: "   " }), false);
-eq("no descriptions at all", hasDescriptions({}), false);
+eq("described groups are counted", describedGroups(defs).length, 2);
+eq("whitespace is not a description", describedGroups(parseGroups([{ id: "x", description: "   " }])).length, 0);
+
+// parseGroups is the boundary against whatever is in the jsonb column.
+eq("junk is not a group list", parseGroups({ A: "old shape" }), []);
+eq("entries without an id are dropped", parseGroups([{ name: "no id" }]), []);
+eq("duplicate ids are dropped", parseGroups([{ id: "x" }, { id: "x" }]).length, 1);
+eq("a nameless group still gets a label", parseGroups([{ id: "x" }])[0]?.name, "Group 1");
+
+// ── Automatic card moves ───────────────────────────────────────────────────
+// These move a human's board without them touching it, so every rule that
+// isn't clearly asked for must do nothing.
+console.log("\n— card moves —");
+const RULES = parseRules({ rules: [
+  { when: "sent", from: "new", to: "contacted" },
+  { when: "sent", to: "also-contacted" },          // catch-all, lower priority
+  { when: "replied", to: "replied-stage" },
+  { when: "bounced", from: "contacted", to: "bad-address" },
+] });
+
+eq("rules parsed", RULES.length, 4);
+eq("a blank from becomes null", RULES[1]?.from, null);
+
+eq("matches on trigger and stage", ruleFor(RULES, "sent", "new")?.to, "contacted");
+eq("first match wins", ruleFor(RULES, "sent", "anything")?.to, "also-contacted");
+eq("no rule for that trigger", ruleFor(RULES, "unsubscribed", "new"), null);
+eq("from must match", ruleFor(RULES, "bounced", "new"), null);
+eq("from matching fires", ruleFor(RULES, "bounced", "contacted")?.to, "bad-address");
+eq("a card already there is left alone", ruleFor(RULES, "replied", "replied-stage"), null);
+eq("null stage still matches a catch-all", ruleFor(RULES, "replied", null)?.to, "replied-stage");
+
+// Anything malformed must be dropped rather than half-applied.
+eq("no rules at all", parseRules(null), []);
+eq("old shape without rules", parseRules({ noSend: ["Replied"] }), []);
+eq("unknown trigger dropped", parseRules({ rules: [{ when: "opened", to: "x" }] }), []);
+eq("missing destination dropped", parseRules({ rules: [{ when: "sent", to: "  " }] }), []);
+eq("capped at 20", parseRules({ rules: Array.from({ length: 30 }, () => ({ when: "sent", to: "x" })) }).length, 20);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

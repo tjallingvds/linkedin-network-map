@@ -5,6 +5,7 @@
 import { db } from "../../../db/index.js";
 import { selectEligible } from "../gate.js";
 import { deriveName } from "../names.js";
+import { listGroups } from "../groups.js";
 
 export interface OpenerRow {
   id: string;
@@ -37,6 +38,8 @@ export interface PendingRow extends OpenerRow {
   boardId: string;
   boardName: string;
   group: string;
+  /** The group's name as the operator wrote it — ids are internal. */
+  groupName: string;
   /** False when this person has no personal line — they'd receive the plain
    *  campaign template. Shown separately so sending them is a deliberate act. */
   hasLine: boolean;
@@ -44,7 +47,7 @@ export interface PendingRow extends OpenerRow {
 
 /** Every board+group that could actually send: switched on, campaign chosen. */
 async function sendableTargets(userId: string) {
-  return db
+  const rows = await db
     .selectFrom("outreach_campaigns as oc")
     .innerJoin("crm_boards as b", "b.id", "oc.board_id")
     .select(["oc.board_id as boardId", "b.name as boardName", "oc.tier as group"])
@@ -53,6 +56,13 @@ async function sendableTargets(userId: string) {
     .where("b.outreach_enabled", "=", true)
     .orderBy("b.name", "asc")
     .execute();
+
+  // Attach each group's display name, one board lookup per board.
+  const names = new Map<string, string>();
+  for (const boardId of new Set(rows.map((r) => r.boardId))) {
+    for (const g of await listGroups(boardId)) names.set(`${boardId}|${g.id}`, g.name);
+  }
+  return rows.map((r) => ({ ...r, groupName: names.get(`${r.boardId}|${r.group}`) ?? r.group }));
 }
 
 /**
@@ -96,6 +106,7 @@ export async function listPending(userId: string): Promise<PendingRow[]> {
         boardId: t.boardId,
         boardName: t.boardName,
         group: t.group,
+        groupName: t.groupName,
         hasLine: !!m?.opening_line,
       });
     }

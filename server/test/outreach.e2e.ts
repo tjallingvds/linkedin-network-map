@@ -217,7 +217,11 @@ async function main() {
   ok("all memberships carry provider_lead_id", memberships.every((m: any) => !!m.provider_lead_id));
   const statuses = await db.selectFrom("crm_contacts").select(["id", "outreach_status"])
     .where("id", "in", [cSasha, cDoctor, cComma]).execute();
-  ok("contacts marked contacted", statuses.every((s: any) => s.outreach_status === "contacted"), statuses);
+  // Handed to Smartlead is not the same as emailed: they sit at "queued" until
+  // Smartlead reports the first send. Marking them contacted here would date
+  // the touch wrongly and count people who may never receive anything.
+  ok("contacts marked queued, not contacted",
+    statuses.every((s: any) => s.outreach_status === "queued"), statuses);
 
   // Re-running the gate must now exclude everyone already in a live campaign.
   // The only survivor should be the bad-name contact, which was held back at
@@ -239,6 +243,16 @@ async function main() {
     catch { await new Promise((r) => setTimeout(r, 500)); }
   }
 
+  const token = "test-session-token-" + Date.now();
+  await db.insertInto("sessions").values({
+    user_id: userId, session_token: token, expires: new Date(Date.now() + 3600_000),
+  } as any).execute();
+  const authed = (path: string, init: RequestInit = {}) =>
+    fetch(`http://127.0.0.1:${PORT}${path}`, {
+      ...init,
+      headers: { "Content-Type": "application/json", Cookie: `nm_session=${token}`, ...(init.headers ?? {}) },
+    });
+
   const hookUrl = `http://127.0.0.1:${PORT}/hooks/smartlead/${account!.webhookToken}`;
   const post = async (payload: unknown, opts: { sig?: string; reqId?: string } = {}) => {
     const raw = JSON.stringify(payload);
@@ -254,6 +268,61 @@ async function main() {
   eq("bad signature rejected", (await post({ event_type: "EMAIL_SENT" }, { sig: "deadbeef" })).status, 401);
   eq("unknown token rejected",
     (await fetch(`http://127.0.0.1:${PORT}/hooks/smartlead/nope`, { method: "POST", body: "{}" })).status, 401);
+
+  // ── Automatic card moves ────────────────────────────────────────────────
+  // A rule moves a real card off a real webhook, and saving rules must not
+  // wipe the stop-sending stages that share the same column.
+  {
+    const rulesRes = await authed(`/api/outreach/board/${boardId}/stage-rules`, {
+      method: "POST",
+      body: JSON.stringify({ rules: [
+        { when: "sent", from: "New", to: "Contacted" },
+        { when: "replied", to: "Replied" },
+      ] }),
+    });
+    eq("rules save", rulesRes.status, 200);
+
+    await authed(`/api/outreach/board/${boardId}/stop-stages`, {
+      method: "POST", body: JSON.stringify({ stages: ["Meeting booked"] }),
+    });
+    const st1: any = await (await authed(`/api/outreach/board/${boardId}`)).json();
+    eq("saving stop-stages keeps the move rules", st1.stageRules.length, 2);
+    eq("and the stop stages", st1.stopStages, ["Meeting booked"]);
+
+    const rules2 = await authed(`/api/outreach/board/${boardId}/stage-rules`, {
+      method: "POST",
+      body: JSON.stringify({ rules: [{ when: "sent", from: "New", to: "Contacted" }] }),
+    });
+    eq("saving rules keeps the stop stages", rules2.status, 200);
+    const st2: any = await (await authed(`/api/outreach/board/${boardId}`)).json();
+    eq("stop stages survived", st2.stopStages, ["Meeting booked"]);
+  }
+
+  // The send webhook is what actually marks someone contacted — nothing else
+  // does, so a campaign paused in Smartlead before it ever sends leaves them
+  // truthfully "queued".
+  const comma = fake.leads.get("4821")!.find((l) => l.email === "p.nair@acme.com")!;
+  await post({ event_type: "EMAIL_SENT", campaign_id: 4821, lead_id: comma.id,
+               to_email: "p.nair@acme.com" }, { reqId: "req-sent-1" });
+  await new Promise((r) => setTimeout(r, 500));
+  const commaAfter: any = await db.selectFrom("crm_contacts").select("outreach_status")
+    .where("id", "=", cComma).executeTakeFirst();
+  eq("EMAIL_SENT is what marks them contacted", commaAfter.outreach_status, "contacted");
+
+  // …and the card moved itself, because a rule said to.
+  const commaStage: any = await db.selectFrom("crm_contacts").select("stage")
+    .where("id", "=", cComma).executeTakeFirst();
+  eq("the send rule moved the card", commaStage.stage, "Contacted");
+
+  // A second send for someone no longer in "New" must not move them again.
+  const doctorLead = fake.leads.get("4821")!.find((l) => l.email === "s.chen@acme.com")!;
+  await db.updateTable("crm_contacts").set({ stage: "Meeting" }).where("id", "=", cDoctor).execute();
+  await post({ event_type: "EMAIL_SENT", campaign_id: 4821, lead_id: doctorLead.id,
+               to_email: "s.chen@acme.com" }, { reqId: "req-sent-2" });
+  await new Promise((r) => setTimeout(r, 500));
+  const doctorStage: any = await db.selectFrom("crm_contacts").select("stage")
+    .where("id", "=", cDoctor).executeTakeFirst();
+  eq("a card past that stage is left where it is", doctorStage.stage, "Meeting");
 
   const sashaLead = fake.leads.get("4821")!.find((l) => l.email === "s.lim@acme.com")!;
   eq("valid signature accepted",
@@ -451,18 +520,8 @@ async function main() {
   // ── 9. Background export job over real HTTP (auth + polling) ────────────
   console.log("\n── Background export job ──");
   fake.reset();
-  const token = "test-session-token-" + Date.now();
-  await db.insertInto("sessions").values({
-    user_id: userId, session_token: token, expires: new Date(Date.now() + 3600_000),
-  } as any).execute();
   await add("Nina Kovac", "n.kovac@acme.com", "B");
   await add("Omar Haddad", "o.haddad@acme.com", "B");
-
-  const authed = (path: string, init: RequestInit = {}) =>
-    fetch(`http://127.0.0.1:${PORT}${path}`, {
-      ...init,
-      headers: { "Content-Type": "application/json", Cookie: `nm_session=${token}`, ...(init.headers ?? {}) },
-    });
 
   // The only door is the approval queue — a direct group-send no longer exists.
   const gone = await authed(`/api/outreach/board/${boardId}/send`, { method: "POST", body: JSON.stringify({ group: "B" }) });
@@ -507,16 +566,48 @@ async function main() {
     const quiet = await sortBoard(userId, boardId);
     eq("no descriptions sorts nobody", quiet, { considered: 0, sorted: 0, unmatched: 0, failed: 0 });
 
+    // Groups are a list you edit: names, descriptions and per-group opening
+    // instructions all round-trip, and a new one gets an id assigned.
     const saved = await authed(`/api/outreach/board/${boardId}/groups`, {
       method: "POST",
-      body: JSON.stringify({ A: "Heads of AI at banks", B: "   ", C: "Insurance operations leads" }),
+      body: JSON.stringify({ groups: [
+        { id: "B", name: "Tier B outbound", description: "Heads of AI at banks", prompt: "Lead with the bank angle." },
+        { name: "Insurance ops", description: "Insurance operations leads" },
+        { name: "Not described yet" },
+      ] }),
     });
-    eq("descriptions save", saved.status, 200);
-    // A blank description must not be stored — a group nobody described can
-    // never be assigned, and a stored "" would read as described.
+    eq("groups save", saved.status, 200);
     const status: any = await (await authed(`/api/outreach/board/${boardId}`)).json();
-    eq("described groups come back", Object.keys(status.groupDefs ?? {}).sort(), ["A", "C"]);
-    eq("blank group is not stored", status.groupDefs?.B, undefined);
+    eq("all three come back", status.groups.length, 3);
+    eq("an existing id is kept so nobody loses their group", status.groups[0].id, "B");
+    ok("a new group gets an id", !!status.groups[1].id && status.groups[1].id !== "B", status.groups[1]);
+    eq("per-group opener instructions round-trip", status.groups[0].prompt, "Lead with the bank angle.");
+    eq("a group with no description is still listed", status.groups[2].description, "");
+
+    // …and it can never be assigned to anyone.
+    const { acceptGroup } = await import(`${R}/integrations/outreach/openers/sort.ts`);
+    eq("the undescribed group is refused", acceptGroup(status.groups[2].id, status.groups), null);
+    eq("a described group is accepted", acceptGroup("B", status.groups), "B");
+
+    // Removing a group un-groups its people rather than leaving them pointed
+    // at something that no longer exists.
+    const orphan = await add("Will Be Orphaned", "orphan@acme.com", "B");
+    const shrunk: any = await (await authed(`/api/outreach/board/${boardId}/groups`, {
+      method: "POST",
+      body: JSON.stringify({ groups: status.groups.filter((g: any) => g.id !== "B") }),
+    })).json();
+    ok("removing a group reports who lost it", shrunk.ungrouped >= 1, shrunk);
+    const after: any = await db.selectFrom("crm_contacts").select(["tier", "group_reason"])
+      .where("id", "=", orphan).executeTakeFirst();
+    eq("their group is cleared", after?.tier, null);
+    eq("and the reason says why", after?.group_reason, "Their group was removed");
+    await db.deleteFrom("crm_contacts").where("id", "=", orphan).execute();
+
+    // Put group B back for the rest of the suite.
+    await authed(`/api/outreach/board/${boardId}/groups`, {
+      method: "POST",
+      body: JSON.stringify({ groups: [{ id: "B", name: "Tier B outbound", description: "Heads of AI at banks" }] }),
+    });
 
     // Sending off means the sorter stays out of it entirely.
     await db.updateTable("crm_boards").set({ outreach_enabled: false }).where("id", "=", boardId).execute();
@@ -525,11 +616,11 @@ async function main() {
     await db.updateTable("crm_boards").set({ outreach_enabled: true }).where("id", "=", boardId).execute();
 
     // A hand-set group is never revisited: the default pass only fills gaps.
-    const held = await add("Hand Sorted", "hand.sorted@acme.com", "A");
+    const held = await add("Hand Sorted", "hand.sorted@acme.com", "B");
     await db.updateTable("crm_contacts").set({ group_reason: "set by hand" }).where("id", "=", held).execute();
     const grouped = await db.selectFrom("crm_contacts").select(["tier", "group_reason"])
       .where("id", "=", held).executeTakeFirst();
-    eq("hand-set group survives with its reason", [grouped?.tier, grouped?.group_reason], ["A", "set by hand"]);
+    eq("hand-set group survives with its reason", [grouped?.tier, grouped?.group_reason], ["B", "set by hand"]);
     await db.deleteFrom("crm_contacts").where("id", "=", held).execute();
   }
 

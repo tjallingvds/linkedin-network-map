@@ -428,9 +428,10 @@ const contactInput = z.object({
   // string is accepted — validation only guards length.
   stage: z.string().min(1).max(40).optional(),
   temp: z.enum(TEMPS).optional(),
-  /** Outreach group: "A" | "B" | "C", or null/"" to take them out of one.
-   *  Stored in the `tier` column. Only people in a group can be emailed. */
-  group: z.enum(["A", "B", "C"]).nullish(),
+  /** Outreach group id, or null/"" to take them out of one. Groups are
+   *  defined per board; stored in the `tier` column. Only people in a group
+   *  can be emailed. */
+  group: z.string().max(64).nullish(),
   sent: z.number().int().min(0).optional(),
   opens: z.number().int().min(0).optional(),
   replies: z.number().int().min(0).optional(),

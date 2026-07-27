@@ -11,8 +11,8 @@ import { env } from "../../env.js";
 import type { AuthedRequest } from "../../auth/session.js";
 
 /** Content groups a contact can be placed in. */
-export const GROUPS = ["A", "B", "C"] as const;
-export type Group = (typeof GROUPS)[number];
+/** A group is identified by its board-scoped id; see integrations/outreach/groups.ts. */
+export type Group = string;
 
 export const uid = (req: AuthedRequest): string => req.user!.id;
 

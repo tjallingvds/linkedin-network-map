@@ -258,9 +258,14 @@ export async function exportTier(
         })
         .onConflict((oc) => oc.columns(["contact_id", "provider_campaign_id"]).doNothing())
         .execute();
+      // Handed over, not yet sent. Smartlead decides when the first email
+      // actually goes out, so "contacted" is only set when it tells us it
+      // did (events.ts, on EMAIL_SENT). Claiming it here would date the
+      // touch wrongly and mark people emailed who never were — e.g. if the
+      // campaign is paused in Smartlead before it ever sends.
       await db
         .updateTable("crm_contacts")
-        .set({ outreach_status: "contacted", outreach_status_at: new Date() })
+        .set({ outreach_status: "queued", outreach_status_at: new Date() })
         .where("id", "=", c.id)
         .execute();
       pushed++;

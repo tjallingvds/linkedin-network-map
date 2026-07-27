@@ -16,7 +16,8 @@ import { getAccountByBoard } from "../../integrations/outreach/accounts.js";
 import { listCampaigns } from "../../integrations/smartlead.js";
 import { selectEligible, selectExcluded, exportTier } from "../../integrations/outreach/gate.js";
 import { createJob, setProgress, finishJob, failJob, getJob } from "../../integrations/outreach/jobs.js";
-import { uid, ownedBoard, GROUPS } from "./shared.js";
+import { uid, ownedBoard } from "./shared.js";
+import { listGroups } from "../../integrations/outreach/groups.js";
 
 const router = Router();
 
@@ -72,7 +73,7 @@ router.post("/board/:boardId/campaigns", async (req: AuthedRequest, res: Respons
   const board = await ownedBoard(req);
   if (!board) return res.status(404).json({ error: "board_not_found" });
   const parsed = z.object({
-    group: z.enum(GROUPS),
+    group: z.string().min(1).max(64),
     providerCampaignId: z.string().min(1),
     name: z.string().optional(),
   }).safeParse(req.body);
@@ -104,12 +105,16 @@ router.get("/board/:boardId/readiness", async (req: AuthedRequest, res: Response
     .selectFrom("crm_contacts").select(["id", "email", "tier"])
     .where("board_id", "=", board.id).where("user_id", "=", userId).execute();
 
-  const byGroup: Record<string, number> = { A: 0, B: 0, C: 0 };
+  const groups = await listGroups(board.id);
+  const byGroup: Record<string, number> = {};
+  const ready: Record<string, number> = {};
+  for (const g of groups) { byGroup[g.id] = 0; ready[g.id] = 0; }
   for (const r of rows) if (r.tier && r.tier in byGroup) byGroup[r.tier]++;
 
   // Ready counts run the real filter, so this can never disagree with a send.
-  const ready: Record<string, number> = { A: 0, B: 0, C: 0 };
-  for (const g of GROUPS) ready[g] = (await selectEligible(userId, { tier: g, boardId: board.id })).length;
+  for (const g of groups) {
+    ready[g.id] = (await selectEligible(userId, { tier: g.id, boardId: board.id })).length;
+  }
 
   const campaigns = await db
     .selectFrom("outreach_campaigns").select(["tier"])
@@ -134,7 +139,7 @@ router.get("/board/:boardId/excluded", async (req: AuthedRequest, res: Response)
 router.get("/board/:boardId/preview", async (req: AuthedRequest, res: Response) => {
   const board = await ownedBoard(req);
   if (!board) return res.status(404).json({ error: "board_not_found" });
-  const parsed = z.object({ group: z.enum(GROUPS) }).safeParse(req.query);
+  const parsed = z.object({ group: z.string().min(1).max(64) }).safeParse(req.query);
   if (!parsed.success) return res.status(400).json({ error: "invalid_query" });
   const list = await selectEligible(uid(req), { tier: parsed.data.group, boardId: board.id, limit: 2000 });
   res.json({

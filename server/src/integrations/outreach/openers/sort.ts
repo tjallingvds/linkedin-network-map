@@ -18,9 +18,7 @@ import { db } from "../../../db/index.js";
 import { aiJson } from "../../../ai/json.js";
 import { availableProviders } from "../../../ai/providers.js";
 import type { UserKeys } from "../../../ai/user-keys.js";
-
-export type Group = "A" | "B" | "C";
-export interface GroupDefs { A?: string; B?: string; C?: string }
+import { parseGroups, describedGroups, type OutreachGroup } from "../groups.js";
 
 export interface SortResult { considered: number; sorted: number; unmatched: number; failed: number }
 
@@ -35,7 +33,8 @@ Rules:
    company size that isn't stated.
 4. "why" must be one short clause quoting the fact you used.
 
-Return strict JSON: {"group": "A"|"B"|"C"|null, "why": string}`;
+Answer with the group's exact id.
+Return strict JSON: {"group": <id>|null, "why": string}`;
 
 /** The facts we let the sorter see. */
 function factsFor(c: {
@@ -59,34 +58,33 @@ function factsFor(c: {
 }
 
 /**
- * Accept a group the sorter proposed — but only if the operator actually
- * described it. Guards against a made-up group ("D"), a group left blank, and
- * any non-answer, all of which mean "leave this person out".
+ * Accept a group the sorter proposed — but only if it is one the operator
+ * actually described. Guards against an invented id, a group with no
+ * description, and any non-answer, all of which mean "leave this person out".
  */
-export function acceptGroup(raw: unknown, defs: GroupDefs): Group | null {
-  const g = typeof raw === "string" ? raw.trim().toUpperCase() : "";
-  if (!(["A", "B", "C"] as string[]).includes(g)) return null;
-  return (defs[g as Group] ?? "").trim() ? (g as Group) : null;
-}
-
-/** Whether any group has been described at all. */
-export function hasDescriptions(defs: GroupDefs): boolean {
-  return (["A", "B", "C"] as Group[]).some((g) => (defs[g] ?? "").trim().length > 0);
+export function acceptGroup(raw: unknown, groups: OutreachGroup[]): string | null {
+  const g = typeof raw === "string" ? raw.trim() : "";
+  if (!g) return null;
+  const described = describedGroups(groups);
+  const hit = described.find((x) => x.id === g)
+    // Tolerate the model answering with the name, or with different casing.
+    ?? described.find((x) => x.id.toLowerCase() === g.toLowerCase())
+    ?? described.find((x) => x.name.toLowerCase() === g.toLowerCase());
+  return hit?.id ?? null;
 }
 
 /** Sort one contact. Returns null when nothing fits. */
 export async function sortOne(
-  defs: GroupDefs,
+  groups: OutreachGroup[],
   facts: Record<string, string>,
   userId: string,
   userKeys?: UserKeys,
-): Promise<{ group: Group | null; why: string }> {
+): Promise<{ group: string | null; why: string }> {
   const providers = availableProviders(userKeys);
   if (!providers.length) throw new Error("no_ai_provider");
 
-  const described = (["A", "B", "C"] as Group[])
-    .filter((g) => (defs[g] ?? "").trim())
-    .map((g) => `Group ${g}: ${defs[g]!.trim()}`)
+  const described = describedGroups(groups)
+    .map((g) => `id "${g.id}" — ${g.name}: ${g.description}`)
     .join("\n");
   if (!described) return { group: null, why: "no groups described" };
 
@@ -96,7 +94,7 @@ export async function sortOne(
     JSON.stringify(facts),
     { maxTokens: 200, userId, userKeys },
   );
-  const group = acceptGroup(out?.group, defs);
+  const group = acceptGroup(out?.group, groups);
   return { group, why: typeof out?.why === "string" ? out.why.slice(0, 300) : "" };
 }
 
@@ -114,9 +112,9 @@ export async function sortBoard(
     .where("id", "=", boardId).where("user_id", "=", userId).executeTakeFirst();
   if (!board?.outreach_enabled) return { considered: 0, sorted: 0, unmatched: 0, failed: 0 };
 
-  const defs = (board.outreach_groups ?? {}) as GroupDefs;
+  const groups = parseGroups(board.outreach_groups);
   // No descriptions means no opinion about anyone — never guess.
-  if (!hasDescriptions(defs)) return { considered: 0, sorted: 0, unmatched: 0, failed: 0 };
+  if (!describedGroups(groups).length) return { considered: 0, sorted: 0, unmatched: 0, failed: 0 };
 
   let q = db
     .selectFrom("crm_contacts")
@@ -141,7 +139,7 @@ export async function sortBoard(
     i++;
     opts.onProgress?.(`sorting ${i}/${contacts.length}`);
     try {
-      const { group, why } = await sortOne(defs, factsFor(c as never), userId, opts.userKeys);
+      const { group, why } = await sortOne(groups, factsFor(c as never), userId, opts.userKeys);
       if (!group) {
         await db.updateTable("crm_contacts")
           .set({ group_reason: why || "Matched none of the groups" })

@@ -14,6 +14,7 @@ import { getAccountByBoard } from "../accounts.js";
 import { contextFor, hasRealMaterial } from "./context.js";
 import { research } from "./research.js";
 import { sortAll } from "./sort.js";
+import { findGroup } from "../groups.js";
 
 export const DEFAULT_PROMPT = `You write the FIRST LINE of a cold B2B email.
 
@@ -48,9 +49,14 @@ Always obey, regardless of any instruction above:
 - One sentence, no greeting, no sign-off, no pitch.
 - Return strict JSON: {"line": string|null, "used": string[]}`;
 
-/** A board's own instructions, or the built-in prompt. */
-export function promptFor(custom?: string | null): string {
-  const c = (custom ?? "").trim();
+/**
+ * The instructions for one group, most specific first: the group's own, then
+ * the board's, then the built-in prompt. Whatever wins, the non-negotiable
+ * rules are appended — a custom prompt can change the voice, never switch off
+ * "never invent" or the JSON contract.
+ */
+export function promptFor(...candidates: Array<string | null | undefined>): string {
+  const c = candidates.map((x) => (x ?? "").trim()).find((x) => x.length > 0);
   return c ? c + NON_NEGOTIABLE : DEFAULT_PROMPT;
 }
 
@@ -60,6 +66,7 @@ export async function draftOne(
   userId: string,
   userKeys?: UserKeys,
   email?: { subject: string; body: string } | null,
+  /** Already-resolved instructions (see promptFor). Omit for the built-in. */
   prompt?: string | null,
 ): Promise<{ line: string | null; used: string[] }> {
   const providers = availableProviders(userKeys);
@@ -71,7 +78,7 @@ export async function draftOne(
   };
   const out = await aiJson<{ line?: string | null; used?: string[] }>(
     provider,
-    promptFor(prompt),
+    (prompt ?? "").trim() || DEFAULT_PROMPT,
     JSON.stringify(payload),
     { maxTokens: 300, userId, userKeys },
   );
@@ -110,11 +117,11 @@ export async function draftOpeners(
   }
   const contacts = await q.execute();
 
-  // Read the campaign's own first email once, so every line is written to lead
-  // into the message that actually follows it.
+  // Instructions for this group: its own if it has any, otherwise the board's.
   const boardRow = await db
     .selectFrom("crm_boards").select("opening_prompt").where("id", "=", boardId).executeTakeFirst();
-  const prompt = boardRow?.opening_prompt ?? null;
+  const groupRow = await findGroup(boardId, group);
+  const prompt = promptFor(groupRow?.prompt, boardRow?.opening_prompt);
 
   let campaignEmail: { subject: string; body: string } | null = null;
   const campaign = await db

@@ -67,7 +67,11 @@ export async function selectExcluded(userId: string, boardId: string): Promise<E
       if (blockedDomain) reason = `Never contact — ${blockedDomain} is blocked`;
       else if (c.outreach_status === "do_not_contact") reason = "Never contact";
       else if (c.outreach_status === "responded") reason = "They replied — sending stopped";
-      else if (memberState.get(c.id) === "active") reason = "Already being emailed";
+      else if (memberState.get(c.id) === "active") {
+        reason = c.outreach_status === "queued"
+          ? "Waiting for Smartlead to send the first email"
+          : "Already being emailed";
+      }
       else if (memberState.get(c.id) === "paused") reason = "Sending stopped";
       else if (memberState.get(c.id) === "blocked") reason = "Blocked at Smartlead";
       else if (c.outreach_status === "contacted") reason = "Already emailed";

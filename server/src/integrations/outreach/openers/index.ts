@@ -9,7 +9,7 @@
 export { contextFor, hasRealMaterial } from "./context.js";
 export { research } from "./research.js";
 export { draftOne, autodraftAll, promptFor, DEFAULT_PROMPT, type DraftResult } from "./draft.js";
-export { sortOne, sortBoard, sortAll, acceptGroup, hasDescriptions, type GroupDefs, type SortResult } from "./sort.js";
+export { sortOne, sortBoard, sortAll, acceptGroup, type SortResult } from "./sort.js";
 export {
   setOpener, listPending, pendingCount, undraftedCount, approveByIds,
   type OpenerRow, type PendingRow,

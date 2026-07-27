@@ -18,6 +18,7 @@ import { db } from "../../db/index.js";
 import type { OutreachAccount } from "./accounts.js";
 import { pauseContactCampaigns, suppressEmail, normalizeEmail } from "./suppress.js";
 import { alertUser } from "./alerts.js";
+import { applyStageRule } from "./stage-rules.js";
 
 /** Loose shape — Smartlead payload fields vary; read defensively. */
 export interface SmartleadWebhookPayload {
@@ -136,6 +137,7 @@ export async function processEvent(account: OutreachAccount, p: SmartleadWebhook
           .where("id", "=", match.contactId)
           .where((eb) => eb.or([eb("outreach_status", "is", null), eb("outreach_status", "=", "queued")]))
           .execute();
+        await applyStageRule(account.userId, match.contactId, "sent");
       }
       return "email_sent";
     }
@@ -148,6 +150,7 @@ export async function processEvent(account: OutreachAccount, p: SmartleadWebhook
       // without waiting for an unsubscribe click that may never come.
       if (isDoNotContact(category) && email) {
         await suppressEmail(account.userId, email, "opt_out");
+        await applyStageRule(account.userId, match.contactId, "unsubscribed");
         return "reply_do_not_contact";
       }
       // Real human reply → responded + pause the sequence (cross-nothing here,
@@ -160,6 +163,7 @@ export async function processEvent(account: OutreachAccount, p: SmartleadWebhook
         .where((eb) => eb.or([eb("outreach_status", "is", null), eb("outreach_status", "in", ["queued", "contacted"])]))
         .execute();
       await pauseContactCampaigns(account.userId, match.contactId);
+      await applyStageRule(account.userId, match.contactId, "replied");
       return "reply_human";
     }
 
@@ -175,6 +179,7 @@ export async function processEvent(account: OutreachAccount, p: SmartleadWebhook
         || /^5\d\d/.test(smtpCode);
       if (hard && email) {
         await suppressEmail(account.userId, email, "bounce_hard");
+        if (match) await applyStageRule(account.userId, match.contactId, "bounced");
         return "bounce_hard";
       }
       // Soft bounces used to be logged and then ignored forever, so an address
@@ -193,6 +198,7 @@ export async function processEvent(account: OutreachAccount, p: SmartleadWebhook
           .executeTakeFirst();
         if (Number(row?.n ?? 0) >= SOFT_BOUNCE_LIMIT) {
           await suppressEmail(account.userId, email, "bounce_soft");
+          if (match) await applyStageRule(account.userId, match.contactId, "bounced");
           return "bounce_soft_escalated";
         }
       }
@@ -203,6 +209,7 @@ export async function processEvent(account: OutreachAccount, p: SmartleadWebhook
       if (email) {
         // Opt-out of email is opt-out of you. (Cross-channel fan-out point.)
         await suppressEmail(account.userId, email, "opt_out");
+        if (match) await applyStageRule(account.userId, match.contactId, "unsubscribed");
         return "unsubscribed";
       }
       return "unsubscribed_no_email";

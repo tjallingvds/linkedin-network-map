@@ -2882,9 +2882,12 @@ function AddColumnButton({
 
 function TableView({
   contacts, onOpen, onPatch, columns, onColumnsChange, stages, rowHeight, onRowHeightChange, onOpenPage,
-  groupByCompany,
+  groupByCompany, outreachGroups,
 }: {
   contacts: CrmContact[];
+  /** The board's outreach groups, for the Group column. Empty when the board
+   *  has none — the cell then only offers "no group". */
+  outreachGroups: OutreachGroupOption[];
   onOpen: (c: CrmContact) => void;
   onPatch: (id: string, patch: Partial<CrmContact>) => void;
   columns: CrmColumnDef[];
@@ -3125,7 +3128,7 @@ function TableView({
       );
       case "stage":   return <StageCell stage={p.stage} stages={stages} onChange={(v) => onPatch(p.id, { stage: v })} />;
       case "temp":    return <TempCell  temp={p.temp}   onChange={(v) => onPatch(p.id, { temp: v })} />;
-      case "group":   return <GroupCell group={p.group} reason={p.groupReason} onChange={(v) => onPatch(p.id, { group: v })} />;
+      case "group":   return <GroupCell group={p.group} reason={p.groupReason} groups={outreachGroups} onChange={(v) => onPatch(p.id, { group: v })} />;
       case "lastTouch": return (
         <TouchCell
           at={p.lastTouchAt}
@@ -3809,27 +3812,31 @@ function PageOverlayEditor({
  * send filter only ever considers people who are in a group, and each group
  * maps to one Smartlead campaign on the Automations tab.
  */
-function GroupCell({ group, reason, onChange }: {
-  group: "A" | "B" | "C" | null;
+export interface OutreachGroupOption { id: string; name: string }
+
+function GroupCell({ group, reason, groups, onChange }: {
+  group: string | null;
   reason?: string | null;
-  onChange: (v: "A" | "B" | "C" | null) => void;
+  groups: OutreachGroupOption[];
+  onChange: (v: string | null) => void;
 }) {
   // Groups are assigned automatically, so the reason is what makes a wrong
   // call correctable instead of mysterious.
+  const name = groups.find((g) => g.id === group)?.name ?? group;
   const title = group
-    ? `Group ${group} — emailed via this group's campaign${reason ? `\n\nWhy: ${reason}` : ""}`
+    ? `${name} — emailed via this group's campaign${reason ? `\n\nWhy: ${reason}` : ""}`
     : `Not being emailed${reason ? `\n\nWhy: ${reason}` : ""}`;
   return (
     <select
       className={`group-cell${group ? " is-set" : ""}`}
       value={group ?? ""}
-      onChange={(e) => onChange((e.target.value || null) as "A" | "B" | "C" | null)}
+      onChange={(e) => onChange(e.target.value || null)}
       title={title}
     >
       <option value="">—</option>
-      <option value="A">A</option>
-      <option value="B">B</option>
-      <option value="C">C</option>
+      {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+      {/* A group that was removed still shows, so its people stay visible. */}
+      {group && !groups.some((g) => g.id === group) && <option value={group}>{group}</option>}
     </select>
   );
 }
@@ -4075,6 +4082,9 @@ export function CRMView({
     setInternalActiveId(id);
   };
   const [contacts, setContacts] = useState<CrmContact[]>([]);
+  // The board's outreach groups, so the Group column can name them. Absent or
+  // failing (board never connected to email) simply means no options.
+  const [outreachGroups, setOutreachGroups] = useState<OutreachGroupOption[]>([]);
   // People in the "in-progress middle" — sent invitations the user
   // is waiting on AND people they've already messaged via LinkedIn.
   // The toolbar exposes a binary filter:
@@ -4219,6 +4229,17 @@ export function CRMView({
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFlash]);
+
+  // The active board's outreach groups, for naming the Group column. A board
+  // that was never connected to email has none; that is not an error.
+  useEffect(() => {
+    if (!activeId) { setOutreachGroups([]); return; }
+    let live = true;
+    api.get<{ groups: OutreachGroupOption[] }>(`/api/outreach/board/${activeId}`)
+      .then((r) => { if (live) setOutreachGroups(r.groups ?? []); })
+      .catch(() => { if (live) setOutreachGroups([]); });
+    return () => { live = false; };
+  }, [activeId]);
 
   // Load the user's in-progress contacts (sent invitations + people
   // they've messaged) so the "Connected & new" filter can hide them.
@@ -5071,6 +5092,7 @@ export function CRMView({
           onRowHeightChange={saveRowHeight}
           onOpenPage={openPage}
           groupByCompany={groupByCompany}
+          outreachGroups={outreachGroups}
         />
       )}
       {viewMode === "overview" && (

@@ -14,21 +14,21 @@ import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { IconClose } from "../design/icons";
 
-type Group = "A" | "B" | "C";
-const GROUPS: Group[] = ["A", "B", "C"];
+/** A group as the operator defined it. `id` is internal; `name` is what shows. */
+interface Group { id: string; name: string; description: string; prompt: string }
 
-interface Campaign { id: string; board_id: string; provider_campaign_id: string; tier: Group; name: string | null; state: string }
+interface Campaign { id: string; board_id: string; provider_campaign_id: string; tier: string; name: string | null; state: string }
 interface BoardStatus {
   boardId: string; name: string; connected: boolean; enabled: boolean;
   webhookUrl: string | null; bounceThresholdPct: number;
-  stopStages: string[]; campaigns: Campaign[];
+  stopStages: string[]; stageRules: StageRule[]; campaigns: Campaign[];
   openingPrompt: string; defaultPrompt: string;
-  groupDefs: Partial<Record<Group, string>>;
+  groups: Group[];
   suppressionCount: number; unreadAlerts: number;
 }
 interface Readiness {
   connected: boolean; enabled: boolean; total: number; withEmail: number;
-  byGroup: Record<Group, number>; ready: Record<Group, number>; mappedGroups: Group[];
+  byGroup: Record<string, number>; ready: Record<string, number>; mappedGroups: string[];
 }
 interface ConnectResp { webhookUrl: string; webhookSecret: string; subscribeTo: string[] }
 interface RemoteCampaign { id: number; name: string; status: string }
@@ -41,6 +41,16 @@ interface ResultRow {
 }
 export interface StageOption { id: string; label: string }
 interface SortJob { status: "running" | "done" | "error"; progress: string | null; error: string | null; result: unknown }
+
+/** "When <when> and the card is in <from>, move it to <to>." */
+type Trigger = "sent" | "replied" | "bounced" | "unsubscribed";
+interface StageRule { when: Trigger; from?: string | null; to: string }
+const TRIGGERS: { id: Trigger; label: string }[] = [
+  { id: "sent", label: "the email is sent" },
+  { id: "replied", label: "they reply" },
+  { id: "bounced", label: "it bounces" },
+  { id: "unsubscribed", label: "they unsubscribe" },
+];
 
 /** One block of the page: a title row over a hairline, then a bordered body. */
 function Sec({ title, hint, chip, chipTone, muted, children }: {
@@ -156,7 +166,7 @@ export function OutreachPanel({
   return (
     <div className="au-wrap">
       <Hero on={on} connected boardName={boardName} onToggle={() => toggle(!on)}
-        waiting={GROUPS.reduce((n, g) => n + (ready?.ready[g] ?? 0), 0)}
+        waiting={Object.values(ready?.ready ?? {}).reduce((n, v) => n + v, 0)}
         people={ready?.total ?? 0} sent={t.sent} />
 
       {/* The two numbers that matter, side by side. */}
@@ -193,7 +203,8 @@ export function OutreachPanel({
       </div>
 
       {/* Groups — the core setup. */}
-      <Groups boardId={boardId} campaigns={st!.campaigns} readiness={ready} groupDefs={st!.groupDefs ?? {}}
+      <Groups boardId={boardId} campaigns={st!.campaigns} readiness={ready} groups={st!.groups ?? []}
+        defaultPrompt={st!.defaultPrompt}
         disabled={!on} onChanged={load} onFlash={onFlash} />
 
       {/* How the opening line gets written. */}
@@ -258,6 +269,7 @@ export function OutreachPanel({
 
       {skipOpen && (
         <SkipModal boardId={boardId} excluded={excluded} stages={stages} stopStages={st!.stopStages}
+          stageRules={st!.stageRules ?? []}
           onClose={() => setSkipOpen(false)} onChanged={load} onFlash={onFlash} />
       )}
     </div>
@@ -404,20 +416,20 @@ function Warnings({ boardId, threshold, bounceRate, sent, overBounce, onFlash, o
  * Groups → Smartlead campaigns, and the descriptions that decide who lands in
  * each one. You write who belongs; contacts are sorted in automatically.
  */
-function Groups({ boardId, campaigns, readiness, groupDefs, disabled, onChanged, onFlash }: {
+function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled, onChanged, onFlash }: {
   boardId: string; campaigns: Campaign[]; readiness: Readiness | null;
-  groupDefs: Partial<Record<Group, string>>;
+  groups: Group[]; defaultPrompt: string;
   disabled?: boolean; onChanged: () => void; onFlash: (m: string) => void;
 }) {
   const [remote, setRemote] = useState<RemoteCampaign[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const [defs, setDefs] = useState<Record<string, string>>({});
+  const [draft, setDraft] = useState<Group[]>([]);
+  const [openPrompt, setOpenPrompt] = useState<string | null>(null);
   const [sorting, setSorting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  useEffect(() => {
-    setDefs({ A: groupDefs.A ?? "", B: groupDefs.B ?? "", C: groupDefs.C ?? "" });
-  }, [groupDefs.A, groupDefs.B, groupDefs.C]);
+  const saved = JSON.stringify(groups);
+  useEffect(() => { setDraft(JSON.parse(saved) as Group[]); }, [saved]);
 
   useEffect(() => {
     void (async () => {
@@ -428,21 +440,38 @@ function Groups({ boardId, campaigns, readiness, groupDefs, disabled, onChanged,
     })();
   }, [boardId]);
 
-  const dirty = GROUPS.some((g) => (defs[g] ?? "") !== (groupDefs[g] ?? ""));
-  const described = GROUPS.filter((g) => (groupDefs[g] ?? "").trim()).length;
+  const dirty = JSON.stringify(draft) !== saved;
+  const described = groups.filter((g) => g.description.trim()).length;
+
+  const edit = (i: number, patch: Partial<Group>) =>
+    setDraft(draft.map((g, n) => (n === i ? { ...g, ...patch } : g)));
+
+  const add = () =>
+    setDraft([...draft, { id: "", name: `Group ${draft.length + 1}`, description: "", prompt: "" }]);
+
+  const remove = (g: Group, i: number) => {
+    const people = readiness?.byGroup[g.id] ?? 0;
+    const warning = people
+      ? `Remove “${g.name}”? Its ${people} ${people === 1 ? "person" : "people"} lose their group and stop being emailed.`
+      : `Remove “${g.name}”?`;
+    if (!window.confirm(warning)) return;
+    setDraft(draft.filter((_, n) => n !== i));
+  };
 
   const setCampaign = async (group: Group, providerCampaignId: string, name?: string) => {
     try {
-      await api.post(`/api/outreach/board/${boardId}/campaigns`, { group, providerCampaignId, name });
-      onFlash(`Group ${group} will use that campaign.`);
+      await api.post(`/api/outreach/board/${boardId}/campaigns`, { group: group.id, providerCampaignId, name });
+      onFlash(`${group.name} will use that campaign.`);
       onChanged();
     } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
   };
 
-  const saveDefs = async () => {
+  const save = async () => {
     try {
-      await api.post(`/api/outreach/board/${boardId}/groups`, defs);
-      onFlash("Saved. New contacts get sorted into these automatically.");
+      const r = await api.post<{ ungrouped: number }>(`/api/outreach/board/${boardId}/groups`, { groups: draft });
+      onFlash(r.ungrouped
+        ? `Saved. ${r.ungrouped} ${r.ungrouped === 1 ? "person" : "people"} lost their group and won’t be emailed.`
+        : "Saved. People are sorted into these automatically.");
       onChanged();
     } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
   };
@@ -474,44 +503,74 @@ function Groups({ boardId, campaigns, readiness, groupDefs, disabled, onChanged,
 
   return (
     <Sec title="Groups"
-      hint="Describe who belongs in each group and people are sorted in for you. Each group sends through its own Smartlead campaign.">
-      {GROUPS.map((g) => {
-        const mapped = campaigns.find((c) => c.tier === g);
-        const people = readiness?.byGroup[g] ?? 0;
+      hint="Describe who belongs in each group and people are sorted in for you. Each group has its own campaign and its own opening line.">
+      {!draft.length && (
+        <div className="au-empty">No groups yet. Add one and describe who belongs in it.</div>
+      )}
+      {draft.map((g, i) => {
+        const mapped = g.id ? campaigns.find((c) => c.tier === g.id) : undefined;
+        const people = g.id ? readiness?.byGroup[g.id] ?? 0 : 0;
         return (
-          <div key={g} className="au-group">
-            <span className="au-group-tag">{g}</span>
+          <div key={g.id || `new-${i}`} className="au-group">
+            <span className="au-group-tag">{i + 1}</span>
             <div className="au-group-body">
-              <textarea className="au-group-desc" rows={2} disabled={disabled}
-                placeholder={g === "A"
-                  ? "Who belongs here? e.g. Heads of AI or data at banks and insurers"
-                  : "Who belongs here? Leave blank to not use this group."}
-                value={defs[g] ?? ""}
-                onChange={(e) => setDefs({ ...defs, [g]: e.target.value })} />
               <div className="au-group-row">
-                <select className="au-input" disabled={disabled || loading}
+                <input className="au-input" disabled={disabled} value={g.name}
+                  placeholder="Name this group"
+                  onChange={(e) => edit(i, { name: e.target.value })} />
+                <span className="au-count">{people} {people === 1 ? "person" : "people"}</span>
+                <button className="pill-btn" disabled={disabled} onClick={() => remove(g, i)}
+                  title="Remove this group">Remove</button>
+              </div>
+              <textarea className="au-group-desc" rows={2} disabled={disabled}
+                placeholder="Who belongs here? e.g. Heads of AI or data at banks and insurers"
+                value={g.description}
+                onChange={(e) => edit(i, { description: e.target.value })} />
+              <div className="au-group-row">
+                <select className="au-input" disabled={disabled || loading || !g.id}
                   value={mapped?.provider_campaign_id ?? ""}
                   onChange={(e) => {
                     const id = e.target.value;
                     if (!id) return;
                     setCampaign(g, id, remote?.find((r) => String(r.id) === id)?.name);
                   }}>
-                  <option value="">{loading ? "Loading campaigns…" : "— pick a Smartlead campaign —"}</option>
+                  <option value="">
+                    {!g.id ? "Save first, then pick a campaign"
+                      : loading ? "Loading campaigns…" : "— pick a Smartlead campaign —"}
+                  </option>
                   {remote?.map((r) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
                   {mapped && !remote?.some((r) => String(r.id) === mapped.provider_campaign_id) && (
                     <option value={mapped.provider_campaign_id}>Campaign #{mapped.provider_campaign_id}</option>
                   )}
                 </select>
-                <span className="au-count">{people} {people === 1 ? "person" : "people"}</span>
+                <button className="pill-btn" disabled={disabled}
+                  onClick={() => setOpenPrompt(openPrompt === (g.id || `new-${i}`) ? null : (g.id || `new-${i}`))}>
+                  Opening line {g.prompt.trim() ? "· custom" : "· default"}
+                </button>
               </div>
+              {openPrompt === (g.id || `new-${i}`) && (
+                <>
+                  <textarea className="au-prompt" rows={7} disabled={disabled}
+                    placeholder={defaultPrompt}
+                    value={g.prompt}
+                    onChange={(e) => edit(i, { prompt: e.target.value })} />
+                  <div className="au-note">
+                    How this group’s first line is written. Leave blank to use the board’s
+                    instructions below. “Never invent” always applies, whatever you write here.
+                  </div>
+                </>
+              )}
             </div>
           </div>
         );
       })}
 
       <div className="au-actions">
-        <button className="pill-btn primary" disabled={disabled || !dirty} onClick={() => void saveDefs()}>
-          {dirty ? "Save descriptions" : "Saved"}
+        <button className="pill-btn primary" disabled={disabled || !dirty} onClick={() => void save()}>
+          {dirty ? "Save groups" : "Saved"}
+        </button>
+        <button className="pill-btn" disabled={disabled || draft.length >= 12} onClick={add}>
+          Add a group
         </button>
         <button className="pill-btn" disabled={disabled || sorting || !described} onClick={() => void sortNow(false)}>
           Sort the ungrouped now
@@ -579,8 +638,9 @@ function PromptEditor({ boardId, value, fallback, onFlash, onChanged }: {
 }
 
 /** Excluded contacts + the stages that stop sending, in one popup. */
-function SkipModal({ boardId, excluded, stages, stopStages, onClose, onChanged, onFlash }: {
-  boardId: string; excluded: Excluded[] | null; stages: StageOption[]; stopStages: string[];
+function SkipModal({ boardId, excluded, stages, stopStages, stageRules, onClose, onChanged, onFlash }: {
+  boardId: string; excluded: Excluded[] | null; stages: StageOption[];
+  stopStages: string[]; stageRules: StageRule[];
   onClose: () => void; onChanged: () => void; onFlash: (m: string) => void;
 }) {
   const byReason = new Map<string, Excluded[]>();
@@ -600,6 +660,9 @@ function SkipModal({ boardId, excluded, stages, stopStages, onClose, onChanged, 
         </div>
         <div className="app-modal-body au-modal-body">
           <StopStages boardId={boardId} stages={stages} current={stopStages}
+            onChanged={onChanged} onFlash={onFlash} />
+
+          <StageRules boardId={boardId} stages={stages} current={stageRules}
             onChanged={onChanged} onFlash={onFlash} />
 
           <div className="au-modal-sec">
@@ -649,6 +712,81 @@ function SkipModal({ boardId, excluded, stages, stopStages, onClose, onChanged, 
  * changes the label while keeping the id. Storing both means the rule keeps
  * working through a rename, which is otherwise a silent failure.
  */
+/**
+ * Card moves the email itself makes: "when the email is sent and the card is
+ * in New, move it to Contacted."
+ *
+ * Only offers stages that exist, so a rule can't point at nothing. A rule with
+ * no "from" applies wherever the card is; the first matching rule wins, which
+ * is why order is visible and editable.
+ */
+function StageRules({ boardId, stages, current, onChanged, onFlash }: {
+  boardId: string; stages: StageOption[]; current: StageRule[];
+  onChanged: () => void; onFlash: (m: string) => void;
+}) {
+  const saved = JSON.stringify(current);
+  const [rules, setRules] = useState<StageRule[]>([]);
+  useEffect(() => { setRules(JSON.parse(saved) as StageRule[]); }, [saved]);
+
+  const dirty = JSON.stringify(rules) !== saved;
+  const edit = (i: number, patch: Partial<StageRule>) =>
+    setRules(rules.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+
+  const save = async () => {
+    try {
+      // A rule with no destination would do nothing — drop it rather than store it.
+      const clean = rules.filter((r) => r.to);
+      await api.post(`/api/outreach/board/${boardId}/stage-rules`, { rules: clean });
+      setRules(clean);
+      onFlash(clean.length ? "Card moves saved." : "Card moves cleared.");
+      onChanged();
+    } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
+  };
+
+  return (
+    <>
+      <div className="au-modal-sec">
+        <h4 className="au-sec-title">Move the card automatically when…</h4>
+        <span className="au-sec-hint">First matching rule wins. Nothing moves unless a rule says so.</span>
+      </div>
+      {!rules.length && <div className="au-empty">No automatic moves. Cards stay where you put them.</div>}
+      {rules.map((r, i) => (
+        <div key={i} className="au-rule">
+          <span className="au-rule-w">When</span>
+          <select className="au-input" value={r.when}
+            onChange={(e) => edit(i, { when: e.target.value as Trigger })}>
+            {TRIGGERS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select>
+          <span className="au-rule-w">and the card is in</span>
+          <select className="au-input" value={r.from ?? ""}
+            onChange={(e) => edit(i, { from: e.target.value || null })}>
+            <option value="">any stage</option>
+            {stages.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+          <span className="au-rule-w">move it to</span>
+          <select className="au-input" value={r.to}
+            onChange={(e) => edit(i, { to: e.target.value })}>
+            <option value="">— pick a stage —</option>
+            {stages.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+          <button className="pill-btn" onClick={() => setRules(rules.filter((_, n) => n !== i))}>
+            Remove
+          </button>
+        </div>
+      ))}
+      <div className="au-actions" style={{ marginTop: 10 }}>
+        <button className="pill-btn primary" disabled={!dirty} onClick={() => void save()}>
+          {dirty ? "Save moves" : "Saved"}
+        </button>
+        <button className="pill-btn" disabled={rules.length >= 20}
+          onClick={() => setRules([...rules, { when: "sent", from: null, to: "" }])}>
+          Add a rule
+        </button>
+      </div>
+    </>
+  );
+}
+
 function StopStages({ boardId, stages, current, onChanged, onFlash }: {
   boardId: string; stages: StageOption[]; current: string[];
   onChanged: () => void; onFlash: (m: string) => void;

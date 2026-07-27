@@ -139,9 +139,10 @@ export interface CrmContact {
   linkedin: string | null;
   stage: CrmStage;
   temp: CrmTemp;
-  /** Outreach group: "A" | "B" | "C", or null when not being emailed.
+  /** Outreach group id (groups are defined per board), or null when not
+   *  being emailed.
    *  Only people in a group can be sent through Automations. */
-  group: "A" | "B" | "C" | null;
+  group: string | null;
   /** Why the sorter chose that group, so a wrong call is visible. Null when
    *  the group was set by hand. */
   groupReason: string | null;
