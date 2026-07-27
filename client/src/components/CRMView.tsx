@@ -15,9 +15,10 @@ import { useModal } from "./Modal";
 import { initials, avatarGrad } from "../design/mockProspects";
 import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
-  IconSend, IconMail, IconSparkle, IconLinkedIn, IconUsers, IconSearch, IconFilter,
+  IconSend, IconMail, IconSparkle, IconLinkedIn, IconUsers, IconSearch, IconFilter, IconBolt,
 } from "../design/icons";
 import { ExternalCleanupModal } from "./ExternalCleanupModal";
+import { OutreachPanel } from "./OutreachPanel";
 
 // ========== Column configuration ==========
 
@@ -4022,8 +4023,8 @@ export function CRMView({
   viewMode, setViewMode, onFlash,
   activeBoardId, onActiveBoardChange, onBoardsChange,
 }: {
-  viewMode: "kanban" | "table" | "overview";
-  setViewMode: (v: "kanban" | "table" | "overview") => void;
+  viewMode: "kanban" | "table" | "overview" | "automations";
+  setViewMode: (v: "kanban" | "table" | "overview" | "automations") => void;
   onFlash: (msg: string) => void;
   /** Optional controlled active board — when provided, changes bubble up via onActiveBoardChange. */
   activeBoardId?: string;
@@ -4815,7 +4816,16 @@ export function CRMView({
             <button className={viewMode === "table" ? "active" : ""} onClick={() => setViewMode("table")}>
               <IconSheet size={12} />Table
             </button>
+            <button
+              className={viewMode === "automations" ? "active" : ""}
+              onClick={() => setViewMode("automations")}
+              title="Email outreach for this board"
+            >
+              <IconBolt size={12} />Automations
+            </button>
           </div>
+          {/* Contact-list controls — irrelevant on the Automations page. */}
+          {viewMode !== "automations" && (<>
           <label className="crm-search">
             <IconSearch size={12} />
             <input
@@ -4877,6 +4887,7 @@ export function CRMView({
           {viewMode === "table" && (
             <StageFilterMenu stages={stages} value={stageFilter} onChange={setStageFilter} />
           )}
+          </>)}
         </div>
         <div className="crm-tools">
           {enriching && (
@@ -5035,6 +5046,9 @@ export function CRMView({
           onPatch={patchContact}
           stages={stages}
         />
+      )}
+      {viewMode === "automations" && active && (
+        <OutreachPanel boardId={active.id} boardName={active.name} stages={stages} onFlash={onFlash} />
       )}
 
       {importOpen && (

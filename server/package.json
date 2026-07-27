@@ -11,7 +11,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "migrate": "tsx src/db/migrate.ts up",
     "migrate:down": "tsx src/db/migrate.ts down",
-    "migrate:make": "tsx src/db/migrate.ts make"
+    "migrate:make": "tsx src/db/migrate.ts make",
+    "test:units": "tsx test/outreach.units.ts",
+    "test:outreach": "tsx test/outreach.e2e.ts"
   },
   "dependencies": {
     "@app/shared": "*",

@@ -17,6 +17,11 @@ const schema = z.object({
   TAVILY_API_KEY: z.string().optional(),
 
   APOLLO_API_KEY: z.string().optional(),
+
+  /** Override the Smartlead API base. Production leaves this unset; the
+   *  integration suite points it at a local fake so the whole outreach flow
+   *  can be exercised without touching a real account. */
+  SMARTLEAD_BASE_URL: z.string().url().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

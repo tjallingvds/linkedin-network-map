@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import {
-  IconNewChat, IconSearch, IconSidebar, IconUsers, IconSparkle, IconClose,
+  IconNewChat, IconSearch, IconSidebar, IconUsers, IconSparkle, IconClose, IconCheck,
 } from "../design/icons";
 import { useModal } from "./Modal";
 
@@ -37,12 +37,17 @@ interface Props {
   onDeleteSearch?: (id: string) => void | Promise<void>;
   onDeleteBoard?: (id: string) => void | Promise<void>;
   onRenameBoard?: (id: string, title: string) => void | Promise<void>;
+  /** Drafted emails waiting for a human, across every board. */
+  approvalCount?: number;
+  onOpenApprovals?: () => void;
+  approvalsActive?: boolean;
 }
 
 export function Sidebar({
   activeNav, onSelect, onNewChat, onNewBoard, savedSearches, lists,
   collapsed, onToggleCollapse, usage, onOpenSettings,
   onRenameSearch, onDeleteSearch, onRenameBoard, onDeleteBoard,
+  approvalCount = 0, onOpenApprovals, approvalsActive,
 }: Props) {
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
@@ -87,6 +92,25 @@ export function Sidebar({
               <IconSearch size={14} />
               <span className="nav-search-label">New search…</span>
             </button>
+
+            {/* Emails waiting on a human. Sits above the boards because it's
+                the one thing that blocks sending across all of them. */}
+            {onOpenApprovals && (
+              <div className="nav-section">
+                <div
+                  className={`nav-item nav-row ${approvalsActive ? "active" : ""}`}
+                  onClick={onOpenApprovals}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter") onOpenApprovals(); }}
+                  title="Emails waiting for your approval"
+                >
+                  <IconCheck size={13} />
+                  <span className="nav-row-label">Need approval</span>
+                  {approvalCount > 0 && <span className="count">{approvalCount}</span>}
+                </div>
+              </div>
+            )}
 
             {/* Boards first — the CRM is the home base. */}
             <NavSection

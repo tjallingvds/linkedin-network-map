@@ -23,6 +23,7 @@ import { extractUserKeys } from "../ai/user-keys.js";
 import { tavilySearch } from "../ai/tavily.js";
 import { aiJson } from "../ai/json.js";
 import { availableProviders } from "../ai/providers.js";
+import { onStageChange } from "../integrations/outreach/stage-hook.js";
 import { env } from "../env.js";
 
 const router = Router();
@@ -1007,7 +1008,7 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
   // sharing feel one-way.
   const existing = await db
     .selectFrom("crm_contacts")
-    .select(["id", "board_id", "custom_fields"])
+    .select(["id", "board_id", "custom_fields", "stage"])
     .where("id", "=", req.params.id)
     .executeTakeFirst();
   if (!existing) return res.status(404).json({ error: "not_found" });
@@ -1070,6 +1071,22 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
     .executeTakeFirst();
   if (!row) return res.status(404).json({ error: "not_found" });
   notifyBoard(row.board_id, "contact");
+
+  // A human moving a card can stop that person's emails. If the stage actually
+  // changed, react out-of-band so a Smartlead hiccup can never fail the card
+  // move. Credentials are resolved from the contact's board, not the editor,
+  // so a shared-board collaborator still acts on the right account.
+  if (body.stage !== undefined && body.stage !== existing.stage) {
+    const editorId = req.user!.id;
+    const contactId = row.id;
+    const newStage = row.stage;
+    setImmediate(() => {
+      onStageChange(editorId, contactId, newStage).catch((err) =>
+        console.error("[outreach] stage-hook failed:", (err as Error).message),
+      );
+    });
+  }
+
   res.json(toCamelContact(row));
 });
 
