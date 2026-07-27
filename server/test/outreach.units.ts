@@ -20,9 +20,10 @@ import { mapLeadStatusToState } from "../src/integrations/smartlead.ts";
 import { deriveName } from "../src/integrations/outreach/gate.ts";
 import { stageStopsSending } from "../src/integrations/outreach/stage-hook.ts";
 import { acceptGroup } from "../src/integrations/outreach/openers/sort.ts";
-import { parseGroups, describedGroups } from "../src/integrations/outreach/groups.ts";
+import { parseGroups, describedGroups, blockers } from "../src/integrations/outreach/groups.ts";
 import { parseRules, ruleFor } from "../src/integrations/outreach/stage-rules.ts";
 import { eventTypeOf } from "../src/integrations/outreach/events.ts";
+import { profileKey, isSameProfile } from "../src/integrations/outreach/openers/research.ts";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => { cond ? pass++ : fail++; console.log(`${cond ? "✓" : "✗"} ${name}`); };
@@ -143,6 +144,31 @@ eq("entries without an id are dropped", parseGroups([{ name: "no id" }]), []);
 eq("duplicate ids are dropped", parseGroups([{ id: "x" }, { id: "x" }]).length, 1);
 eq("a nameless group still gets a label", parseGroups([{ id: "x" }])[0]?.name, "Group 1");
 
+// ── Going live ─────────────────────────────────────────────────────────────
+// A group may only send once its opening line is written AND tried on real
+// people. `live` stored as true is not enough — the state it claims has to
+// still hold, or a hand-edited row could switch sending on.
+console.log("\n— going live —");
+const mk = (o: Record<string, unknown>) =>
+  parseGroups([{ id: "g", name: "G", description: "someone", prompt: "write nicely", ...o }])[0]!;
+
+eq("written, tested and switched on is live", mk({ testedAt: "2026-07-27T10:00:00Z", live: true }).live, true);
+eq("not switched on", mk({ testedAt: "2026-07-27T10:00:00Z", live: false }).live, false);
+eq("live claimed but never tested", mk({ testedAt: null, live: true }).live, false);
+eq("live claimed with no instructions", mk({ prompt: "", testedAt: "2026-07-27T10:00:00Z", live: true }).live, false);
+eq("an empty testedAt is not a test", mk({ testedAt: "", live: true }).live, false);
+eq("a non-string testedAt is not a test", mk({ testedAt: 12345, live: true }).live, false);
+
+eq("nothing missing when ready",
+  blockers(mk({ testedAt: "2026-07-27T10:00:00Z", live: true })), []);
+eq("missing the test",
+  blockers(mk({ testedAt: null, live: false })), ["instructions not tested yet", "not switched live"]);
+eq("missing the instructions",
+  blockers(mk({ prompt: "", testedAt: null, live: false })), ["no opening-line instructions", "not switched live"]);
+eq("missing the description",
+  blockers(mk({ description: "", testedAt: "2026-07-27T10:00:00Z", live: true })),
+  ["no description of who belongs"]);
+
 // ── Automatic card moves ───────────────────────────────────────────────────
 // These move a human's board without them touching it, so every rule that
 // isn't clearly asked for must do nothing.
@@ -190,6 +216,36 @@ eq("Email Bounce", ev("Email Bounce"), "EMAIL_BOUNCE");
 eq("Lead Unsubscribed", ev("Lead Unsubscribed"), "LEAD_UNSUBSCRIBED");
 eq("the `event` key is read too", eventTypeOf({ event: "Email Reply" } as never), "EMAIL_REPLY");
 eq("nothing at all", eventTypeOf({} as never), "");
+
+// ── Whose LinkedIn we read ─────────────────────────────────────────────────
+// Only the profile stored on the contact. A line written from a different
+// person with the same name reads as confident and is entirely false, so the
+// match has to be exact — while still tolerating how URLs get pasted.
+console.log("\n— linkedin matching —");
+const WANT = "in/sasha-lim-1a2b3";
+
+eq("plain profile url", profileKey("https://www.linkedin.com/in/sasha-lim-1a2b3"), WANT);
+eq("trailing slash", profileKey("https://www.linkedin.com/in/sasha-lim-1a2b3/"), WANT);
+eq("tracking query", profileKey("https://www.linkedin.com/in/sasha-lim-1a2b3?trk=abc"), WANT);
+eq("country subdomain", profileKey("https://nl.linkedin.com/in/Sasha-Lim-1a2b3"), WANT);
+eq("no protocol", profileKey("linkedin.com/in/sasha-lim-1a2b3"), WANT);
+eq("bare path", profileKey("/in/sasha-lim-1a2b3"), WANT);
+eq("deep link to a subpage", profileKey("https://linkedin.com/in/sasha-lim-1a2b3/details/experience"), WANT);
+eq("company pages keep their prefix", profileKey("https://linkedin.com/company/acme"), "company/acme");
+
+eq("empty", profileKey(""), null);
+eq("null", profileKey(null), null);
+eq("a website that isn't linkedin", profileKey("https://acme.com/team/sasha"), null);
+eq("a linkedin feed url is not a profile", profileKey("https://linkedin.com/feed/update/123"), null);
+eq("the bare domain is not a profile", profileKey("https://linkedin.com/"), null);
+eq("a slugless profile url", profileKey("https://linkedin.com/in/"), null);
+
+// The filter that keeps someone else's profile out of the facts.
+eq("same profile accepted", isSameProfile("https://www.linkedin.com/in/sasha-lim-1a2b3/", WANT), true);
+eq("a different person is rejected", isSameProfile("https://www.linkedin.com/in/sasha-lim-9z9z9", WANT), false);
+eq("a similar slug is rejected", isSameProfile("https://linkedin.com/in/sasha-lim", WANT), false);
+eq("a non-profile result is rejected", isSameProfile("https://linkedin.com/pulse/some-article", WANT), false);
+eq("a missing url is rejected", isSameProfile(undefined, WANT), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1,49 +1,87 @@
 /**
- * Looking a person up on the web before writing their line.
+ * Looking a person up before writing their line.
+ *
+ * Only ever the LinkedIn profile stored on the contact in the CRM. Not a
+ * profile found by searching their name, not the open web, not a best guess.
+ *
+ * The reason is the failure it prevents: "Sasha Lim, Head of Data" matches
+ * several real people, and a line written from the wrong Sasha Lim reads as
+ * perfectly confident and is completely false. A name search can't tell them
+ * apart, so it isn't offered. A contact with no LinkedIn link in the CRM
+ * simply has no web facts, and their line comes from the CRM notes alone — or
+ * they're skipped, which is the right outcome for a thin record.
  */
 import { tavilySearch } from "../../../ai/tavily.js";
 import type { UserKeys } from "../../../ai/user-keys.js";
 
 /**
- * Look the person up on the web — LinkedIn first, then anything public.
+ * Reduce a LinkedIn URL to the part that identifies the person, so the same
+ * profile written different ways compares equal:
  *
- * LinkedIn blocks most crawling, so the profile pass frequently returns
- * nothing; that's expected, not an error. We fall back to a general search on
- * name + company, and if BOTH come back empty we simply have no web facts and
- * the line falls back to whatever the CRM holds (or is skipped entirely).
- * Nothing here is ever inferred — only text actually returned is passed on.
+ *   https://www.linkedin.com/in/sasha-lim-1a2b3/   →  in/sasha-lim-1a2b3
+ *   linkedin.com/in/sasha-lim-1a2b3?trk=abc        →  in/sasha-lim-1a2b3
+ *   https://nl.linkedin.com/in/Sasha-Lim-1a2b3     →  in/sasha-lim-1a2b3
+ *
+ * Returns null for anything that isn't a LinkedIn profile URL.
  */
+export function profileKey(raw: string | null | undefined): string | null {
+  const s = (raw ?? "").trim().toLowerCase();
+  if (!s) return null;
+  // Tolerate a full URL with any subdomain, a bare domain, or a bare path.
+  const m = s.match(/(?:^|\/\/)(?:[a-z0-9-]+\.)*linkedin\.com\/(.+)$/)
+    ?? s.match(/^\/?((?:in|pub|company)\/.+)$/);
+  if (!m) return null;
+  const path = m[1]!
+    .split(/[?#]/)[0]!       // drop query and fragment
+    .replace(/^\/+|\/+$/g, "");
+  if (!/^(in|pub|company)\//.test(path)) return null;
+  // Keep only the identifying segment: in/<slug>, not in/<slug>/details/…
+  const parts = path.split("/");
+  return parts.length >= 2 && parts[1] ? `${parts[0]}/${parts[1]}` : null;
+}
+
+/** Is this search result the profile we asked for, rather than someone else's? */
+export function isSameProfile(resultUrl: string | undefined, wanted: string): boolean {
+  const got = profileKey(resultUrl);
+  return !!got && got === wanted;
+}
+
 export async function research(
   c: { name: string; company: string | null; title: string | null; linkedin: string | null },
   userId: string,
   userKeys?: UserKeys,
 ): Promise<{ snippets: { title: string; url: string; content: string }[]; note: string }> {
-  const who = [`"${c.name}"`, c.company ? `"${c.company}"` : "", c.title ?? ""].filter(Boolean).join(" ");
-  if (!c.name.trim()) return { snippets: [], note: "no name to search" };
+  const wanted = profileKey(c.linkedin);
+  if (!wanted) {
+    return {
+      snippets: [],
+      note: (c.linkedin ?? "").trim()
+        ? "the LinkedIn link on this contact isn't a profile URL"
+        : "no LinkedIn link on this contact",
+    };
+  }
 
-  const take = (rs: { title?: string; url?: string; content?: string }[]) =>
-    rs.filter((r) => (r.content ?? "").trim().length > 40)
+  try {
+    const results = await tavilySearch(c.linkedin!.trim(), {
+      depth: "advanced", maxResults: 5, includeDomains: ["linkedin.com"], userId, userKeys,
+    });
+
+    // Tavily answers a URL query with whatever it finds relevant, which
+    // includes other people's profiles. Keep only this exact one.
+    const mine = results
+      .filter((r) => isSameProfile(r.url, wanted))
+      .filter((r) => (r.content ?? "").trim().length > 40)
       .slice(0, 4)
       .map((r) => ({ title: r.title ?? "", url: r.url ?? "", content: (r.content ?? "").slice(0, 1200) }));
 
-  try {
-    // 1. The person's own LinkedIn, when it's reachable.
-    const q = c.linkedin ? `${c.linkedin} ${c.name}` : who;
-    let out = take(await tavilySearch(q, {
-      depth: "advanced", maxResults: 5, includeDomains: ["linkedin.com"], userId, userKeys,
-    }));
-    if (out.length) return { snippets: out, note: "LinkedIn" };
-
-    // 2. LinkedIn blocked or nothing indexed — try the open web.
-    out = take(await tavilySearch(who, { depth: "advanced", maxResults: 5, userId, userKeys }));
-    if (out.length) return { snippets: out, note: "web search" };
-
-    return { snippets: [], note: "nothing found online" };
+    if (mine.length) return { snippets: mine, note: "LinkedIn" };
+    // LinkedIn blocks most crawling, so an empty result is ordinary. There is
+    // deliberately no fallback search: someone else's page is worse than none.
+    return { snippets: [], note: "their LinkedIn page couldn't be read" };
   } catch (err) {
     // A missing Tavily key or a provider blip must not fail the whole run —
-    // we just fall back to whatever the CRM already knows.
+    // the line falls back to whatever the CRM already knows.
     console.warn(`[openers] research skipped for ${c.name}: ${(err as Error).message}`);
     return { snippets: [], note: "lookup unavailable" };
   }
 }
-

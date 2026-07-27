@@ -40,6 +40,7 @@ const { suppressEmail, blockDomain } = await import(`${R}/integrations/outreach/
 const { reconcileBoard } = await import(`${R}/integrations/outreach/reconcile.ts`);
 const { onStageChange } = await import(`${R}/integrations/outreach/stage-hook.ts`);
 const { funnel } = await import(`${R}/integrations/outreach/metrics.ts`);
+const { saveGroups, markTested, listGroups } = await import(`${R}/integrations/outreach/groups.ts`);
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean, extra?: unknown) => {
@@ -103,6 +104,50 @@ async function main() {
   await db.insertInto("outreach_campaigns").values({
     user_id: userId, board_id: boardId, provider_campaign_id: "4821", tier: "B", name: "Tier B",
   }).execute();
+
+  // ── A group has to be written, tested and switched live before it sends ──
+  // Everything below depends on this, which is the point: an untested group is
+  // not a sending group, whatever else is configured.
+  console.log("\n── Going live ──");
+  await saveGroups(userId, boardId, [
+    { id: "B", name: "Tier B outbound", description: "Heads of AI at banks", prompt: "Open with their AI work." },
+  ]);
+  await db.updateTable("crm_boards").set({ outreach_enabled: true }).where("id", "=", boardId).execute();
+  eq("an untested group sends nobody", (await selectEligible(userId, { tier: "B", boardId })).length, 0);
+
+  // Claiming live without a test must not work, even straight through the API.
+  await saveGroups(userId, boardId, [
+    { id: "B", name: "Tier B outbound", description: "Heads of AI at banks", prompt: "Open with their AI work.", live: true },
+  ]);
+  eq("live cannot be claimed without a test", (await listGroups(boardId))[0]?.live, false);
+  eq("and still sends nobody", (await selectEligible(userId, { tier: "B", boardId })).length, 0);
+
+  // Test it, then switch it live — the real order.
+  await markTested(userId, boardId, "B");
+  await saveGroups(userId, boardId, [
+    { id: "B", name: "Tier B outbound", description: "Heads of AI at banks", prompt: "Open with their AI work.", live: true },
+  ]);
+  eq("tested and switched live", (await listGroups(boardId))[0]?.live, true);
+  ok("now it has people to send", (await selectEligible(userId, { tier: "B", boardId })).length > 0);
+
+  // Editing the instructions invalidates the test and drops it out of live.
+  await saveGroups(userId, boardId, [
+    { id: "B", name: "Tier B outbound", description: "Heads of AI at banks", prompt: "Different instructions now.", live: true },
+  ]);
+  const afterEdit = (await listGroups(boardId))[0];
+  eq("changing the prompt clears the test", afterEdit?.testedAt, null);
+  eq("and takes it off live", afterEdit?.live, false);
+  eq("so it sends nobody again", (await selectEligible(userId, { tier: "B", boardId })).length, 0);
+
+  // Renaming must NOT invalidate it — only the instructions matter.
+  await markTested(userId, boardId, "B");
+  await saveGroups(userId, boardId, [
+    { id: "B", name: "Renamed group", description: "Heads of AI at banks", prompt: "Different instructions now.", live: true },
+  ]);
+  eq("renaming keeps it live", (await listGroups(boardId))[0]?.live, true);
+
+  // Back to off, so the "off by default" section below tests what it claims.
+  await db.updateTable("crm_boards").set({ outreach_enabled: false }).where("id", "=", boardId).execute();
 
   // ── 0. Off by default ───────────────────────────────────────────────────
   // Connecting an account must arm NOTHING. Until the board is switched on,

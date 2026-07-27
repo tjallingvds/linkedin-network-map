@@ -16,6 +16,7 @@ import {
 } from "../../integrations/outreach/openers/index.js";
 import { createJob, setProgress, finishJob, failJob } from "../../integrations/outreach/jobs.js";
 import { uid, ownedBoard } from "./shared.js";
+import { tryoutGroup } from "../../integrations/outreach/openers/tryout.js";
 import { startSend, sendableCampaign } from "./sending.js";
 
 const router = Router();
@@ -30,6 +31,25 @@ async function startDraftJob(userId: string, run: (onProgress: (n: string) => vo
   });
   return jobId;
 }
+
+/**
+ * Try a group's opening-line instructions on real people in it.
+ *
+ * Nothing is saved to those contacts — the lines come back for the operator to
+ * read. Running this is what unlocks the group's "go live" switch, because the
+ * instructions are the one part of the setup you can only judge by seeing what
+ * it writes.
+ */
+router.post("/board/:boardId/groups/:groupId/test", async (req: AuthedRequest, res: Response) => {
+  const board = await ownedBoard(req);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+  const userId = uid(req);
+  const userKeys = extractUserKeys(req);
+  res.json({
+    jobId: await startDraftJob(userId, (onProgress) =>
+      tryoutGroup(userId, board.id, req.params.groupId, { userKeys, onProgress })),
+  });
+});
 
 /** Sort this board's people into groups now (re-sorting everyone if asked). */
 router.post("/board/:boardId/sort", async (req: AuthedRequest, res: Response) => {

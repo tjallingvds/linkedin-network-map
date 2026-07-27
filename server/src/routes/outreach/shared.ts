@@ -24,7 +24,6 @@ export interface OwnedBoard {
   name: string;
   outreach_enabled: boolean;
   outreach_stage_map: unknown;
-  opening_prompt: string | null;
   outreach_groups: unknown;
 }
 
@@ -34,7 +33,7 @@ export async function ownedBoard(req: AuthedRequest): Promise<OwnedBoard | undef
   if (!/^[0-9a-f-]{36}$/i.test(id)) return undefined;
   return db
     .selectFrom("crm_boards")
-    .select(["id", "name", "outreach_enabled", "outreach_stage_map", "opening_prompt", "outreach_groups"])
+    .select(["id", "name", "outreach_enabled", "outreach_stage_map", "outreach_groups"])
     .where("id", "=", id)
     .where("user_id", "=", uid(req))
     .executeTakeFirst() as Promise<OwnedBoard | undefined>;

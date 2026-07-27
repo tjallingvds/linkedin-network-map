@@ -7,6 +7,7 @@
  * is the only door.
  */
 import { db } from "../../db/index.js";
+import { canSend } from "./groups.js";
 import { sql } from "kysely";
 import { addLeadsToCampaign, getCampaignLeads, ADD_LEADS_BATCH, type SmartleadLeadInput } from "../smartlead.js";
 import { getAccountByBoard } from "./accounts.js";
@@ -47,6 +48,12 @@ export async function selectEligible(
     .where("user_id", "=", userId)
     .executeTakeFirst();
   if (!board || !board.outreach_enabled) return [];
+
+  // Second hard stop: the group itself must be live, which it cannot be until
+  // its opening-line instructions have been written AND tried on real people.
+  // Here rather than in a route, so every path — export, approval queue,
+  // readiness counts — agrees on who is sendable.
+  if (!(await canSend(opts.boardId, opts.tier))) return [];
 
   let q = db
     .selectFrom("crm_contacts as l")

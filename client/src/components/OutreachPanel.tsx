@@ -15,14 +15,22 @@ import { api } from "../lib/api";
 import { IconClose } from "../design/icons";
 
 /** A group as the operator defined it. `id` is internal; `name` is what shows. */
-interface Group { id: string; name: string; description: string; prompt: string }
+interface Group {
+  id: string; name: string; description: string; prompt: string;
+  /** When the current instructions were last tried on real people. */
+  testedAt: string | null;
+  /** Whether this group may send. False until written and tested. */
+  live: boolean;
+}
+/** One sample line from a test run. */
+interface Tryout { contactId: string; name: string; title: string | null; company: string | null; line: string | null; from: string }
 
 interface Campaign { id: string; board_id: string; provider_campaign_id: string; tier: string; name: string | null; state: string }
 interface BoardStatus {
   boardId: string; name: string; connected: boolean; enabled: boolean;
   webhookUrl: string | null; bounceThresholdPct: number;
   stopStages: string[]; stageRules: StageRule[]; campaigns: Campaign[];
-  openingPrompt: string; defaultPrompt: string;
+  defaultPrompt: string;
   groups: Group[];
   suppressionCount: number; unreadAlerts: number;
 }
@@ -206,10 +214,6 @@ export function OutreachPanel({
       <Groups boardId={boardId} campaigns={st!.campaigns} readiness={ready} groups={st!.groups ?? []}
         defaultPrompt={st!.defaultPrompt}
         disabled={!on} onChanged={load} onFlash={onFlash} />
-
-      {/* How the opening line gets written. */}
-      <PromptEditor boardId={boardId} value={st!.openingPrompt} fallback={st!.defaultPrompt}
-        onFlash={onFlash} onChanged={load} />
 
       {/* Excluded + stop rules live behind one popup. */}
       <div className="au-inline-row">
@@ -429,6 +433,10 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
   const [openPrompt, setOpenPrompt] = useState<string | null>(null);
   const [sorting, setSorting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // Sample lines from the last test, per group, so the operator can read what
+  // their instructions actually produce before letting them near a real inbox.
+  const [tryouts, setTryouts] = useState<Record<string, Tryout[]>>({});
+  const [testing, setTesting] = useState<string | null>(null);
 
   const saved = JSON.stringify(groups);
   useEffect(() => { setDraft(JSON.parse(saved) as Group[]); }, [saved]);
@@ -449,7 +457,7 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
     setDraft(draft.map((g, n) => (n === i ? { ...g, ...patch } : g)));
 
   const add = () =>
-    setDraft([...draft, { id: "", name: `Group ${draft.length + 1}`, description: "", prompt: "" }]);
+    setDraft([...draft, { id: "", name: `Group ${draft.length + 1}`, description: "", prompt: "", testedAt: null, live: false }]);
 
   const remove = (g: Group, i: number) => {
     const people = readiness?.byGroup[g.id] ?? 0;
@@ -464,6 +472,38 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
     try {
       await api.post(`/api/outreach/board/${boardId}/campaigns`, { group: group.id, providerCampaignId, name });
       onFlash(`${group.name} will use that campaign.`);
+      onChanged();
+    } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
+  };
+
+  // Try the instructions on real people in the group. Saves nothing to them.
+  const test = async (g: Group) => {
+    setTesting(g.id);
+    setNote(`Testing “${g.name}”…`);
+    try {
+      const { jobId } = await api.post<{ jobId: string }>(`/api/outreach/board/${boardId}/groups/${g.id}/test`);
+      for (let i = 0; i < 600; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const job = await api.get<SortJob>(`/api/outreach/send/${jobId}`);
+        if (job.progress) setNote(job.progress);
+        if (job.status === "running") continue;
+        if (job.status === "error") { onFlash(`Test failed: ${job.error ?? "unknown"}`); break; }
+        const r = typeof job.result === "string" ? JSON.parse(job.result) : (job.result as { lines?: Tryout[] });
+        setTryouts({ ...tryouts, [g.id]: r?.lines ?? [] });
+        onFlash(`Wrote ${r?.lines?.length ?? 0} sample lines. Read them, then switch the group live.`);
+        onChanged();
+        break;
+      }
+    } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
+    finally { setTesting(null); setNote(null); }
+  };
+
+  // Going live is saved on its own so it can't ride along with an unsaved edit.
+  const setLive = async (g: Group, live: boolean) => {
+    try {
+      const next = groups.map((x) => (x.id === g.id ? { ...x, live } : x));
+      await api.post(`/api/outreach/board/${boardId}/groups`, { groups: next });
+      onFlash(live ? `${g.name} is live — its people can now be approved and sent.` : `${g.name} is paused.`);
       onChanged();
     } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
   };
@@ -520,6 +560,7 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
                 <input className="au-input" disabled={disabled} value={g.name}
                   placeholder="Name this group"
                   onChange={(e) => edit(i, { name: e.target.value })} />
+                <span className={`au-chip${g.live ? " is-on" : ""}`}>{g.live ? "live" : "not live"}</span>
                 <span className="au-count">{people} {people === 1 ? "person" : "people"}</span>
                 <button className="pill-btn" disabled={disabled} onClick={() => remove(g, i)}
                   title="Remove this group">Remove</button>
@@ -547,9 +588,10 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
                 </select>
                 <button className="pill-btn" disabled={disabled}
                   onClick={() => setOpenPrompt(openPrompt === (g.id || `new-${i}`) ? null : (g.id || `new-${i}`))}>
-                  Opening line {g.prompt.trim() ? "· custom" : "· default"}
+                  Opening line {g.prompt.trim() ? "· written" : "· not written"}
                 </button>
               </div>
+
               {openPrompt === (g.id || `new-${i}`) && (
                 <>
                   <textarea className="au-prompt" rows={7} disabled={disabled}
@@ -557,10 +599,52 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
                     value={g.prompt}
                     onChange={(e) => edit(i, { prompt: e.target.value })} />
                   <div className="au-note">
-                    How this group’s first line is written. Leave blank to use the board’s
-                    instructions below. “Never invent” always applies, whatever you write here.
+                    How this group’s first line is written, from their LinkedIn and your CRM
+                    notes. “Never invent” always applies, whatever you put here. Changing this
+                    takes the group off live until you test it again.
                   </div>
                 </>
+              )}
+
+              {/* Going live needs a written prompt and a test you've read. */}
+              <div className="au-group-row">
+                <button className="pill-btn" disabled={disabled || !g.id || !g.prompt.trim() || dirty || testing === g.id}
+                  onClick={() => void test(g)}
+                  title={dirty ? "Save your changes first" : "Write sample lines for real people in this group"}>
+                  {testing === g.id ? "Testing…" : g.testedAt ? "Test again" : "Test on real people"}
+                </button>
+                <button className={`pill-btn${g.live ? "" : " primary"}`}
+                  disabled={disabled || !g.id || dirty || (!g.live && !g.testedAt)}
+                  onClick={() => void setLive(g, !g.live)}
+                  title={!g.testedAt && !g.live ? "Test the opening line first" : ""}>
+                  {g.live ? "Pause this group" : "Switch live"}
+                </button>
+                <span className="au-count" style={{ minWidth: 0, textAlign: "left" }}>
+                  {g.live ? "Sending."
+                    : !g.prompt.trim() ? "Write the opening line first."
+                    : !g.testedAt ? "Test it, then switch live."
+                    : "Tested — switch live when you're happy."}
+                </span>
+              </div>
+
+              {(tryouts[g.id] ?? []).length > 0 && (
+                <div className="au-tryout">
+                  {tryouts[g.id]!.map((t) => (
+                    <div key={t.contactId} className="au-tryout-row">
+                      <div className="au-tryout-who">
+                        {t.name}{t.title ? ` · ${t.title}` : ""}{t.company ? ` · ${t.company}` : ""}
+                      </div>
+                      <div className={`au-tryout-line${t.line ? "" : " is-none"}`}>
+                        {t.line ?? "No line — nothing specific enough to say about them."}
+                      </div>
+                      <div className="au-src">{t.from}</div>
+                    </div>
+                  ))}
+                  <div className="au-note">
+                    Samples only — these are not saved to anyone. Real lines are drafted when
+                    the group is live, and still wait for your approval.
+                  </div>
+                </div>
               )}
             </div>
           </div>
@@ -587,54 +671,6 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
         descriptions is left out rather than guessed at — set the <b>Group</b> field on their
         contact by hand to overrule a call.
       </div>
-    </Sec>
-  );
-}
-
-/** The instructions used to write every opening line. */
-function PromptEditor({ boardId, value, fallback, onFlash, onChanged }: {
-  boardId: string; value: string; fallback: string;
-  onFlash: (m: string) => void; onChanged: () => void;
-}) {
-  const [text, setText] = useState(value);
-  const [open, setOpen] = useState(false);
-  useEffect(() => { setText(value); }, [boardId, value]);
-  const dirty = text.trim() !== value.trim();
-
-  return (
-    <Sec title="How opening lines are written"
-      chip={value.trim() ? "custom" : "default"}
-      hint="The instructions given to the model for every person on this board.">
-      <div className="au-note">
-        Each person’s first line is written from their LinkedIn and your CRM notes, and is told to lead into
-        the campaign’s own email. Leave this blank to use the built-in instructions.
-      </div>
-      {!open && !value.trim() ? (
-        <div className="au-actions">
-          <button className="pill-btn" onClick={() => setOpen(true)}>Customise the instructions</button>
-        </div>
-      ) : (
-        <>
-          <textarea className="au-prompt" rows={8} value={text} placeholder={fallback}
-            onChange={(e) => setText(e.target.value)} />
-          <div className="au-actions">
-            <button className="pill-btn primary" disabled={!dirty} onClick={async () => {
-              try {
-                await api.post(`/api/outreach/board/${boardId}/prompt`, { prompt: text });
-                onFlash(text.trim() ? "Instructions saved." : "Back to the built-in instructions.");
-                onChanged();
-              } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
-            }}>Save</button>
-            {value.trim() && (
-              <button className="pill-btn" onClick={() => setText("")}>Reset to default</button>
-            )}
-            {dirty && <span className="au-note">Unsaved</span>}
-          </div>
-          <div className="au-note">
-            “Never invent anything” and the output format are always enforced, whatever you write here.
-          </div>
-        </>
-      )}
     </Sec>
   );
 }

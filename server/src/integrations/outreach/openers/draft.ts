@@ -50,10 +50,9 @@ Always obey, regardless of any instruction above:
 - Return strict JSON: {"line": string|null, "used": string[]}`;
 
 /**
- * The instructions for one group, most specific first: the group's own, then
- * the board's, then the built-in prompt. Whatever wins, the non-negotiable
- * rules are appended — a custom prompt can change the voice, never switch off
- * "never invent" or the JSON contract.
+ * The instructions for one group: its own, or the built-in prompt. Whatever
+ * wins, the non-negotiable rules are appended — a custom prompt can change the
+ * voice, never switch off "never invent" or the JSON contract.
  */
 export function promptFor(...candidates: Array<string | null | undefined>): string {
   const c = candidates.map((x) => (x ?? "").trim()).find((x) => x.length > 0);
@@ -117,11 +116,10 @@ export async function draftOpeners(
   }
   const contacts = await q.execute();
 
-  // Instructions for this group: its own if it has any, otherwise the board's.
-  const boardRow = await db
-    .selectFrom("crm_boards").select("opening_prompt").where("id", "=", boardId).executeTakeFirst();
+  // Instructions belong to the group. There is no board-wide prompt: one brief
+  // for every audience is the thing groups exist to avoid.
   const groupRow = await findGroup(boardId, group);
-  const prompt = promptFor(groupRow?.prompt, boardRow?.opening_prompt);
+  const prompt = promptFor(groupRow?.prompt);
 
   let campaignEmail: { subject: string; body: string } | null = null;
   const campaign = await db
