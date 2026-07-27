@@ -3529,3 +3529,299 @@ button:focus-visible { outline-offset: 3px; }
   background: oklch(0.97 0.04 25);
   color: oklch(0.45 0.16 25);
 }
+
+/* ── Automations view ─────────────────────────────────────────────────────
+   Full-page peer of Overview / Board / Table, and deliberately built from the
+   same parts as Overview: one column at full canvas width, each block a title
+   row over a hairline with an inline hint, then a light bordered body. No
+   competing card grid — this page is read top-to-bottom as a setup flow. */
+.au-wrap {
+  display: flex; flex-direction: column; gap: 24px;
+  padding: 20px 24px 40px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Status banner */
+.au-hero {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 16px 18px; border-radius: 6px;
+  background: var(--shell); border: 1px solid var(--hairline);
+}
+.au-hero.is-on { border-color: var(--accent); }
+.au-dot {
+  width: 8px; height: 8px; border-radius: 999px; margin-top: 7px; flex: none;
+  background: var(--text-mute);
+}
+.au-hero.is-on .au-dot { background: var(--accent); }
+.au-hero-main { flex: 1; min-width: 0; }
+.au-hero-title {
+  font-family: Newsreader, Georgia, serif; font-size: 19px; line-height: 1.25;
+  color: var(--text); margin: 0 0 5px; font-weight: 500;
+}
+.au-hero-sub { font-size: 12.5px; line-height: 1.55; color: var(--text-dim); max-width: 72ch; }
+.au-stats { display: flex; flex-wrap: wrap; gap: 28px; margin-top: 14px; }
+.au-stat-k {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
+  color: var(--text-mute); margin-bottom: 3px;
+}
+.au-stat-v { font-family: 'Geist Mono', monospace; font-size: 16px; color: var(--text); }
+.au-stat-v.is-bad { color: var(--danger); }
+
+/* Section: title row over a hairline, then a bordered body — same as Overview */
+.au-sec { display: flex; flex-direction: column; gap: 8px; }
+.au-sec-head {
+  display: flex; align-items: baseline; gap: 10px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--hairline);
+}
+.au-sec-title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.au-sec-hint { font-size: 11.5px; color: var(--text-mute); margin-left: 4px; flex: 1; min-width: 0; }
+.au-sec-body {
+  padding: 14px; border-radius: 5px;
+  background: var(--shell); border: 1px solid var(--hairline);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.au-sec.is-muted .au-sec-body { opacity: 0.5; }
+
+.au-step {
+  font-family: 'Geist Mono', monospace; font-size: 10.5px;
+  width: 17px; height: 17px; border-radius: 999px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--hairline);
+  position: relative; top: -1px;
+}
+.au-step.is-done { background: var(--accent); color: #fff; border-color: var(--accent); }
+.au-chip {
+  font-family: 'Geist Mono', monospace; font-size: 11px;
+  padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+  background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--hairline);
+}
+.au-chip.is-on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.au-chip.is-bad { color: var(--danger); border-color: var(--danger); }
+
+/* Form rows — labels in a fixed gutter so fields line up down the page. */
+.au-field { display: flex; align-items: center; gap: 10px; }
+.au-field-label {
+  font-size: 11px; color: var(--text-dim); width: 116px; flex: none;
+}
+.au-input {
+  flex: 1; min-width: 0; padding: 7px 10px;
+  background: var(--panel-2); border: 1px solid var(--hairline);
+  border-radius: 5px; color: var(--text);
+  font-size: 12.5px; font-family: 'Geist Mono', monospace;
+}
+.au-input:focus { outline: none; border-color: var(--accent); background: var(--shell); }
+.au-input.is-narrow { flex: 0 0 110px; }
+.au-input.is-tiny { flex: 0 0 70px; }
+.au-note { font-size: 11.5px; line-height: 1.55; color: var(--text-mute); }
+.au-note b { color: var(--text); font-weight: 600; }
+.au-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.au-empty {
+  padding: 12px; color: var(--text-mute); font-size: 12.5px;
+  background: var(--panel); border: 1px dashed var(--hairline); border-radius: 5px;
+}
+
+/* Mapped campaigns */
+.au-map-row {
+  display: flex; align-items: center; gap: 10px; font-size: 12.5px;
+  padding: 8px 10px; border-radius: 5px;
+  background: var(--shell); border: 1px solid var(--hairline);
+}
+.au-map-tier { font-weight: 600; color: var(--accent); }
+.au-map-id { font-family: 'Geist Mono', monospace; color: var(--text-dim); }
+.au-map-name { color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au-map-state { margin-left: auto; font-size: 11px; color: var(--text-mute); }
+
+/* Funnel */
+.au-table-wrap { overflow-x: auto; }
+.au-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.au-table th {
+  text-align: left; font-weight: 500; padding: 0 14px 7px 0;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-mute);
+}
+.au-table td {
+  padding: 8px 14px 8px 0; border-top: 1px solid var(--hairline);
+  font-family: 'Geist Mono', monospace; color: var(--text-dim);
+}
+.au-table td.au-t-tier { font-weight: 600; color: var(--accent); font-family: inherit; }
+.au-table td.is-bad { color: var(--danger); }
+
+/* Alerts */
+.au-alert {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 12px; border-radius: 5px;
+  background: var(--shell); border: 1px solid var(--hairline);
+}
+.au-alert.is-critical { border-color: var(--danger); }
+.au-alert-msg { flex: 1; font-size: 12.5px; line-height: 1.55; color: var(--text-dim); }
+.au-alert-time { font-size: 10.5px; color: var(--text-mute); margin-top: 4px; }
+
+/* Automations — plain-language additions */
+.au-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 7px; }
+.au-steps li { font-size: 12.5px; line-height: 1.55; color: var(--text-dim); }
+.au-steps b { color: var(--text); font-weight: 600; }
+.au-count { font-size: 11.5px; color: var(--text-mute); flex: none; min-width: 74px; text-align: right; }
+.au-code { flex: 1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.au-warn {
+  font-size: 12px; color: var(--danger);
+  background: var(--panel); border: 1px dashed var(--danger);
+  border-radius: 5px; padding: 8px 10px;
+}
+/* "Who won't be emailed" — one row per reason */
+.au-reason {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 5px;
+  background: var(--shell); border: 1px solid var(--hairline);
+}
+.au-reason-n {
+  font-family: 'Geist Mono', monospace; font-size: 12.5px; font-weight: 600;
+  color: var(--text); min-width: 28px;
+}
+.au-reason-t { font-size: 12.5px; color: var(--text-dim); flex: 1; }
+.au-table td.au-t-name { font-family: inherit; color: var(--text); }
+/* Stage tick-boxes */
+.au-checks { display: flex; flex-wrap: wrap; gap: 8px; }
+.au-check {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 11px; border-radius: 999px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--hairline);
+  font-size: 12.5px; color: var(--text-dim);
+  transition: background 120ms, border-color 120ms, color 120ms;
+}
+.au-check:hover { border-color: var(--hairline-strong); }
+.au-check.is-on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.au-check input { accent-color: var(--accent); margin: 0; }
+.au-check.is-on input { accent-color: #fff; }
+.au-gone { opacity: 0.7; font-size: 11px; }
+
+/* Opening-line review table */
+.au-openers { table-layout: fixed; }
+.au-openers th:nth-child(1), .au-openers td:nth-child(1) { width: 22%; }
+.au-openers th:nth-child(2), .au-openers td:nth-child(2) { width: 44%; }
+.au-openers th:nth-child(3), .au-openers td:nth-child(3) { width: 24%; }
+.au-openers th:nth-child(4), .au-openers td:nth-child(4) { width: 10%; }
+.au-openers td { vertical-align: top; }
+.au-openers tr.is-approved td { opacity: 0.6; }
+.au-sub { font-size: 11px; color: var(--text-mute); margin-top: 2px; font-family: inherit; }
+.au-src { font-family: inherit; font-size: 11.5px; color: var(--text-mute); line-height: 1.45; }
+.au-line {
+  width: 100%; resize: vertical; padding: 7px 9px;
+  background: var(--panel-2); border: 1px solid var(--hairline);
+  border-radius: 5px; color: var(--text);
+  font-size: 12.5px; line-height: 1.5; font-family: inherit;
+}
+.au-line:focus { outline: none; border-color: var(--accent); background: var(--shell); }
+
+
+/* "Who won't be emailed" — reason block with the names visible */
+.au-skip {
+  padding: 10px 12px; border-radius: 5px;
+  background: var(--shell); border: 1px solid var(--hairline);
+}
+.au-skip-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+.au-skip-names { display: flex; flex-wrap: wrap; gap: 6px; }
+.au-person {
+  font-size: 11.5px; color: var(--text-dim);
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--hairline);
+}
+
+/* ── Automations v2 ───────────────────────────────────────────────────────
+   Status banner, then the two numbers that matter side by side, then setup.
+   Same hairline-over-shadow language as Overview. */
+.au-hero-row { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.au-pill {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--panel-2); color: var(--text-mute); border: 1px solid var(--hairline);
+}
+.au-pill.is-on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.au-pill .au-dot { width: 6px; height: 6px; margin: 0; background: currentColor; }
+
+/* Two main cards */
+.au-two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+@media (max-width: 900px) { .au-two { grid-template-columns: 1fr; } }
+.au-metric {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 16px; border-radius: 6px;
+  background: var(--shell); border: 1px solid var(--hairline);
+}
+.au-metric.is-bad { border-color: var(--danger); }
+.au-metric-head {
+  display: flex; align-items: baseline; gap: 10px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--hairline);
+}
+
+/* Headline numbers */
+.au-big { display: flex; gap: 30px; }
+.au-big-v { font-family: 'Geist Mono', monospace; font-size: 26px; line-height: 1.1; color: var(--text); }
+.au-big-k {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-mute); margin-top: 3px;
+}
+
+/* Delivered / bounced / unsubscribed bars */
+.au-bars { display: flex; flex-direction: column; gap: 9px; }
+.au-bar-top { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-dim); margin-bottom: 4px; }
+.au-bar-n { font-family: 'Geist Mono', monospace; color: var(--text-mute); }
+.au-bar-n.is-bad { color: var(--danger); }
+.au-bar-track { height: 5px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.au-bar-fill { height: 100%; background: var(--accent); transition: width 200ms; }
+.au-bar-fill.is-bad { background: var(--danger); }
+
+.au-ok {
+  display: flex; gap: 9px; align-items: flex-start;
+  font-size: 12.5px; line-height: 1.5; color: var(--text-dim);
+  padding: 10px 12px; border-radius: 5px;
+  background: var(--panel-2); border: 1px solid var(--hairline);
+}
+
+/* Groups */
+.au-group { display: flex; align-items: center; gap: 10px; }
+.au-group-tag {
+  width: 26px; height: 26px; flex: none; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  background: var(--panel-2); border: 1px solid var(--hairline);
+}
+
+/* Prompt editor */
+.au-prompt {
+  width: 100%; resize: vertical; padding: 10px 12px;
+  background: var(--panel-2); border: 1px solid var(--hairline);
+  border-radius: 6px; color: var(--text);
+  font-size: 12px; line-height: 1.6; font-family: 'Geist Mono', monospace;
+}
+.au-prompt:focus { outline: none; border-color: var(--accent); background: var(--shell); }
+
+/* The one-line row that replaces two full-width boxes */
+.au-inline-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 2px 0;
+}
+
+/* Excluded popup */
+.au-modal { width: min(760px, calc(100vw - 48px)); max-height: 82vh; display: flex; flex-direction: column; }
+.au-modal-body { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.au-modal-sec {
+  display: flex; align-items: baseline; gap: 10px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--hairline);
+}
+
+/* Collapsed explainer at the foot of Automations */
+.au-how { font-size: 12.5px; color: var(--text-dim); }
+.au-how > summary {
+  cursor: pointer; color: var(--text-mute); font-size: 12px;
+  padding: 6px 0; list-style: none;
+}
+.au-how > summary::-webkit-details-marker { display: none; }
+.au-how > summary::before { content: "▸ "; }
+.au-how[open] > summary::before { content: "▾ "; }
+.au-how > summary:hover { color: var(--text); }
+.au-how .au-steps { margin-top: 6px; }
+
+/* Manual never-email, tucked into the excluded popup's footer */
+.au-modal-foot { justify-content: space-between; align-items: center; gap: 12px; }
+.au-never { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.au-never .au-input { flex: 1; min-width: 0; }

@@ -24,6 +24,10 @@ import crmRoutes from "./routes/crm.js";
 import usageRoutes from "./routes/usage.js";
 import messagesLogRoutes from "./routes/messages_log.js";
 import salesRoutes from "./routes/sales/index.js";
+import outreachRoutes from "./routes/outreach/index.js";
+import smartleadWebhookRoutes from "./routes/webhooks/smartlead.js";
+import { reconcileAll } from "./integrations/outreach/reconcile.js";
+import { lastRunAt, createJob, finishJob, failJob } from "./integrations/outreach/jobs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -76,6 +80,12 @@ app.use(cors({
 }));
 app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
 
+// Smartlead webhooks MUST see the raw request bytes to verify the HMAC
+// signature, so this is mounted BEFORE express.json() with a raw-body parser.
+// It's a public route (authenticated by URL token + signature), never behind
+// requireAuth. Keep it above the JSON middleware.
+app.use("/hooks/smartlead", express.raw({ type: "*/*", limit: "2mb" }), smartleadWebhookRoutes);
+
 // Bumped to 25mb so the LinkedIn messages.csv import (parsed client-side
 // into a JSON array of up to 50k rows × ~300 bytes each) doesn't hit the
 // default 100kb limit. Smaller endpoints still have their own zod caps.
@@ -97,6 +107,7 @@ app.use("/api/crm", requireAuth, crmRoutes);
 app.use("/api/usage", requireAuth, usageRoutes);
 app.use("/api/messages-log", requireAuth, messagesLogRoutes);
 app.use("/api/sales", requireAuth, salesRoutes);
+app.use("/api/outreach", requireAuth, outreachRoutes);
 
 // JSON 404 for the API surface.
 app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));
@@ -172,8 +183,43 @@ async function runPendingMigrations() {
   }
 }
 
+/** Daily outreach reconciliation (spec §6) — a drift check, not an event source.
+ *
+ *  Ticks hourly but only runs when the LAST RECORDED RUN is over ~20h old. A
+ *  naive setInterval(24h) restarts on every deploy, so on a daily-deploy
+ *  cadence the 24h mark is never reached and the job silently never runs. The
+ *  last-run timestamp lives in outreach_jobs, so restarts don't reset it.
+ *
+ *  Still assumes a single instance: two containers could both pass the check in
+ *  the same hour. Reconciliation is idempotent, so a double run is harmless —
+ *  but a horizontally-scaled deploy should move this to an external scheduler. */
+function startReconcileScheduler() {
+  const HOUR_MS = 60 * 60 * 1000;
+  const MIN_GAP_MS = 20 * HOUR_MS;
+  const tick = async () => {
+    try {
+      const last = await lastRunAt("reconcile");
+      if (last && Date.now() - last.getTime() < MIN_GAP_MS) return;
+      const jobId = await createJob(null, "reconcile");
+      try {
+        await reconcileAll();
+        await finishJob(jobId, { ok: true });
+      } catch (err) {
+        await failJob(jobId, (err as Error).message);
+        throw err;
+      }
+    } catch (err) {
+      console.error("[reconcile] scheduled run failed:", (err as Error).message);
+    }
+  };
+  setInterval(() => { void tick(); }, HOUR_MS).unref();
+  // Check shortly after boot too, so a server that restarts daily still runs.
+  setTimeout(() => { void tick(); }, 5 * 60 * 1000).unref();
+}
+
 runPendingMigrations().finally(() => {
   app.listen(env.PORT, () => {
     console.log(`✔ API listening on ${env.SERVER_URL} (NODE_ENV=${env.NODE_ENV})`);
+    startReconcileScheduler();
   });
 });

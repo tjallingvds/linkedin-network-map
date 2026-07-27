@@ -15,6 +15,7 @@ import { CompanyGrid } from "../components/CompanyCard";
 import { DetailDrawer } from "../components/DetailDrawer";
 import { OutreachDrawer } from "../components/OutreachDrawer";
 import { CRMView } from "../components/CRMView";
+import { ApprovalsView } from "../components/ApprovalsView";
 import { SettingsDrawer } from "../components/SettingsDrawer";
 import { ConnectionsImportModal } from "../components/ConnectionsImportModal";
 import {
@@ -379,8 +380,24 @@ export function DiscoverPage() {
   // result the server-side brief reconstruction never sees.
   const [lastCompanies, setLastCompanies] = useState<string[]>([]);
   const [collapsed, setCollapsed] = useState(false);
-  const [appMode, setAppMode] = useState<"discover" | "crm">("discover");
-  const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table" | "overview">("kanban");
+  const [appMode, setAppMode] = useState<"discover" | "crm" | "approvals">("discover");
+  // Badge for the sidebar — drafted emails waiting on a human, all boards.
+  const [approvalCount, setApprovalCount] = useState(0);
+  // Refresh the badge on mount, when leaving the approvals screen, and every
+  // couple of minutes — cheap COUNT, no need to be live.
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await api.get<{ count: number }>("/api/outreach/pending/count");
+        if (alive) setApprovalCount(r.count);
+      } catch { /* not connected / not signed in — leave the badge alone */ }
+    };
+    void tick();
+    const t = setInterval(tick, 120_000);
+    return () => { alive = false; clearInterval(t); };
+  }, [appMode]);
+  const [crmViewMode, setCrmViewMode] = useState<"kanban" | "table" | "overview" | "automations">("kanban");
   const [activeBoardId, setActiveBoardId] = useState<string>("");
   const [view, setView] = useState<"hero" | "thread">("hero");
   // Chat message tree (source of truth) + which sibling is active at each
@@ -1176,6 +1193,7 @@ export function DiscoverPage() {
   // user's raw prompt — the title lives in chatList keyed by chatId and
   // gets updated as soon as the server returns one from /completion.
   const breadcrumb = useMemo(() => {
+    if (appMode === "approvals") return ["Email", "Need approval"];
     if (appMode === "crm") {
       // Always show the actual board name as the second crumb regardless
       // of whether the user is on the kanban or table view — switching
@@ -1198,6 +1216,9 @@ export function DiscoverPage() {
       <div className={`app${collapsed ? " collapsed" : ""}`}>
         <Sidebar
           activeNav={activeNav}
+          approvalCount={approvalCount}
+          approvalsActive={appMode === "approvals"}
+          onOpenApprovals={() => { setActiveNav(""); setAppMode("approvals"); }}
           onSelect={handleSelectNav}
           onNewChat={handleNewChat}
           onRenameSearch={renameChat}
@@ -1213,10 +1234,17 @@ export function DiscoverPage() {
           onOpenSettings={() => setSettingsOpen(true)}
         />
 
-        <div className={`main${appMode === "crm" ? " crm" : ""}`}>
+        <div className={`main${appMode === "crm" || appMode === "approvals" ? " crm" : ""}`}>
           <div className="topbar">
             <div className="crumbs">
-              {appMode !== "crm" && (
+              {appMode === "approvals" && (
+                <>
+                  <span>{breadcrumb[0]}</span>
+                  <span className="crumb-sep">/</span>
+                  <span className="cur">{breadcrumb[1]}</span>
+                </>
+              )}
+              {appMode === "discover" && (
                 <>
                   <span>{breadcrumb[0]}</span>
                   <span className="crumb-sep">/</span>
@@ -1237,7 +1265,9 @@ export function DiscoverPage() {
           </div>
 
           <div className="canvas">
-            {appMode === "crm" ? (
+            {appMode === "approvals" ? (
+              <ApprovalsView onFlash={flash} />
+            ) : appMode === "crm" ? (
               <CRMView
                 viewMode={crmViewMode}
                 setViewMode={setCrmViewMode}
