@@ -162,6 +162,12 @@ router.post("/board/:boardId/groups", async (req: AuthedRequest, res: Response) 
       name: z.string().max(80).optional(),
       description: z.string().max(1000).optional(),
       prompt: z.string().max(4000).optional(),
+      // Whether it may send. Accepted, then checked against the stored test —
+      // saveGroups refuses it for a group with no tested prompt.
+      live: z.boolean().optional(),
+      // `testedAt` is deliberately NOT accepted: it is proof that a test ran,
+      // so it may only ever be written by the test itself. Zod drops it here,
+      // and saveGroups reads it from storage regardless of what was sent.
     })).max(MAX_GROUPS),
   }).safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: "invalid_body" });

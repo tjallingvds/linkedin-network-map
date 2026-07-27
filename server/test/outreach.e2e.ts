@@ -646,6 +646,49 @@ async function main() {
     eq("the undescribed group is refused", acceptGroup(status.groups[2].id, status.groups), null);
     eq("a described group is accepted", acceptGroup("B", status.groups), "B");
 
+    // Going live THROUGH THE ROUTE, which is the only path the UI has. The
+    // schema previously dropped `live`, so saving from the screen silently
+    // switched groups off and nothing could ever go live.
+    // This section rewrote the prompt above, which correctly cleared the test.
+    // Stand in for a real test run, then go live the way the screen does.
+    const g0 = status.groups[0];
+    await markTested(userId, boardId, g0.id);
+    await authed(`/api/outreach/board/${boardId}/groups`, {
+      method: "POST",
+      body: JSON.stringify({ groups: status.groups.map((g: any) => ({ ...g, live: g.id === g0.id })) }),
+    });
+    const afterLive: any = await (await authed(`/api/outreach/board/${boardId}`)).json();
+    eq("a tested group goes live through the route",
+      afterLive.groups.find((g: any) => g.id === g0.id)?.live, true);
+
+    // Editing an unrelated group must not switch it off again.
+    await authed(`/api/outreach/board/${boardId}/groups`, {
+      method: "POST",
+      body: JSON.stringify({
+        groups: afterLive.groups.map((g: any) =>
+          g.id === g0.id ? g : { ...g, name: `${g.name} (edited)` }),
+      }),
+    });
+    const afterEdit2: any = await (await authed(`/api/outreach/board/${boardId}`)).json();
+    eq("editing another group leaves it live",
+      afterEdit2.groups.find((g: any) => g.id === g0.id)?.live, true);
+
+    // A client claiming it was tested must be ignored — testedAt is proof a
+    // test ran, so only the test may write it.
+    const fresh: any = await (await authed(`/api/outreach/board/${boardId}/groups`, {
+      method: "POST",
+      body: JSON.stringify({ groups: [
+        ...afterEdit2.groups,
+        { name: "Snuck in", description: "anyone", prompt: "hi", testedAt: "2026-07-27T00:00:00Z", live: true },
+      ] }),
+    })).json();
+    const snuck = fresh.groups.find((g: any) => g.name === "Snuck in");
+    eq("a claimed test is ignored", snuck?.testedAt, null);
+    eq("so it cannot be live", snuck?.live, false);
+    await authed(`/api/outreach/board/${boardId}/groups`, {
+      method: "POST", body: JSON.stringify({ groups: afterEdit2.groups }),
+    });
+
     // Removing a group un-groups its people rather than leaving them pointed
     // at something that no longer exists.
     const orphan = await add("Will Be Orphaned", "orphan@acme.com", "B");

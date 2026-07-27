@@ -73,9 +73,12 @@ function normalizeGroup(g: Partial<Group>): Group {
 }
 
 /** One block of the page: a title row over a hairline, then a bordered body. */
-function Sec({ title, hint, chip, chipTone, muted, children }: {
+function Sec({ title, hint, chip, chipTone, muted, action, children }: {
   title: string; hint?: React.ReactNode; chip?: string;
-  chipTone?: "on" | "bad"; muted?: boolean; children: React.ReactNode;
+  chipTone?: "on" | "bad"; muted?: boolean;
+  /** Right-aligned control for the section, e.g. "Add group". */
+  action?: React.ReactNode;
+  children: React.ReactNode;
 }) {
   return (
     <section className={`au-sec${muted ? " is-muted" : ""}`}>
@@ -83,6 +86,7 @@ function Sec({ title, hint, chip, chipTone, muted, children }: {
         <h3 className="au-sec-title">{title}</h3>
         {chip && <span className={`au-chip${chipTone === "on" ? " is-on" : chipTone === "bad" ? " is-bad" : ""}`}>{chip}</span>}
         {hint && <span className="au-sec-hint">{hint}</span>}
+        {action && <span className="au-sec-action">{action}</span>}
       </div>
       <div className="au-sec-body">{children}</div>
     </section>
@@ -414,7 +418,7 @@ function Warnings({ boardId, threshold, bounceRate, sent, overBounce, onFlash, o
           </div>
         </div>
       )}
-      <div className="au-field" style={{ marginTop: "auto" }}>
+      <div className="au-field">
         <span className="au-field-label">Warn above</span>
         <input type="number" min={1} max={50} className="au-input is-tiny" value={pct}
           onChange={(e) => setPct(Number(e.target.value))} />
@@ -442,7 +446,7 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
   const [remote, setRemote] = useState<RemoteCampaign[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [draft, setDraft] = useState<Group[]>([]);
-  const [openPrompt, setOpenPrompt] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
   const [sorting, setSorting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   // Sample lines from the last test, per group, so the operator can read what
@@ -471,8 +475,10 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
   const edit = (i: number, patch: Partial<Group>) =>
     setDraft(draft.map((g, n) => (n === i ? { ...g, ...patch } : g)));
 
-  const add = () =>
-    setDraft([...draft, { id: "", name: `Group ${draft.length + 1}`, description: "", prompt: "", testedAt: null, live: false }]);
+  const add = () => {
+    setDraft([...draft, { id: "", name: "", description: "", prompt: "", testedAt: null, live: false }]);
+    setOpen(`new-${draft.length}`);
+  };
 
   const remove = (g: Group, i: number) => {
     const people = readiness?.byGroup[g.id] ?? 0;
@@ -558,133 +564,156 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
     finally { setSorting(false); setNote(null); }
   };
 
+  // The one thing to do next for this group, in order. Null when it's sending.
+  const nextStep = (g: Group): string | null => {
+    if (!g.id) return "Save it first";
+    if (!g.description.trim()) return "Describe who belongs";
+    if (!g.prompt.trim()) return "Write the opening line";
+    if (!g.testedAt) return "Test the opening line";
+    if (!g.live) return "Switch it live";
+    return null;
+  };
+
   return (
     <Sec title="Groups"
-      hint="Describe who belongs in each group and people are sorted in for you. Each group has its own campaign and its own opening line.">
+      hint="Describe who belongs and people are sorted in for you. Each group sends its own campaign, with its own opening line."
+      action={
+        <button className="pill-btn" disabled={disabled || draft.length >= 12} onClick={add}>
+          Add group
+        </button>
+      }>
       {!draft.length && (
         <div className="au-empty">No groups yet. Add one and describe who belongs in it.</div>
       )}
-      {draft.map((g, i) => {
-        const mapped = g.id ? campaigns.find((c) => c.tier === g.id) : undefined;
-        const people = g.id ? readiness?.byGroup[g.id] ?? 0 : 0;
-        return (
-          <div key={g.id || `new-${i}`} className="au-group">
-            <span className="au-group-tag">{i + 1}</span>
-            <div className="au-group-body">
-              <div className="au-group-row">
-                <input className="au-input" disabled={disabled} value={g.name}
-                  placeholder="Name this group"
-                  onChange={(e) => edit(i, { name: e.target.value })} />
-                <span className={`au-chip${g.live ? " is-on" : ""}`}>{g.live ? "live" : "not live"}</span>
-                <span className="au-count">{people} {people === 1 ? "person" : "people"}</span>
-                <button className="pill-btn" disabled={disabled} onClick={() => remove(g, i)}
-                  title="Remove this group">Remove</button>
-              </div>
-              <textarea className="au-group-desc" rows={2} disabled={disabled}
-                placeholder="Who belongs here? e.g. Heads of AI or data at banks and insurers"
-                value={g.description}
-                onChange={(e) => edit(i, { description: e.target.value })} />
-              <div className="au-group-row">
-                <select className="au-input" disabled={disabled || loading || !g.id}
-                  value={mapped?.provider_campaign_id ?? ""}
-                  onChange={(e) => {
-                    const id = e.target.value;
-                    if (!id) return;
-                    setCampaign(g, id, remote?.find((r) => String(r.id) === id)?.name);
-                  }}>
-                  <option value="">
-                    {!g.id ? "Save first, then pick a campaign"
-                      : loading ? "Loading campaigns…" : "— pick a Smartlead campaign —"}
-                  </option>
-                  {remote?.map((r) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
-                  {mapped && !remote?.some((r) => String(r.id) === mapped.provider_campaign_id) && (
-                    <option value={mapped.provider_campaign_id}>Campaign #{mapped.provider_campaign_id}</option>
-                  )}
-                </select>
-                <button className="pill-btn" disabled={disabled}
-                  onClick={() => setOpenPrompt(openPrompt === (g.id || `new-${i}`) ? null : (g.id || `new-${i}`))}>
-                  Opening line {g.prompt.trim() ? "· written" : "· not written"}
-                </button>
-              </div>
 
-              {openPrompt === (g.id || `new-${i}`) && (
-                <>
-                  <textarea className="au-prompt" rows={7} disabled={disabled}
-                    placeholder={defaultPrompt}
-                    value={g.prompt}
-                    onChange={(e) => edit(i, { prompt: e.target.value })} />
-                  <div className="au-note">
-                    How this group’s first line is written, from their LinkedIn and your CRM
-                    notes. “Never invent” always applies, whatever you put here. Changing this
-                    takes the group off live until you test it again.
+      <div className="au-glist">
+        {draft.map((g, i) => {
+          const key = g.id || `new-${i}`;
+          const mapped = g.id ? campaigns.find((c) => c.tier === g.id) : undefined;
+          const people = g.id ? readiness?.byGroup[g.id] ?? 0 : 0;
+          const step = nextStep(g);
+          const isOpen = open === key;
+          return (
+            <div key={key} className={`au-g${isOpen ? " is-open" : ""}`}>
+              {/* Collapsed: everything you need to know at a glance. */}
+              <button className="au-g-head" onClick={() => setOpen(isOpen ? null : key)}>
+                <span className={`au-dot${g.live ? " is-live" : ""}`} />
+                <span className="au-g-name">{g.name || "Untitled group"}</span>
+                <span className="au-g-meta">{people} {people === 1 ? "person" : "people"}</span>
+                <span className="au-g-meta">{mapped?.name ?? (mapped ? `#${mapped.provider_campaign_id}` : "no campaign")}</span>
+                <span className={`au-g-step${step ? "" : " is-done"}`}>{step ?? "Sending"}</span>
+                <span className="au-g-chev">{isOpen ? "▾" : "▸"}</span>
+              </button>
+
+              {isOpen && (
+                <div className="au-g-body">
+                  <label className="au-f">
+                    <span className="au-f-label">Name</span>
+                    <input className="au-input" disabled={disabled} value={g.name}
+                      placeholder="Name this group"
+                      onChange={(e) => edit(i, { name: e.target.value })} />
+                  </label>
+
+                  <label className="au-f">
+                    <span className="au-f-label">Who belongs</span>
+                    <textarea className="au-group-desc" rows={2} disabled={disabled}
+                      placeholder="e.g. Heads of AI or data at banks and insurers"
+                      value={g.description}
+                      onChange={(e) => edit(i, { description: e.target.value })} />
+                  </label>
+
+                  <label className="au-f">
+                    <span className="au-f-label">Campaign</span>
+                    <select className="au-input" disabled={disabled || loading || !g.id}
+                      value={mapped?.provider_campaign_id ?? ""}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        if (!id) return;
+                        setCampaign(g, id, remote?.find((r) => String(r.id) === id)?.name);
+                      }}>
+                      <option value="">
+                        {!g.id ? "Save first, then pick a campaign"
+                          : loading ? "Loading campaigns…" : "— pick a Smartlead campaign —"}
+                      </option>
+                      {remote?.map((r) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
+                      {mapped && !remote?.some((r) => String(r.id) === mapped.provider_campaign_id) && (
+                        <option value={mapped.provider_campaign_id}>Campaign #{mapped.provider_campaign_id}</option>
+                      )}
+                    </select>
+                  </label>
+
+                  <label className="au-f au-f-top">
+                    <span className="au-f-label">Opening line</span>
+                    <span className="au-f-stack">
+                      <textarea className="au-prompt" rows={5} disabled={disabled}
+                        placeholder={defaultPrompt}
+                        value={g.prompt}
+                        onChange={(e) => edit(i, { prompt: e.target.value })} />
+                      <span className="au-hint">
+                        Written from their LinkedIn and your CRM notes. “Never invent” always
+                        applies. Editing this takes the group off live until you test again.
+                      </span>
+                    </span>
+                  </label>
+
+                  <div className="au-g-foot">
+                    <button className="pill-btn" disabled={disabled || !g.id || !g.prompt.trim() || dirty || testing === g.id}
+                      onClick={() => void test(g)}
+                      title={dirty ? "Save your changes first" : "Write sample lines for real people in this group"}>
+                      {testing === g.id ? "Testing…" : g.testedAt ? "Test again" : "Test"}
+                    </button>
+                    <button className={`pill-btn${g.live || !g.testedAt ? "" : " primary"}`}
+                      disabled={disabled || !g.id || dirty || (!g.live && !g.testedAt)}
+                      onClick={() => void setLive(g, !g.live)}
+                      title={!g.testedAt && !g.live ? "Test the opening line first" : ""}>
+                      {g.live ? "Pause" : "Switch live"}
+                    </button>
+                    <button className="pill-btn au-danger" disabled={disabled}
+                      style={{ marginLeft: "auto" }} onClick={() => remove(g, i)}>Remove</button>
                   </div>
-                </>
-              )}
 
-              {/* Going live needs a written prompt and a test you've read. */}
-              <div className="au-group-row">
-                <button className="pill-btn" disabled={disabled || !g.id || !g.prompt.trim() || dirty || testing === g.id}
-                  onClick={() => void test(g)}
-                  title={dirty ? "Save your changes first" : "Write sample lines for real people in this group"}>
-                  {testing === g.id ? "Testing…" : g.testedAt ? "Test again" : "Test on real people"}
-                </button>
-                <button className={`pill-btn${g.live ? "" : " primary"}`}
-                  disabled={disabled || !g.id || dirty || (!g.live && !g.testedAt)}
-                  onClick={() => void setLive(g, !g.live)}
-                  title={!g.testedAt && !g.live ? "Test the opening line first" : ""}>
-                  {g.live ? "Pause this group" : "Switch live"}
-                </button>
-                <span className="au-count" style={{ minWidth: 0, textAlign: "left" }}>
-                  {g.live ? "Sending."
-                    : !g.prompt.trim() ? "Write the opening line first."
-                    : !g.testedAt ? "Test it, then switch live."
-                    : "Tested — switch live when you're happy."}
-                </span>
-              </div>
-
-              {(tryouts[g.id] ?? []).length > 0 && (
-                <div className="au-tryout">
-                  {tryouts[g.id]!.map((t) => (
-                    <div key={t.contactId} className="au-tryout-row">
-                      <div className="au-tryout-who">
-                        {t.name}{t.title ? ` · ${t.title}` : ""}{t.company ? ` · ${t.company}` : ""}
+                  {(tryouts[g.id] ?? []).length > 0 && (
+                    <div className="au-tryout">
+                      {tryouts[g.id]!.map((t) => (
+                        <div key={t.contactId} className="au-tryout-row">
+                          <div className="au-tryout-who">
+                            {t.name}{t.title ? ` · ${t.title}` : ""}{t.company ? ` · ${t.company}` : ""}
+                          </div>
+                          <div className={`au-tryout-line${t.line ? "" : " is-none"}`}>
+                            {t.line ?? "No line — nothing specific enough to say about them."}
+                          </div>
+                          <div className="au-src">{t.from}</div>
+                        </div>
+                      ))}
+                      <div className="au-hint">
+                        Samples only, saved to nobody. Real lines still wait for your approval.
                       </div>
-                      <div className={`au-tryout-line${t.line ? "" : " is-none"}`}>
-                        {t.line ?? "No line — nothing specific enough to say about them."}
-                      </div>
-                      <div className="au-src">{t.from}</div>
                     </div>
-                  ))}
-                  <div className="au-note">
-                    Samples only — these are not saved to anyone. Real lines are drafted when
-                    the group is live, and still wait for your approval.
-                  </div>
+                  )}
                 </div>
               )}
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
 
       <div className="au-actions">
-        <button className="pill-btn primary" disabled={disabled || !dirty} onClick={() => void save()}>
-          {dirty ? "Save groups" : "Saved"}
-        </button>
-        <button className="pill-btn" disabled={disabled || draft.length >= 12} onClick={add}>
-          Add a group
-        </button>
+        {dirty && (
+          <button className="pill-btn primary" disabled={disabled} onClick={() => void save()}>
+            Save changes
+          </button>
+        )}
         <button className="pill-btn" disabled={disabled || sorting || !described} onClick={() => void sortNow(false)}>
-          Sort the ungrouped now
+          Sort people into groups
         </button>
-        <button className="pill-btn" disabled={disabled || sorting || !described} onClick={() => void sortNow(true)}>
-          Re-sort everyone
+        <button className="au-link" disabled={disabled || sorting || !described} onClick={() => void sortNow(true)}>
+          re-sort everyone
         </button>
-        {note && <span className="au-count" style={{ minWidth: 0 }}>{note}</span>}
+        {note && <span className="au-hint">{note}</span>}
       </div>
-      <div className="au-note">
-        Sorting runs by itself before each drafting round. Anyone who fits none of your
-        descriptions is left out rather than guessed at — set the <b>Group</b> field on their
-        contact by hand to overrule a call.
+      <div className="au-hint">
+        Sorting also runs by itself before each drafting round. Anyone matching no description is
+        left out rather than guessed at — set <b>Group</b> on their contact to overrule a call.
       </div>
     </Sec>
   );
