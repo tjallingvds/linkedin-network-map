@@ -27,6 +27,7 @@ import salesRoutes from "./routes/sales/index.js";
 import outreachRoutes from "./routes/outreach/index.js";
 import smartleadWebhookRoutes from "./routes/webhooks/smartlead.js";
 import { reconcileAll } from "./integrations/outreach/reconcile.js";
+import { draftAhead } from "./integrations/outreach/openers/ahead.js";
 import { lastRunAt, createJob, finishJob, failJob } from "./integrations/outreach/jobs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -203,7 +204,12 @@ function startReconcileScheduler() {
       const jobId = await createJob(null, "reconcile");
       try {
         await reconcileAll();
-        await finishJob(jobId, { ok: true });
+        // Write the missing opening lines too, so anyone sorted into a group
+        // since the last run is already drafted and waiting by the time the
+        // approval screen is opened rather than drafted while it's watched.
+        const ahead = await draftAhead();
+        await finishJob(jobId, { ok: true, ahead });
+        if (ahead.drafted) console.log(`[openers] wrote ${ahead.drafted} lines ahead of time`);
       } catch (err) {
         await failJob(jobId, (err as Error).message);
         throw err;

@@ -17,7 +17,7 @@ import { getAccountByBoard, listAccounts, type OutreachAccount } from "./account
 import { getCampaignLeads, pauseLead, mapLeadStatusToState } from "../smartlead.js";
 import { pauseContactCampaigns } from "./suppress.js";
 import { isAutoReply } from "./events.js";
-import { bounceBreaches } from "./metrics.js";
+import { bounceBreaches, BOUNCE_LIMIT_PCT, BOUNCE_MIN_SENDS } from "./metrics.js";
 import { alertUser } from "./alerts.js";
 
 export interface ReconcileCounts {
@@ -115,13 +115,13 @@ export async function reconcileAccount(account: OutreachAccount): Promise<Reconc
 
   // Our own bounce-rate guardrail, independent of Smartlead's threshold event.
   try {
-    const threshold = account.bounceThresholdPct;
-    const breaches = await bounceBreaches(userId, threshold, 20, boardId);
+    const threshold = BOUNCE_LIMIT_PCT;
+    const breaches = await bounceBreaches(userId, threshold, BOUNCE_MIN_SENDS, boardId);
     for (const b of breaches) {
       await alertUser(
         userId,
         `Bounce rate ${b.bounceRate}% on Tier ${b.tier ?? "?"} (${b.bounced}/${b.sent}) — over your ` +
-        `${threshold}% threshold. Stop sending and fix list quality before it costs you domain reputation.`,
+        `${threshold}% limit. Stop sending and fix list quality before it costs you domain reputation.`,
         { kind: "bounce_rate", severity: b.bounceRate >= threshold * 2 ? "critical" : "warning", campaignId: b.campaignId },
       );
     }

@@ -41,7 +41,8 @@ export async function selectExcluded(userId: string, boardId: string): Promise<E
 
   const contacts = await db
     .selectFrom("crm_contacts")
-    .select(["id", "name", "email", "stage", "tier", "outreach_status"])
+    .select(["id", "name", "email", "stage", "tier", "outreach_status",
+             "linkedin", "opening_line_status", "opening_line_source"])
     .where("user_id", "=", userId)
     .where("board_id", "=", boardId)
     .orderBy("created_at", "asc")
@@ -116,6 +117,17 @@ export async function selectExcluded(userId: string, boardId: string): Promise<E
     }
     else if (deriveName(c.name).first === null) { reason = "Name can't be used in a greeting"; fixable = true; }
     else if (claimed.has(email)) { reason = "Same email as an earlier contact"; fixable = true; }
+    // Past the gate — so whether they're on the approval screen comes down to
+    // their opening line, which is written from their LinkedIn.
+    else if (!c.linkedin?.trim()) { reason = "No LinkedIn link on their contact"; fixable = true; }
+    else if (c.opening_line_status === "approved") reason = "Approved — going out now";
+    else if (c.opening_line_status === "skipped") {
+      reason = c.opening_line_source?.startsWith("Nothing usable")
+        ? "Couldn't read their LinkedIn"
+        : "Nothing specific enough on their LinkedIn";
+      fixable = true;
+    }
+    else if (!c.opening_line_status) { reason = "Opening line still being written"; fixable = false; }
 
     if (reason) out.push({ id: c.id, name: c.name, email: c.email, stage: c.stage, reason, fixable });
     else if (email) claimed.add(email);

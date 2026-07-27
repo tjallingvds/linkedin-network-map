@@ -12,10 +12,11 @@ import { sql } from "kysely";
 import { db } from "../../db/index.js";
 import type { AuthedRequest } from "../../auth/session.js";
 import {
-  connectAccount, getAccountByBoard, disconnectAccount, rotateWebhook, setAlertConfig,
+  connectAccount, getAccountByBoard, disconnectAccount, rotateWebhook,
 } from "../../integrations/outreach/accounts.js";
 import { listCampaigns } from "../../integrations/smartlead.js";
 import { unreadAlertCount } from "../../integrations/outreach/alerts.js";
+import { BOUNCE_LIMIT_PCT, BOUNCE_MIN_SENDS } from "../../integrations/outreach/metrics.js";
 
 /** The most recent webhook this user received, for the setup panel. */
 async function lastEventFor(userId: string) {
@@ -86,7 +87,8 @@ router.get("/board/:boardId", async (req: AuthedRequest, res: Response) => {
     connected: !!account,
     enabled: !!board.outreach_enabled,
     webhookUrl: account ? webhookUrl(account.webhookToken, req) : null,
-    bounceThresholdPct: account?.bounceThresholdPct ?? 2,
+    bounceLimitPct: BOUNCE_LIMIT_PCT,
+    bounceMinSends: BOUNCE_MIN_SENDS,
     stopStages: stopStagesOf(board),
     groups: await listGroups(board.id),
     stageRules: parseRules(board.outreach_stage_map),
@@ -151,15 +153,6 @@ router.post("/board/:boardId/enabled", async (req: AuthedRequest, res: Response)
     .set({ outreach_enabled: parsed.data.enabled, updated_at: new Date() as never })
     .where("id", "=", board.id).execute();
   res.json({ ok: true, enabled: parsed.data.enabled });
-});
-
-router.post("/board/:boardId/threshold", async (req: AuthedRequest, res: Response) => {
-  const board = await ownedBoard(req);
-  if (!board) return res.status(404).json({ error: "board_not_found" });
-  const parsed = z.object({ bounceThresholdPct: z.number().int().min(1).max(50) }).safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: "invalid_body" });
-  await setAlertConfig(board.id, parsed.data);
-  res.json({ ok: true });
 });
 
 /**

@@ -40,9 +40,6 @@ export interface PendingRow extends OpenerRow {
   group: string;
   /** The group's name as the operator wrote it — ids are internal. */
   groupName: string;
-  /** False when this person has no personal line — they'd receive the plain
-   *  campaign template. Shown separately so sending them is a deliberate act. */
-  hasLine: boolean;
 }
 
 /** Every board+group that could actually send: switched on, campaign chosen. */
@@ -66,12 +63,19 @@ async function sendableTargets(userId: string) {
 }
 
 /**
- * Everyone across EVERY board who would go out on the next send, with their
- * opening line if they have one.
+ * Everyone across EVERY board who is waiting for a yes or no, with the line
+ * that was written for them.
+ *
+ * Only people whose line is WRITTEN AND NOT YET DECIDED appear here. That is
+ * the whole meaning of the screen:
+ *   - no line written yet  → not ready, so not shown (it's being written)
+ *   - line couldn't be written → shown under "who won't be emailed" instead
+ *   - already approved     → the decision is made, so it leaves immediately,
+ *                            without waiting for the push to Smartlead
  *
  * Built on `selectEligible` rather than its own query, so the queue can never
  * disagree with what sending actually does: if someone is suppressed, already
- * in a campaign, or on a switched-off board, they simply aren't here.
+ * in a campaign, or in a group that isn't live, they simply aren't here.
  */
 export async function listPending(userId: string): Promise<PendingRow[]> {
   const out: PendingRow[] = [];
@@ -89,11 +93,15 @@ export async function listPending(userId: string): Promise<PendingRow[]> {
       .selectFrom("crm_contacts")
       .select(["id", "title", "opening_line", "opening_line_source", "opening_line_status"])
       .where("id", "in", ready.map((r) => r.id))
+      // Written, and still undecided.
+      .where("opening_line_status", "=", "draft")
+      .where("opening_line", "is not", null)
       .execute();
     const byId = new Map(meta.map((m) => [m.id, m]));
 
     for (const r of ready) {
       const m = byId.get(r.id);
+      if (!m) continue; // no line yet, or already decided
       out.push({
         id: r.id,
         name: r.name,
@@ -107,7 +115,6 @@ export async function listPending(userId: string): Promise<PendingRow[]> {
         boardName: t.boardName,
         group: t.group,
         groupName: t.groupName,
-        hasLine: !!m?.opening_line,
       });
     }
   }
@@ -122,9 +129,10 @@ export async function pendingCount(userId: string): Promise<number> {
 /**
  * Approve the chosen people and report which board+group each belongs to.
  *
- * Anyone who has a drafted line gets it approved (so it will be merged);
- * anyone without one is simply cleared to send the plain template. Both are
- * deliberate acts by the operator — nothing here is implicit.
+ * Marking the line approved is what removes them from the queue — it happens
+ * here, before the push to Smartlead is even started, so pressing Approve
+ * takes them off the screen immediately rather than leaving them sitting there
+ * until a background job finishes.
  */
 export async function approveByIds(
   userId: string,
@@ -158,8 +166,23 @@ export async function approveByIds(
   return [...groups.values()];
 }
 
-/** How many of the waiting people still have no line written — drives the
- *  automatic draft when the approval screen opens. */
+/**
+ * How many sendable people still have no line written. Drives the catch-up
+ * draft when the approval screen opens; the background pass normally means
+ * this is already zero by the time anyone looks.
+ */
 export async function undraftedCount(userId: string): Promise<number> {
-  return (await listPending(userId)).filter((r) => !r.hasLine && r.status === null).length;
+  let n = 0;
+  for (const t of await sendableTargets(userId)) {
+    const ready = (await selectEligible(userId, { tier: t.group, boardId: t.boardId }))
+      .filter((r) => deriveName(r.name).first !== null);
+    if (!ready.length) continue;
+    const rows = await db
+      .selectFrom("crm_contacts").select("id")
+      .where("id", "in", ready.map((r) => r.id))
+      .where("opening_line_status", "is", null)
+      .execute();
+    n += rows.length;
+  }
+  return n;
 }

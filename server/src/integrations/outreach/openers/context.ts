@@ -1,9 +1,10 @@
 /**
- * What we're willing to build an opening line from, and whether it's enough.
+ * What we're willing to build an opening line from.
  *
- * Title + company alone is NOT enough — "I saw you're CTO at Acme" reads as a
- * mail-merge, which is the exact failure this feature exists to avoid. We
- * require at least one substantive free-text fact or a real web finding.
+ * The line itself is written from the person's LinkedIn (see research.ts);
+ * what's collected here is the CRM's own knowledge, passed alongside so the
+ * model can read the profile correctly and avoid contradicting what is
+ * already known. It is context, never the subject of the line.
  */
 /** Facts we're willing to build a line from, plus where each came from. */
 export function contextFor(c: {
@@ -33,16 +34,3 @@ export function contextFor(c: {
   }
   return { facts, sources };
 }
-
-/**
- * Is there enough here to say something specific? Title + company alone is
- * generic ("I saw you're CTO at Acme" is not personal), so we require at least
- * one substantive free-text fact.
- */
-export function hasRealMaterial(facts: Record<string, string>): boolean {
-  const substantive = ["notes", "background", "previous_conversation_notes"];
-  if (substantive.some((k) => (facts[k]?.length ?? 0) >= 25)) return true;
-  if (Object.keys(facts).some((k) => k.startsWith("web_"))) return true;
-  return Object.keys(facts).some((k) => k.startsWith("custom_") && facts[k]!.length >= 15);
-}
-

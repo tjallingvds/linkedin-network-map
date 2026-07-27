@@ -20,12 +20,12 @@ import { pauseContactCampaigns } from "./suppress.js";
 export interface StageRules { noSend?: string[] }
 
 /** Lowercase, strip punctuation, collapse whitespace. */
-function norm(s: string): string {
+export function norm(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
 /** Levenshtein distance, short-circuited — we only care about "close". */
-function editDistance(a: string, b: string): number {
+export function editDistance(a: string, b: string): number {
   if (a === b) return 0;
   if (Math.abs(a.length - b.length) > 2) return 99;
   const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
@@ -39,6 +39,20 @@ function editDistance(a: string, b: string): number {
     }
   }
   return prev[b.length];
+}
+
+/**
+ * Are these the same stage? Tolerates case, punctuation and a typo or two, and
+ * — the case that actually bites — an id written where a label is stored, or
+ * the other way round. A board's stages live on the client, so both spellings
+ * reach the server depending on which screen saved them.
+ */
+export function sameStage(a: string | null | undefined, b: string | null | undefined): boolean {
+  const x = norm(a ?? ""), y = norm(b ?? "");
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const budget = Math.max(x.length, y.length) >= 8 ? 2 : 1;
+  return editDistance(x, y) <= budget;
 }
 
 /**

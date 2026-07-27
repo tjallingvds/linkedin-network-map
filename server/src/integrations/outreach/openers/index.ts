@@ -6,7 +6,7 @@
  * so it leads into that message. Lines are always created as drafts; only an
  * explicit approval releases them to Smartlead.
  */
-export { contextFor, hasRealMaterial } from "./context.js";
+export { contextFor } from "./context.js";
 export { research } from "./research.js";
 export { draftOne, autodraftAll, promptFor, DEFAULT_PROMPT, type DraftResult } from "./draft.js";
 export { sortOne, sortBoard, sortAll, acceptGroup, type SortResult } from "./sort.js";

@@ -28,7 +28,7 @@ interface Tryout { contactId: string; name: string; title: string | null; compan
 interface Campaign { id: string; board_id: string; provider_campaign_id: string; tier: string; name: string | null; state: string }
 interface BoardStatus {
   boardId: string; name: string; connected: boolean; enabled: boolean;
-  webhookUrl: string | null; bounceThresholdPct: number;
+  webhookUrl: string | null; bounceLimitPct: number; bounceMinSends: number;
   stopStages: string[]; stageRules: StageRule[]; campaigns: Campaign[];
   defaultPrompt: string;
   groups: Group[];
@@ -118,6 +118,7 @@ export function OutreachPanel({
   const [setup, setSetup] = useState<ConnectResp | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   const load = async () => {
     try {
@@ -175,8 +176,8 @@ export function OutreachPanel({
   const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 1000) / 10 : 0);
   const bounceRate = pct(t.bounced, t.sent);
   const replyRate = pct(t.replied, t.delivered);
-  const threshold = st?.bounceThresholdPct ?? 2;
-  const overBounce = t.sent >= 20 && bounceRate >= threshold;
+  const threshold = st?.bounceLimitPct ?? 2;
+  const overBounce = t.sent >= (st?.bounceMinSends ?? 20) && bounceRate >= threshold;
 
   if (!connected) {
     return (
@@ -203,39 +204,36 @@ export function OutreachPanel({
     <div className="au-wrap">
       <Hero on={on} connected boardName={boardName} onToggle={() => toggle(!on)}
         waiting={Object.values(ready?.ready ?? {}).reduce((n, v) => n + v, 0)}
-        people={ready?.total ?? 0} sent={t.sent} />
+        people={ready?.total ?? 0} sent={t.sent}
+        onSetup={() => setShowAdvanced((v) => !v)} setupOpen={showAdvanced} />
 
-      {/* The two numbers that matter, side by side. */}
-      <div className="au-two">
-        <div className="au-metric">
-          <div className="au-metric-head">
-            <h3 className="au-sec-title">Results</h3>
-            <span className="au-sec-hint">Since this campaign started.</span>
-          </div>
-          {t.sent === 0 ? <div className="au-empty">Nothing sent yet.</div> : (
-            <>
-              <div className="au-big">
-                <div><div className="au-big-v">{t.sent}</div><div className="au-big-k">emailed</div></div>
-                <div><div className="au-big-v">{t.replied}</div><div className="au-big-k">replied</div></div>
-                <div><div className="au-big-v">{replyRate}%</div><div className="au-big-k">reply rate</div></div>
-              </div>
-              <div className="au-bars">
-                <Bar label="Delivered" n={t.delivered} of={t.sent} />
-                <Bar label="Bounced" n={t.bounced} of={t.sent} bad={overBounce} />
-                <Bar label="Unsubscribed" n={t.unsub} of={t.sent} />
-              </div>
-            </>
-          )}
+      {/* Results, with anything wrong said right where the numbers are. */}
+      <div className={`au-metric${overBounce ? " is-bad" : ""}`}>
+        <div className="au-metric-head">
+          <h3 className="au-sec-title">Results</h3>
         </div>
-
-        <div className={`au-metric${overBounce ? " is-bad" : ""}`}>
-          <div className="au-metric-head">
-            <h3 className="au-sec-title">Warnings</h3>
-            <span className="au-sec-hint">Above {threshold}% bounce hurts your domain.</span>
-          </div>
-          <Warnings boardId={boardId} threshold={threshold} bounceRate={bounceRate}
-            sent={t.sent} overBounce={overBounce} onFlash={onFlash} onChanged={load} />
-        </div>
+        {t.sent === 0 ? <div className="au-empty">Nothing sent yet.</div> : (
+          <>
+            <div className="au-big">
+              <div><div className="au-big-v">{t.sent}</div><div className="au-big-k">emailed</div></div>
+              <div><div className="au-big-v">{t.replied}</div><div className="au-big-k">replied</div></div>
+              <div><div className="au-big-v">{replyRate}%</div><div className="au-big-k">reply rate</div></div>
+              {/* Red only once it's both over the line and on enough sends to
+                  mean something — below that it's noise, not a problem. */}
+              <div>
+                <div className={`au-big-v${overBounce ? " is-bad" : ""}`}>{bounceRate}%</div>
+                <div className="au-big-k">bounced</div>
+              </div>
+            </div>
+            <div className="au-bars">
+              <Bar label="Delivered" n={t.delivered} of={t.sent} />
+              <Bar label="Bounced" n={t.bounced} of={t.sent} bad={overBounce} />
+              <Bar label="Unsubscribed" n={t.unsub} of={t.sent} />
+            </div>
+          </>
+        )}
+        <Warnings boardId={boardId} threshold={threshold} bounceRate={bounceRate}
+          sent={t.sent} overBounce={overBounce} onFlash={onFlash} onChanged={load} />
       </div>
 
       {/* Groups — the core setup. */}
@@ -248,14 +246,18 @@ export function OutreachPanel({
         <button className="pill-btn" onClick={() => setSkipOpen(true)}>
           {excluded?.length ?? 0} contacts excluded
         </button>
-        <span className="au-note">Who won’t be emailed, and the stages that stop sending.</span>
-        <button className="pill-btn" style={{ marginLeft: "auto" }} onClick={() => setShowAdvanced((v) => !v)}>
-          {showAdvanced ? "Hide setup" : "Webhook & setup"}
-        </button>
       </div>
 
       {showAdvanced && (
-        <Sec title="Webhook & setup" hint="Paste into Smartlead → Settings → Webhooks.">
+        <>
+        <div className="drawer-bg" onClick={() => setShowAdvanced(false)} />
+        <div className="app-modal au-modal">
+          <div className="app-modal-head">
+            <span className="app-modal-title">Webhook &amp; setup</span>
+            <button className="icon-btn" onClick={() => setShowAdvanced(false)}><IconClose size={16} /></button>
+          </div>
+          <div className="app-modal-body au-modal-body">
+            <div className="au-hint">Paste into Smartlead → Settings → Webhooks.</div>
           <Row label="URL" value={setup?.webhookUrl ?? st!.webhookUrl ?? ""} onCopy={copy} />
           {setup?.webhookSecret
             ? <Row label="Secret" value={setup.webhookSecret} onCopy={copy} secret />
@@ -284,13 +286,25 @@ export function OutreachPanel({
                 await load();
               } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
             }}>New secret</button>
-            <button className="pill-btn" onClick={async () => {
+            <button className="pill-btn" disabled={checking} onClick={async () => {
+              setChecking(true);
               try {
-                const c = await api.post<{ checked: number; releaks: number; repliesRecovered: number }>(`/api/outreach/board/${boardId}/reconcile`);
-                onFlash(`Checked ${c.checked} · stopped ${c.releaks} · found ${c.repliesRecovered} missed replies`);
+                const c = await api.post<{
+                  ok: boolean; error?: string; checked: number; campaigns: number;
+                  releaks: number; repliesRecovered: number;
+                }>(`/api/outreach/board/${boardId}/reconcile`);
+                if (!c.ok) { onFlash(`Couldn’t reach Smartlead — ${c.error ?? "unknown error"}`); return; }
+                const fixed = [
+                  c.releaks ? `stopped ${c.releaks}` : "",
+                  c.repliesRecovered ? `found ${c.repliesRecovered} missed ${c.repliesRecovered === 1 ? "reply" : "replies"}` : "",
+                ].filter(Boolean);
+                onFlash(fixed.length
+                  ? `Checked ${c.checked} with Smartlead — ${fixed.join(", ")}.`
+                  : `Checked ${c.checked} with Smartlead — everything matches.`);
                 await load();
-              } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
-            }}>Re-check with Smartlead</button>
+              } catch (e) { onFlash(`Couldn’t reach Smartlead — ${(e as Error).message}`); }
+              finally { setChecking(false); }
+            }}>{checking ? "Checking…" : "Re-check with Smartlead"}</button>
             <button className="pill-btn" onClick={async () => {
               try {
                 await api.post(`/api/outreach/board/${boardId}/disconnect`);
@@ -299,18 +313,14 @@ export function OutreachPanel({
               } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
             }}>Disconnect</button>
           </div>
-        </Sec>
+          </div>
+          <div className="app-modal-foot au-modal-foot">
+            <button className="pill-btn primary" style={{ marginLeft: "auto" }}
+              onClick={() => setShowAdvanced(false)}>Done</button>
+          </div>
+        </div>
+        </>
       )}
-
-      <details className="au-how">
-        <summary>How does this actually send an email?</summary>
-        <ol className="au-steps">
-          <li><b>You write the emails in Smartlead.</b> A campaign there is one sequence — subject, wording, follow-ups. None of that text lives here.</li>
-          <li><b>Here you choose who gets them.</b> Put a contact in group A, B or C, then point that group at a Smartlead campaign above.</li>
-          <li><b>Everyone goes through approval.</b> Each person gets their own first line and queues under <b>Need approval</b> in the sidebar. Nothing is ever sent from this page.</li>
-          <li><b>Replies stop the emails automatically.</b> If someone answers — or you drag their card to a stop stage — their sequence pauses.</li>
-        </ol>
-      </details>
 
       {skipOpen && (
         <SkipModal boardId={boardId} excluded={excluded} stages={stages} stopStages={st!.stopStages}
@@ -322,9 +332,10 @@ export function OutreachPanel({
 }
 
 /** Status banner. */
-function Hero({ on, connected, boardName, onToggle, waiting, people, sent }: {
+function Hero({ on, connected, boardName, onToggle, waiting, people, sent, onSetup, setupOpen }: {
   on: boolean; connected: boolean; boardName: string;
   onToggle?: () => void; waiting?: number; people?: number; sent?: number;
+  onSetup?: () => void; setupOpen?: boolean;
 }) {
   return (
     <div className={`au-hero${on ? " is-on" : ""}`}>
@@ -335,13 +346,13 @@ function Hero({ on, connected, boardName, onToggle, waiting, people, sent }: {
           </span>
           <h2 className="au-hero-title">{boardName}</h2>
         </div>
-        <div className="au-hero-sub">
-          {!connected
-            ? "Connect this board to Smartlead. Every board has its own account and its own emails."
-            : on
-              ? "People in a group are drafted and queued under Need approval. Nothing sends until you approve it."
-              : "Nothing will be emailed from this board. Turning this on does not send anything by itself."}
-        </div>
+        {!on && (
+          <div className="au-hero-sub">
+            {connected
+              ? "Nothing will be emailed from this board."
+              : "Connect this board to Smartlead. Every board has its own account and its own emails."}
+          </div>
+        )}
         {connected && (
           <div className="au-stats">
             <div><div className="au-stat-k">In this board</div><div className="au-stat-v">{people ?? 0}</div></div>
@@ -350,6 +361,9 @@ function Hero({ on, connected, boardName, onToggle, waiting, people, sent }: {
           </div>
         )}
       </div>
+      {connected && onSetup && (
+        <button className="pill-btn" onClick={onSetup}>{setupOpen ? "Hide setup" : "Webhook & setup"}</button>
+      )}
       {connected && onToggle && (
         <button className={`pill-btn${on ? "" : " primary"}`} onClick={onToggle}>
           {on ? "Turn off" : "Turn on"}
@@ -392,9 +406,6 @@ function Warnings({ boardId, threshold, bounceRate, sent, overBounce, onFlash, o
   overBounce: boolean; onFlash: (m: string) => void; onChanged: () => void;
 }) {
   const [alerts, setAlerts] = useState<AlertRow[] | null>(null);
-  const [pct, setPct] = useState(threshold);
-  useEffect(() => { setPct(threshold); }, [threshold]);
-
   const load = async () => {
     try { setAlerts((await api.get<{ alerts: AlertRow[] }>(`/api/outreach/board/${boardId}/alerts`)).alerts); }
     catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
@@ -427,32 +438,6 @@ function Warnings({ boardId, threshold, bounceRate, sent, overBounce, onFlash, o
           <button className="pill-btn" onClick={() => dismiss(a.id)}>OK</button>
         </div>
       ))}
-      {!overBounce && !alerts?.length && (
-        <div className="au-ok">
-          <span>✓</span>
-          <div>
-            {sent === 0
-              ? "Nothing to watch yet — warnings appear once you start sending."
-              : bounceRate >= threshold
-                // Over the line, but on too few emails to mean anything yet —
-                // say so rather than calling it clean.
-                ? `Bounce rate is ${bounceRate}%, but only ${sent} sent so far — too early to judge.`
-                : `Nothing wrong. Bounce rate is ${bounceRate}%.`}
-          </div>
-        </div>
-      )}
-      <div className="au-field">
-        <span className="au-field-label">Warn above</span>
-        <input type="number" min={1} max={50} className="au-input is-tiny" value={pct}
-          onChange={(e) => setPct(Number(e.target.value))} />
-        <span className="au-note">% bounced</span>
-        <button className="pill-btn" disabled={pct === threshold} onClick={async () => {
-          try {
-            await api.post(`/api/outreach/board/${boardId}/threshold`, { bounceThresholdPct: pct });
-            onFlash("Saved."); onChanged();
-          } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
-        }}>Save</button>
-      </div>
     </>
   );
 }
@@ -599,7 +584,6 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
 
   return (
     <Sec title="Groups"
-      hint="Describe who belongs and people are sorted in for you. Each group sends its own campaign, with its own opening line."
       action={
         <button className="pill-btn" disabled={disabled || draft.length >= 12} onClick={add}>
           Add group
@@ -733,10 +717,6 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
           re-sort everyone
         </button>
         {note && <span className="au-hint">{note}</span>}
-      </div>
-      <div className="au-hint">
-        Sorting also runs by itself before each drafting round. Anyone matching no description is
-        left out rather than guessed at — set <b>Group</b> on their contact to overrule a call.
       </div>
     </Sec>
   );

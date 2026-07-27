@@ -585,8 +585,22 @@ async function main() {
   // ── 9. Background export job over real HTTP (auth + polling) ────────────
   console.log("\n── Background export job ──");
   fake.reset();
-  await add("Nina Kovac", "n.kovac@acme.com", "B");
-  await add("Omar Haddad", "o.haddad@acme.com", "B");
+  const cNina = await add("Nina Kovac", "n.kovac@acme.com", "B");
+  const cOmar = await add("Omar Haddad", "o.haddad@acme.com", "B");
+
+  // The group has to be live, and their lines written, before either of them
+  // can be waiting for approval — that's the contract the screen relies on.
+  // Write, then test, then go live — the same order the screen enforces.
+  // (Testing first then changing the prompt would correctly undo the test.)
+  const GROUP_B = { id: "B", name: "Tier B outbound", description: "Heads of AI at banks",
+                    prompt: "Open with their AI work." };
+  await saveGroups(userId, boardId, [GROUP_B]);
+  await markTested(userId, boardId, "B");
+  await saveGroups(userId, boardId, [{ ...GROUP_B, live: true }]);
+  // Stand in for the drafting pass; the model can't run in this suite.
+  await db.updateTable("crm_contacts")
+    .set({ opening_line: "Saw your work on model risk.", opening_line_status: "draft", opening_line_at: new Date() })
+    .where("id", "in", [cNina, cOmar]).execute();
 
   // The only door is the approval queue — a direct group-send no longer exists.
   const gone = await authed(`/api/outreach/board/${boardId}/send`, { method: "POST", body: JSON.stringify({ group: "B" }) });
@@ -595,14 +609,46 @@ async function main() {
   const queued: any = await (await authed("/api/outreach/pending")).json();
   const ids = queued.pending.map((p: any) => p.id);
   ok("queue lists people waiting to send", ids.length > 0, queued.pending.length);
-  ok("queue includes people with no personal line",
-    queued.pending.some((p: any) => !p.hasLine), queued.pending.map((p: any) => [p.name, p.hasLine]));
+  // Everyone here is ready: a line is written and nobody has decided yet.
+  ok("everyone in the queue already has a line",
+    queued.pending.every((p: any) => !!p.openingLine),
+    queued.pending.map((p: any) => [p.name, p.openingLine]));
+  ok("and none of them is already approved",
+    queued.pending.every((p: any) => p.status === "draft"),
+    queued.pending.map((p: any) => [p.name, p.status]));
+
+  // Someone whose line couldn't be written is NOT left sitting here looking
+  // ready — they're explained under "who won't be emailed" instead.
+  const cThin = await add("Thin Record", "thin.record@acme.com", "B");
+  await db.updateTable("crm_contacts")
+    .set({
+      // Has a profile link, but nothing readable came back from it.
+      linkedin: "https://www.linkedin.com/in/thin-record-0001",
+      opening_line_status: "skipped",
+      opening_line_source: "Nothing usable — their LinkedIn page couldn't be read",
+    })
+    .where("id", "=", cThin).execute();
+  const withThin: any = await (await authed("/api/outreach/pending")).json();
+  ok("someone with no line is not in the queue",
+    !withThin.pending.some((p: any) => p.id === cThin), withThin.pending.map((p: any) => p.name));
+  {
+    const { selectExcluded } = await import(`${R}/integrations/outreach/excluded.ts`);
+    const why = (await selectExcluded(userId, boardId)).find((e: any) => e.id === cThin);
+    eq("they are explained instead", why?.reason, "Couldn't read their LinkedIn");
+  }
+  await db.deleteFrom("crm_contacts").where("id", "=", cThin).execute();
 
   const startRes = await authed("/api/outreach/pending/approve-and-send", {
     method: "POST", body: JSON.stringify({ ids }),
   });
   const started: any = await startRes.json();
   eq("approve-and-send returns job ids", Array.isArray(started.jobIds) && started.jobIds.length > 0, true);
+
+  // Gone from the screen straight away — not once the background push
+  // finishes. Approving IS the decision; the send is just the consequence.
+  const rightAfter: any = await (await authed("/api/outreach/pending")).json();
+  eq("approved people leave the queue immediately",
+    rightAfter.pending.filter((p: any) => ids.includes(p.id)).length, 0);
 
   let job: any = null;
   for (let i = 0; i < 40; i++) {
@@ -736,6 +782,26 @@ async function main() {
   // The question this answers is "why isn't everybody in the queue?". If a
   // contact is in neither list, they have silently vanished and no screen in
   // the app can explain them.
+  // A re-check has to say which of "all good" and "couldn't ask" happened.
+  console.log("\n── Re-check verdict ──");
+  {
+    const okRes: any = await (await authed(`/api/outreach/board/${boardId}/reconcile`, { method: "POST" })).json();
+    eq("a reachable check reports success", okRes.ok, true);
+    ok("and says how many it looked at", typeof okRes.checked === "number", okRes);
+
+    // Point the client at a dead port: the run must fail loudly, not read as clean.
+    const realBase = process.env.SMARTLEAD_BASE_URL;
+    process.env.SMARTLEAD_BASE_URL = "http://127.0.0.1:1/api/v1";
+    const board2 = await db.insertInto("crm_boards")
+      .values({ user_id: userId, name: "Unconnected", emoji: "📭" })
+      .returning("id").executeTakeFirstOrThrow();
+    const noAcct: any = await (await authed(`/api/outreach/board/${board2.id}/reconcile`, { method: "POST" })).json();
+    eq("an unconnected board says so", noAcct.ok, false);
+    ok("in words, not a stack trace", /connected/i.test(noAcct.error ?? ""), noAcct.error);
+    await db.deleteFrom("crm_boards").where("id", "=", board2.id).execute();
+    process.env.SMARTLEAD_BASE_URL = realBase;
+  }
+
   console.log("\n── Accounted for ──");
   {
     const { selectExcluded } = await import(`${R}/integrations/outreach/excluded.ts`);

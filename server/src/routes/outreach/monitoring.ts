@@ -12,6 +12,7 @@ import type { AuthedRequest } from "../../auth/session.js";
 import { funnel } from "../../integrations/outreach/metrics.js";
 import { listAlerts, markAlertsRead } from "../../integrations/outreach/alerts.js";
 import { reconcileBoard } from "../../integrations/outreach/reconcile.js";
+import { getAccountByBoard } from "../../integrations/outreach/accounts.js";
 import {
   suppressEmail, blockDomain, pauseContactCampaigns, resumeContactCampaigns,
 } from "../../integrations/outreach/suppress.js";
@@ -46,10 +47,24 @@ router.post("/alerts/read", async (req: AuthedRequest, res: Response) => {
   res.json({ ok: true });
 });
 
+/**
+ * Check this board against Smartlead now.
+ *
+ * Always answers with a verdict rather than a bare number: a run that couldn't
+ * reach Smartlead and a run that found nothing wrong look identical otherwise,
+ * and only one of them means "you're fine".
+ */
 router.post("/board/:boardId/reconcile", async (req: AuthedRequest, res: Response) => {
   const board = await ownedBoard(req);
   if (!board) return res.status(404).json({ error: "board_not_found" });
-  res.json(await reconcileBoard(board.id));
+  if (!(await getAccountByBoard(board.id))) {
+    return res.json({ ok: false, error: "This board isn't connected to Smartlead." });
+  }
+  try {
+    res.json({ ok: true, ...(await reconcileBoard(board.id)) });
+  } catch (err) {
+    res.json({ ok: false, error: (err as Error).message });
+  }
 });
 
 /** Never contact — one person, or a whole company. Applies to every board. */

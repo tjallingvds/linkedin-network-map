@@ -1,4 +1,17 @@
 /**
+ * The bounce rate that means "stop and clean the list".
+ *
+ * Fixed, not configurable: 2% is where mailbox providers start treating a
+ * sender as careless, and it is not a number anyone benefits from tuning
+ * upward — raising it only hides the damage. `smartlead_accounts.
+ * bounce_threshold_pct` is left in the schema but is no longer read.
+ */
+export const BOUNCE_LIMIT_PCT = 2;
+
+/** Below this many sends, a bounce rate is noise rather than a signal. */
+export const BOUNCE_MIN_SENDS = 20;
+
+/**
  * Outreach funnel metrics, computed from the append-only event log.
  *
  * Deliberately NO open rate: corporate security gateways (Mimecast,

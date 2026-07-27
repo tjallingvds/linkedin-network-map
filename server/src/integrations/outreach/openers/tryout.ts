@@ -16,7 +16,7 @@ import { availableProviders } from "../../../ai/providers.js";
 import { getCampaignFirstEmail } from "../../smartlead.js";
 import { getAccountByBoard } from "../accounts.js";
 import { findGroup, markTested } from "../groups.js";
-import { contextFor, hasRealMaterial } from "./context.js";
+import { contextFor } from "./context.js";
 import { research } from "./research.js";
 import { draftOne, promptFor } from "./draft.js";
 
@@ -104,8 +104,9 @@ export async function tryoutGroup(
     });
 
     const base = { contactId: c.id, name: c.name, title: c.title, company: c.company };
-    if (!hasRealMaterial(facts) && !found.snippets.length) {
-      lines.push({ ...base, line: null, from: `Nothing usable — ${found.note}, and the CRM has no detail` });
+    // Same rule as the real run: no LinkedIn, no line.
+    if (!found.snippets.length) {
+      lines.push({ ...base, line: null, from: `Nothing usable — ${found.note}` });
       continue;
     }
     try {

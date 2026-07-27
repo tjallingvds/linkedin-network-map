@@ -3546,10 +3546,12 @@ button:focus-visible { outline-offset: 3px; }
 
 /* Status banner */
 .au-hero {
-  display: flex; align-items: flex-start; gap: 14px;
-  padding: 16px 18px; border-radius: 6px;
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 16px 18px; border-radius: 10px;
   background: var(--shell); border: 1px solid var(--hairline);
 }
+.au-hero > .pill-btn { flex: none; }
+.au-hero-main { flex: 1 1 auto; min-width: 0; }
 .au-hero.is-on { border-color: var(--accent); }
 .au-dot {
   width: 8px; height: 8px; border-radius: 999px; margin-top: 7px; flex: none;
@@ -3562,12 +3564,13 @@ button:focus-visible { outline-offset: 3px; }
   color: var(--text); margin: 0 0 5px; font-weight: 500;
 }
 .au-hero-sub { font-size: 12.5px; line-height: 1.55; color: var(--text-dim); max-width: 72ch; }
-.au-stats { display: flex; flex-wrap: wrap; gap: 28px; margin-top: 14px; }
+.au-stats { display: flex; gap: 24px; margin-top: 12px; }
+.au-stats > div { flex: none; }
 .au-stat-k {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
   color: var(--text-mute); margin-bottom: 3px;
 }
-.au-stat-v { font-family: 'Geist Mono', monospace; font-size: 16px; color: var(--text); }
+.au-stat-v { font-family: inherit; font-size: 16px; color: var(--text); }
 .au-stat-v.is-bad { color: var(--danger); }
 
 /* Section: title row over a hairline, then a bordered body — same as Overview */
@@ -3580,14 +3583,14 @@ button:focus-visible { outline-offset: 3px; }
 .au-sec-action { margin-left: auto; }
 .au-sec-hint { font-size: 11.5px; color: var(--text-mute); margin-left: 4px; flex: 1; min-width: 0; }
 .au-sec-body {
-  padding: 14px; border-radius: 5px;
+  padding: 14px; border-radius: 9px;
   background: var(--shell); border: 1px solid var(--hairline);
   display: flex; flex-direction: column; gap: 12px;
 }
 .au-sec.is-muted .au-sec-body { opacity: 0.5; }
 
 .au-step {
-  font-family: 'Geist Mono', monospace; font-size: 10.5px;
+  font-family: inherit; font-size: 10.5px;
   width: 17px; height: 17px; border-radius: 999px; flex: none;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--hairline);
@@ -3595,7 +3598,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .au-step.is-done { background: var(--accent); color: #fff; border-color: var(--accent); }
 .au-chip {
-  font-family: 'Geist Mono', monospace; font-size: 11px;
+  font-family: inherit; font-size: 11px;
   padding: 1px 8px; border-radius: 999px; white-space: nowrap;
   background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--hairline);
 }
@@ -3610,8 +3613,8 @@ button:focus-visible { outline-offset: 3px; }
 .au-input {
   flex: 1; min-width: 0; padding: 7px 10px;
   background: var(--panel-2); border: 1px solid var(--hairline);
-  border-radius: 5px; color: var(--text);
-  font-size: 12.5px; font-family: 'Geist Mono', monospace;
+  border-radius: 9px; color: var(--text);
+  font-size: 12.5px; font-family: inherit;
 }
 .au-input:focus { outline: none; border-color: var(--accent); background: var(--shell); }
 .au-input.is-narrow { flex: 0 0 110px; }
@@ -3621,17 +3624,17 @@ button:focus-visible { outline-offset: 3px; }
 .au-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .au-empty {
   padding: 12px; color: var(--text-mute); font-size: 12.5px;
-  background: var(--panel); border: 1px dashed var(--hairline); border-radius: 5px;
+  background: var(--panel); border: 1px dashed var(--hairline); border-radius: 9px;
 }
 
 /* Mapped campaigns */
 .au-map-row {
   display: flex; align-items: center; gap: 10px; font-size: 12.5px;
-  padding: 8px 10px; border-radius: 5px;
+  padding: 8px 10px; border-radius: 9px;
   background: var(--shell); border: 1px solid var(--hairline);
 }
 .au-map-tier { font-weight: 600; color: var(--accent); }
-.au-map-id { font-family: 'Geist Mono', monospace; color: var(--text-dim); }
+.au-map-id { font-family: inherit; color: var(--text-dim); }
 .au-map-name { color: var(--text-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .au-map-state { margin-left: auto; font-size: 11px; color: var(--text-mute); }
 
@@ -3644,7 +3647,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .au-table td {
   padding: 8px 14px 8px 0; border-top: 1px solid var(--hairline);
-  font-family: 'Geist Mono', monospace; color: var(--text-dim);
+  font-family: inherit; color: var(--text-dim);
 }
 .au-table td.au-t-tier { font-weight: 600; color: var(--accent); font-family: inherit; }
 .au-table td.is-bad { color: var(--danger); }
@@ -3652,7 +3655,7 @@ button:focus-visible { outline-offset: 3px; }
 /* Alerts */
 .au-alert {
   display: flex; gap: 10px; align-items: flex-start;
-  padding: 10px 12px; border-radius: 5px;
+  padding: 10px 12px; border-radius: 9px;
   background: var(--shell); border: 1px solid var(--hairline);
 }
 .au-alert.is-critical { border-color: var(--danger); }
@@ -3668,16 +3671,16 @@ button:focus-visible { outline-offset: 3px; }
 .au-warn {
   font-size: 12px; color: var(--danger);
   background: var(--panel); border: 1px dashed var(--danger);
-  border-radius: 5px; padding: 8px 10px;
+  border-radius: 9px; padding: 8px 10px;
 }
 /* "Who won't be emailed" — one row per reason */
 .au-reason {
   display: flex; align-items: center; gap: 10px;
-  padding: 7px 10px; border-radius: 5px;
+  padding: 7px 10px; border-radius: 9px;
   background: var(--shell); border: 1px solid var(--hairline);
 }
 .au-reason-n {
-  font-family: 'Geist Mono', monospace; font-size: 12.5px; font-weight: 600;
+  font-family: inherit; font-size: 12.5px; font-weight: 600;
   color: var(--text); min-width: 28px;
 }
 .au-reason-t { font-size: 12.5px; color: var(--text-dim); flex: 1; }
@@ -3710,7 +3713,7 @@ button:focus-visible { outline-offset: 3px; }
 .au-line {
   width: 100%; resize: vertical; padding: 7px 9px;
   background: var(--panel-2); border: 1px solid var(--hairline);
-  border-radius: 5px; color: var(--text);
+  border-radius: 9px; color: var(--text);
   font-size: 12.5px; line-height: 1.5; font-family: inherit;
 }
 .au-line:focus { outline: none; border-color: var(--accent); background: var(--shell); }
@@ -3718,7 +3721,7 @@ button:focus-visible { outline-offset: 3px; }
 
 /* "Who won't be emailed" — reason block with the names visible */
 .au-skip {
-  padding: 10px 12px; border-radius: 5px;
+  padding: 10px 12px; border-radius: 9px;
   background: var(--shell); border: 1px solid var(--hairline);
 }
 .au-skip-head { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
@@ -3747,7 +3750,7 @@ button:focus-visible { outline-offset: 3px; }
 @media (max-width: 900px) { .au-two { grid-template-columns: 1fr; } }
 .au-metric {
   display: flex; flex-direction: column; gap: 12px;
-  padding: 16px; border-radius: 6px;
+  padding: 16px; border-radius: 10px;
   background: var(--shell); border: 1px solid var(--hairline);
 }
 .au-metric.is-bad { border-color: var(--danger); }
@@ -3758,7 +3761,8 @@ button:focus-visible { outline-offset: 3px; }
 
 /* Headline numbers */
 .au-big { display: flex; gap: 30px; }
-.au-big-v { font-family: 'Geist Mono', monospace; font-size: 26px; line-height: 1.1; color: var(--text); }
+.au-big-v { font-family: inherit; font-size: 26px; line-height: 1.1; color: var(--text); }
+.au-big-v.is-bad { color: var(--danger); }
 .au-big-k {
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--text-mute); margin-top: 3px;
@@ -3767,7 +3771,7 @@ button:focus-visible { outline-offset: 3px; }
 /* Delivered / bounced / unsubscribed bars */
 .au-bars { display: flex; flex-direction: column; gap: 9px; }
 .au-bar-top { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-dim); margin-bottom: 4px; }
-.au-bar-n { font-family: 'Geist Mono', monospace; color: var(--text-mute); }
+.au-bar-n { font-family: inherit; color: var(--text-mute); }
 .au-bar-n.is-bad { color: var(--danger); }
 .au-bar-track { height: 5px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
 .au-bar-fill { height: 100%; background: var(--accent); transition: width 200ms; }
@@ -3776,12 +3780,12 @@ button:focus-visible { outline-offset: 3px; }
 .au-ok {
   display: flex; gap: 9px; align-items: flex-start;
   font-size: 12.5px; line-height: 1.5; color: var(--text-dim);
-  padding: 10px 12px; border-radius: 5px;
+  padding: 10px 12px; border-radius: 9px;
   background: var(--panel-2); border: 1px solid var(--hairline);
 }
 
 /* Groups — a quiet list; only the row you're working on opens up. */
-.au-glist { border: 1px solid var(--hairline); border-radius: 6px; overflow: hidden; }
+.au-glist { border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; }
 .au-g + .au-g { border-top: 1px solid var(--hairline); }
 .au-g.is-open { background: var(--panel-2); }
 
@@ -3831,7 +3835,7 @@ button:focus-visible { outline-offset: 3px; }
 .au-group-desc {
   width: 100%; resize: vertical; min-height: 40px; padding: 7px 10px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 6px; color: var(--text); font: inherit; font-size: 12.5px; line-height: 1.5;
+  border-radius: 10px; color: var(--text); font: inherit; font-size: 12.5px; line-height: 1.5;
 }
 .au-group-desc:focus { outline: none; border-color: var(--accent); }
 
@@ -3849,7 +3853,7 @@ button:focus-visible { outline-offset: 3px; }
 
 /* Sample opening lines from a group's test run */
 .au-tryout {
-  border: 1px solid var(--hairline); border-radius: 6px;
+  border: 1px solid var(--hairline); border-radius: 10px;
   background: var(--panel-2); padding: 4px 10px;
 }
 .au-tryout-row { padding: 8px 0; }
@@ -3875,8 +3879,8 @@ button:focus-visible { outline-offset: 3px; }
 .au-prompt {
   width: 100%; resize: vertical; padding: 10px 12px;
   background: var(--panel-2); border: 1px solid var(--hairline);
-  border-radius: 6px; color: var(--text);
-  font-size: 12px; line-height: 1.6; font-family: 'Geist Mono', monospace;
+  border-radius: 10px; color: var(--text);
+  font-size: 12.5px; line-height: 1.65; font-family: inherit;
 }
 .au-prompt:focus { outline: none; border-color: var(--accent); background: var(--shell); }
 
@@ -3915,8 +3919,30 @@ button:focus-visible { outline-offset: 3px; }
 .group-cell {
   width: 100%; border: none; background: transparent;
   font-size: 12.5px; color: var(--text-mute);
-  padding: 4px 6px; border-radius: 5px; cursor: pointer;
-  font-family: 'Geist Mono', monospace;
+  padding: 4px 6px; border-radius: 8px; cursor: pointer;
+  font-family: inherit;
 }
 .group-cell:hover { background: var(--hover); }
 .group-cell.is-set { color: var(--accent); font-weight: 600; }
+
+
+/* Signed-in user, at the foot of the sidebar. */
+.nav-profile {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 8px 9px; margin-top: 4px;
+  background: none; border: 1px solid transparent; border-radius: 10px;
+  cursor: pointer; text-align: left; font: inherit; color: var(--text);
+}
+.nav-profile:hover { background: var(--panel-2); border-color: var(--hairline); }
+.nav-profile-avatar {
+  width: 26px; height: 26px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  background: var(--text); color: var(--shell);
+}
+.nav-profile-text { display: flex; flex-direction: column; min-width: 0; }
+.nav-profile-name {
+  font-size: 12px; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nav-profile-sub { font-size: 10.5px; color: var(--text-mute); }

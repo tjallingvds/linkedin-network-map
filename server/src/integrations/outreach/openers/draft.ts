@@ -11,7 +11,7 @@ import { availableProviders } from "../../../ai/providers.js";
 import type { UserKeys } from "../../../ai/user-keys.js";
 import { getCampaignFirstEmail } from "../../smartlead.js";
 import { getAccountByBoard } from "../accounts.js";
-import { contextFor, hasRealMaterial } from "./context.js";
+import { contextFor } from "./context.js";
 import { research } from "./research.js";
 import { sortAll } from "./sort.js";
 import { findGroup } from "../groups.js";
@@ -30,7 +30,12 @@ Rules, in order of importance:
 5. Reference the specific thing, not the job title. "CTO at Acme" is not
    personal; a detail from the notes is.
 
-6. You are given THE_EMAIL — the campaign email this line will sit on top of.
+6. The line must be about something on their LINKEDIN. That is the material
+   this feature exists to use. CRM_NOTES is context to help you read LinkedIn
+   correctly and to avoid contradicting what is already known — it is not the
+   subject of the line. If LINKEDIN is empty, return {"line": null}.
+
+7. You are given THE_EMAIL — the campaign email this line will sit on top of.
    The line must lead naturally into it: same register, no repetition of what
    the email already says, and no contradiction of it. Do not summarise or
    restate the email; just open it.
@@ -45,6 +50,7 @@ const NON_NEGOTIABLE = `
 
 Always obey, regardless of any instruction above:
 - Use ONLY the supplied facts. Never invent anything.
+- Base the line on LINKEDIN. If LINKEDIN is empty, return {"line": null}.
 - If there is nothing specific and TRUE to say, return {"line": null}.
 - One sentence, no greeting, no sign-off, no pitch.
 - Return strict JSON: {"line": string|null, "used": string[]}`;
@@ -71,9 +77,17 @@ export async function draftOne(
   const providers = availableProviders(userKeys);
   if (!providers.length) throw new Error("no_ai_provider");
   const provider = providers[0]!;
+  // LinkedIn is kept separate from the CRM so the model can't quietly write
+  // the line from a note when the profile gave it nothing.
+  const linkedin: Record<string, string> = {};
+  const crm: Record<string, string> = {};
+  for (const [k, v] of Object.entries(facts)) {
+    (k.startsWith("web_") ? linkedin : crm)[k] = v;
+  }
   const payload = {
     THE_EMAIL: email ? { subject: email.subject, body: email.body } : null,
-    PERSON: facts,
+    LINKEDIN: Object.values(linkedin),
+    CRM_NOTES: crm,
   };
   const out = await aiJson<{ line?: string | null; used?: string[] }>(
     provider,
@@ -153,10 +167,13 @@ export async function draftOpeners(
       sources.push(sn.url || found.note);
     });
 
-    if (!hasRealMaterial(facts) && found.snippets.length === 0) {
+    // The line is written from their LinkedIn. Without it there is nothing to
+    // write from — falling back to CRM notes would produce a line that isn't
+    // what was asked for, and the operator would have no way to tell.
+    if (!found.snippets.length) {
       await db.updateTable("crm_contacts").set({
         opening_line: null,
-        opening_line_source: `Nothing usable — ${found.note}, and the CRM has no detail`,
+        opening_line_source: `Nothing usable — ${found.note}`,
         opening_line_status: "skipped",
         opening_line_at: new Date(),
       }).where("id", "=", c.id).execute();

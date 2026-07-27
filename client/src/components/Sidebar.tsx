@@ -32,6 +32,9 @@ interface Props {
   onToggleCollapse: () => void;
   usage: UsageBucket[];
   onOpenSettings: () => void;
+  /** Signed-in user, shown at the foot of the sidebar; opens settings. */
+  userInitials?: string;
+  userEmail?: string;
   /** Optional — when supplied, each saved-search row gets rename + delete hover actions. */
   onRenameSearch?: (id: string, title: string) => void | Promise<void>;
   onDeleteSearch?: (id: string) => void | Promise<void>;
@@ -45,7 +48,7 @@ interface Props {
 
 export function Sidebar({
   activeNav, onSelect, onNewChat, onNewBoard, savedSearches, lists,
-  collapsed, onToggleCollapse, usage, onOpenSettings,
+  collapsed, onToggleCollapse, usage, onOpenSettings, userInitials, userEmail,
   onRenameSearch, onDeleteSearch, onRenameBoard, onDeleteBoard,
   approvalCount = 0, onOpenApprovals, approvalsActive,
 }: Props) {
@@ -86,15 +89,9 @@ export function Sidebar({
           </>
         ) : (
           <>
-            {/* Primary action — a search-field-styled pill that starts a new
-                discovery search feeding the CRM. */}
-            <button className="nav-search" onClick={onNewChat} title="New search">
-              <IconSearch size={14} />
-              <span className="nav-search-label">New search…</span>
-            </button>
-
-            {/* Emails waiting on a human. Sits above the boards because it's
-                the one thing that blocks sending across all of them. */}
+            {/* Emails waiting on a human — the first thing in the sidebar,
+                because it's the one thing that blocks sending across every
+                board. New searches start from the Recent section's + button. */}
             {onOpenApprovals && (
               <div className="nav-section">
                 <div
@@ -147,7 +144,7 @@ export function Sidebar({
 
             <div className="sidebar-spacer" />
 
-            <UsageCard usage={usage} onOpenSettings={onOpenSettings} />
+            <ProfileButton initials={userInitials} email={userEmail} onOpen={onOpenSettings} />
           </>
         )}
       </div>
@@ -313,37 +310,20 @@ function PlusIcon() {
   );
 }
 
-function UsageCard({ usage, onOpenSettings }: { usage: UsageBucket[]; onOpenSettings: () => void }) {
-  const view = usage.length > 0 ? usage : [
-    { label: "Search", used: 0, max: 10_000, unit: "" },
-    { label: "Enrich", used: 0, max: 5_000, unit: "" },
-    { label: "LLM", used: 0, max: 5_000_000, unit: "" },
-  ];
-
+/**
+ * The signed-in user, at the foot of the sidebar. Opens the same settings
+ * drawer the topbar avatar did — it just lives somewhere findable now.
+ */
+function ProfileButton({ initials, email, onOpen }: {
+  initials?: string; email?: string; onOpen: () => void;
+}) {
   return (
-    <div className="upgrade">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-        <h4 style={{ margin: 0 }}>Usage</h4>
-        <IconSparkle size={12} style={{ color: "var(--text-mute)" }} />
-      </div>
-      <p style={{ marginBottom: 10 }}>Month-to-date activity.</p>
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {view.map((u) => (
-          <div key={u.label} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-dim)" }}>
-            <span>{u.label}</span>
-            <span style={{ fontFamily: "Geist Mono, monospace", color: "var(--text)", fontWeight: 500 }}>
-              {u.used.toLocaleString()}{u.unit}
-            </span>
-          </div>
-        ))}
-      </div>
-      <button
-        className="pill-btn"
-        style={{ width: "100%", marginTop: 12, justifyContent: "center", fontSize: 12 }}
-        onClick={onOpenSettings}
-      >
-        Manage API keys
-      </button>
-    </div>
+    <button className="nav-profile" onClick={onOpen} title="Settings and API keys">
+      <span className="nav-profile-avatar">{initials || "··"}</span>
+      <span className="nav-profile-text">
+        <span className="nav-profile-name">{email ?? "Your account"}</span>
+        <span className="nav-profile-sub">Settings and API keys</span>
+      </span>
+    </button>
   );
 }

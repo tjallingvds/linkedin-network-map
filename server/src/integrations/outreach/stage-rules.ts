@@ -18,7 +18,7 @@
  *     the move goes through the same path a human drag does
  */
 import { db } from "../../db/index.js";
-import { onStageChange } from "./stage-hook.js";
+import { onStageChange, sameStage } from "./stage-hook.js";
 
 /** Things that can happen to an email. Named as the operator sees them. */
 export const STAGE_TRIGGERS = ["sent", "replied", "bounced", "unsubscribed"] as const;
@@ -51,8 +51,12 @@ export function parseRules(raw: unknown): StageRule[] {
 
 /**
  * The rule that applies, if any. `currentStage` is what the card is in now.
- * Matching on `from` is exact — these are ids picked from a list, not typed —
- * but a rule that would move a card to where it already is does nothing.
+ *
+ * Stage matching is forgiving on purpose. A board's stages live on the client,
+ * so what reaches the server is sometimes the stage's id ("meeting") and
+ * sometimes its label ("Meeting booked") depending on which screen saved it —
+ * and a rule that silently never fires is indistinguishable from a broken
+ * feature. Case, punctuation and a typo or two are all tolerated.
  */
 export function ruleFor(
   rules: StageRule[],
@@ -61,8 +65,8 @@ export function ruleFor(
 ): StageRule | null {
   for (const r of rules) {
     if (r.when !== trigger) continue;
-    if (r.from && r.from !== currentStage) continue;
-    if (r.to === currentStage) return null; // already there
+    if (r.from && !sameStage(r.from, currentStage)) continue;
+    if (sameStage(r.to, currentStage)) return null; // already there
     return r;
   }
   return null;

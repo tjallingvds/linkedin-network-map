@@ -1232,6 +1232,8 @@ export function DiscoverPage() {
           onToggleCollapse={() => setCollapsed((c) => !c)}
           usage={usage}
           onOpenSettings={() => setSettingsOpen(true)}
+          userInitials={userInitials}
+          userEmail={user?.name || user?.email || undefined}
         />
 
         <div className={`main${appMode === "crm" || appMode === "approvals" ? " crm" : ""}`}>
@@ -1251,16 +1253,6 @@ export function DiscoverPage() {
                   <span className="cur">{breadcrumb[1]}</span>
                 </>
               )}
-            </div>
-            <div className="top-actions">
-              <button
-                className="avatar-mini"
-                title="Settings"
-                onClick={() => setSettingsOpen(true)}
-                style={{ cursor: "pointer" }}
-              >
-                {userInitials || "YS"}
-              </button>
             </div>
           </div>
 
