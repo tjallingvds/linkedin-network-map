@@ -1201,6 +1201,7 @@ const TYPE_LABELS: Record<CrmColumnType, string> = {
   page: "Page",
   file: "File",
   stage: "Stage",
+  group: "Group (A/B/C)",
   temp: "Temp",
   person: "Person",
   touch: "Last touch",
@@ -3124,6 +3125,7 @@ function TableView({
       );
       case "stage":   return <StageCell stage={p.stage} stages={stages} onChange={(v) => onPatch(p.id, { stage: v })} />;
       case "temp":    return <TempCell  temp={p.temp}   onChange={(v) => onPatch(p.id, { temp: v })} />;
+      case "group":   return <GroupCell group={p.group} reason={p.groupReason} onChange={(v) => onPatch(p.id, { group: v })} />;
       case "lastTouch": return (
         <TouchCell
           at={p.lastTouchAt}
@@ -3797,6 +3799,38 @@ function PageOverlayEditor({
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Outreach group — A, B or C, or none.
+ *
+ * This is the switch that decides whether someone can be emailed at all: the
+ * send filter only ever considers people who are in a group, and each group
+ * maps to one Smartlead campaign on the Automations tab.
+ */
+function GroupCell({ group, reason, onChange }: {
+  group: "A" | "B" | "C" | null;
+  reason?: string | null;
+  onChange: (v: "A" | "B" | "C" | null) => void;
+}) {
+  // Groups are assigned automatically, so the reason is what makes a wrong
+  // call correctable instead of mysterious.
+  const title = group
+    ? `Group ${group} — emailed via this group's campaign${reason ? `\n\nWhy: ${reason}` : ""}`
+    : `Not being emailed${reason ? `\n\nWhy: ${reason}` : ""}`;
+  return (
+    <select
+      className={`group-cell${group ? " is-set" : ""}`}
+      value={group ?? ""}
+      onChange={(e) => onChange((e.target.value || null) as "A" | "B" | "C" | null)}
+      title={title}
+    >
+      <option value="">—</option>
+      <option value="A">A</option>
+      <option value="B">B</option>
+      <option value="C">C</option>
+    </select>
   );
 }
 

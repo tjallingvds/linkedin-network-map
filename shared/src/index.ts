@@ -139,6 +139,12 @@ export interface CrmContact {
   linkedin: string | null;
   stage: CrmStage;
   temp: CrmTemp;
+  /** Outreach group: "A" | "B" | "C", or null when not being emailed.
+   *  Only people in a group can be sent through Automations. */
+  group: "A" | "B" | "C" | null;
+  /** Why the sorter chose that group, so a wrong call is visible. Null when
+   *  the group was set by hand. */
+  groupReason: string | null;
   sent: number;
   opens: number;
   replies: number;
@@ -226,6 +232,9 @@ export interface CrmStageDef {
 }
 
 export type CrmColumnType =
+  /** Outreach group (A/B/C or none) — which Smartlead campaign this person
+   *  is emailed through. Only people in a group can be sent. */
+  | "group"
   | "text"
   | "longtext"
   | "number"

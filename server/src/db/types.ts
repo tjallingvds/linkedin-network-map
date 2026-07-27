@@ -151,6 +151,8 @@ export interface CrmBoardsTable {
   outreach_stage_map: unknown | null;
   /** Board-specific instructions for writing opening lines. Null = default. */
   opening_prompt: string | null;
+  /** What each group means, in the operator's words: { A, B, C }. */
+  outreach_groups: unknown | null;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 }
@@ -184,6 +186,8 @@ export interface CrmContactsTable {
   last_touch_direction: string | null;
   /** Outreach content tier: 'A' | 'B' | 'C' | null (null = not in outreach). */
   tier: string | null;
+  /** Why the sorter chose that group. Null when set by hand. */
+  group_reason: string | null;
   /** Personal first line, drafted from this contact's own context. */
   opening_line: string | null;
   /** Which facts it was built from — shown beside it during review. */

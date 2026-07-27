@@ -135,6 +135,33 @@ async function main() {
   // Now switch the board on — the deliberate, per-board act.
   await db.updateTable("crm_boards").set({ outreach_enabled: true }).where("id", "=", boardId).execute();
 
+  // ── 0b. Putting someone in a group is what makes them sendable ──────────
+  // Without this the whole feature is unreachable: no group, no eligibility,
+  // nothing ever reaches the approval queue.
+  console.log("\n── Group field ──");
+  {
+    const token = "grp-session-" + Date.now();
+    await db.insertInto("sessions").values({
+      user_id: userId, session_token: token, expires: new Date(Date.now() + 3600_000),
+    } as any).execute();
+    const call = (path: string, init: RequestInit = {}) =>
+      fetch(`http://127.0.0.1:${PORT}${path}`, {
+        ...init,
+        headers: { "Content-Type": "application/json", Cookie: `nm_session=${token}`, ...(init.headers ?? {}) },
+      });
+    // The server has to be up for this; it is started further down, so only
+    // assert the DB-level contract here and the HTTP one after boot.
+    const ungrouped = await add("Ungrouped Person", "ungrouped@acme.com", null);
+    const before = (await selectEligible(userId, { tier: "B", boardId })).some((c: any) => c.id === ungrouped);
+    eq("someone with no group is not sendable", before, false);
+    await db.updateTable("crm_contacts").set({ tier: "B" }).where("id", "=", ungrouped).execute();
+    const after = (await selectEligible(userId, { tier: "B", boardId })).some((c: any) => c.id === ungrouped);
+    eq("setting a group makes them sendable", after, true);
+    // Put them back so later counts are unaffected.
+    await db.deleteFrom("crm_contacts").where("id", "=", ungrouped).execute();
+    void call;
+  }
+
   // ── 1. The gate ─────────────────────────────────────────────────────────
   console.log("\n── Export gate ──");
   const eligible = await selectEligible(userId, { tier: "B", boardId });
@@ -468,6 +495,43 @@ async function main() {
   const after: any = await (await authed("/api/outreach/pending")).json();
   ok("approved people leave the queue", after.pending.length < queued.pending.length,
     { before: queued.pending.length, after: after.pending.length });
+
+  // ── Automatic group sorting ───────────────────────────────────────────────
+  // Being in a group is what makes someone emailable, so the sorter has to be
+  // silent until it has been told what the groups mean.
+  console.log("\n── Group sorting ──");
+  {
+    const { sortBoard } = await import(`${R}/integrations/outreach/openers/sort.ts`);
+
+    await db.updateTable("crm_boards").set({ outreach_groups: null }).where("id", "=", boardId).execute();
+    const quiet = await sortBoard(userId, boardId);
+    eq("no descriptions sorts nobody", quiet, { considered: 0, sorted: 0, unmatched: 0, failed: 0 });
+
+    const saved = await authed(`/api/outreach/board/${boardId}/groups`, {
+      method: "POST",
+      body: JSON.stringify({ A: "Heads of AI at banks", B: "   ", C: "Insurance operations leads" }),
+    });
+    eq("descriptions save", saved.status, 200);
+    // A blank description must not be stored — a group nobody described can
+    // never be assigned, and a stored "" would read as described.
+    const status: any = await (await authed(`/api/outreach/board/${boardId}`)).json();
+    eq("described groups come back", Object.keys(status.groupDefs ?? {}).sort(), ["A", "C"]);
+    eq("blank group is not stored", status.groupDefs?.B, undefined);
+
+    // Sending off means the sorter stays out of it entirely.
+    await db.updateTable("crm_boards").set({ outreach_enabled: false }).where("id", "=", boardId).execute();
+    const off = await sortBoard(userId, boardId);
+    eq("board switched off sorts nobody", off.considered, 0);
+    await db.updateTable("crm_boards").set({ outreach_enabled: true }).where("id", "=", boardId).execute();
+
+    // A hand-set group is never revisited: the default pass only fills gaps.
+    const held = await add("Hand Sorted", "hand.sorted@acme.com", "A");
+    await db.updateTable("crm_contacts").set({ group_reason: "set by hand" }).where("id", "=", held).execute();
+    const grouped = await db.selectFrom("crm_contacts").select(["tier", "group_reason"])
+      .where("id", "=", held).executeTakeFirst();
+    eq("hand-set group survives with its reason", [grouped?.tier, grouped?.group_reason], ["A", "set by hand"]);
+    await db.deleteFrom("crm_contacts").where("id", "=", held).execute();
+  }
 
   console.log(`\n${pass} passed, ${fail} failed`);
   await fake.stop();

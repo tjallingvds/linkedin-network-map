@@ -23,6 +23,7 @@ interface BoardStatus {
   webhookUrl: string | null; bounceThresholdPct: number;
   stopStages: string[]; campaigns: Campaign[];
   openingPrompt: string; defaultPrompt: string;
+  groupDefs: Partial<Record<Group, string>>;
   suppressionCount: number; unreadAlerts: number;
 }
 interface Readiness {
@@ -39,6 +40,7 @@ interface ResultRow {
   bounceRate: number; replyRate: number; unsubRate: number;
 }
 export interface StageOption { id: string; label: string }
+interface SortJob { status: "running" | "done" | "error"; progress: string | null; error: string | null; result: unknown }
 
 /** One block of the page: a title row over a hairline, then a bordered body. */
 function Sec({ title, hint, chip, chipTone, muted, children }: {
@@ -191,7 +193,7 @@ export function OutreachPanel({
       </div>
 
       {/* Groups — the core setup. */}
-      <Groups boardId={boardId} campaigns={st!.campaigns} readiness={ready}
+      <Groups boardId={boardId} campaigns={st!.campaigns} readiness={ready} groupDefs={st!.groupDefs ?? {}}
         disabled={!on} onChanged={load} onFlash={onFlash} />
 
       {/* How the opening line gets written. */}
@@ -374,7 +376,11 @@ function Warnings({ boardId, threshold, bounceRate, sent, overBounce, onFlash, o
           <div>
             {sent === 0
               ? "Nothing to watch yet — warnings appear once you start sending."
-              : `Nothing wrong. Bounce rate is ${bounceRate}%.`}
+              : bounceRate >= threshold
+                // Over the line, but on too few emails to mean anything yet —
+                // say so rather than calling it clean.
+                ? `Bounce rate is ${bounceRate}%, but only ${sent} sent so far — too early to judge.`
+                : `Nothing wrong. Bounce rate is ${bounceRate}%.`}
           </div>
         </div>
       )}
@@ -394,13 +400,24 @@ function Warnings({ boardId, threshold, bounceRate, sent, overBounce, onFlash, o
   );
 }
 
-/** Groups → Smartlead campaigns. The core setup. */
-function Groups({ boardId, campaigns, readiness, disabled, onChanged, onFlash }: {
+/**
+ * Groups → Smartlead campaigns, and the descriptions that decide who lands in
+ * each one. You write who belongs; contacts are sorted in automatically.
+ */
+function Groups({ boardId, campaigns, readiness, groupDefs, disabled, onChanged, onFlash }: {
   boardId: string; campaigns: Campaign[]; readiness: Readiness | null;
+  groupDefs: Partial<Record<Group, string>>;
   disabled?: boolean; onChanged: () => void; onFlash: (m: string) => void;
 }) {
   const [remote, setRemote] = useState<RemoteCampaign[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [defs, setDefs] = useState<Record<string, string>>({});
+  const [sorting, setSorting] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDefs({ A: groupDefs.A ?? "", B: groupDefs.B ?? "", C: groupDefs.C ?? "" });
+  }, [groupDefs.A, groupDefs.B, groupDefs.C]);
 
   useEffect(() => {
     void (async () => {
@@ -411,6 +428,9 @@ function Groups({ boardId, campaigns, readiness, disabled, onChanged, onFlash }:
     })();
   }, [boardId]);
 
+  const dirty = GROUPS.some((g) => (defs[g] ?? "") !== (groupDefs[g] ?? ""));
+  const described = GROUPS.filter((g) => (groupDefs[g] ?? "").trim()).length;
+
   const setCampaign = async (group: Group, providerCampaignId: string, name?: string) => {
     try {
       await api.post(`/api/outreach/board/${boardId}/campaigns`, { group, providerCampaignId, name });
@@ -419,34 +439,92 @@ function Groups({ boardId, campaigns, readiness, disabled, onChanged, onFlash }:
     } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
   };
 
+  const saveDefs = async () => {
+    try {
+      await api.post(`/api/outreach/board/${boardId}/groups`, defs);
+      onFlash("Saved. New contacts get sorted into these automatically.");
+      onChanged();
+    } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
+  };
+
+  // Sorting decides who is emailable at all, so wait for it and say plainly
+  // what it did — including who it refused to place.
+  const sortNow = async (resort: boolean) => {
+    setSorting(true);
+    setNote(resort ? "Re-sorting everyone…" : "Sorting…");
+    try {
+      const { jobId } = await api.post<{ jobId: string }>(`/api/outreach/board/${boardId}/sort`, { resort });
+      for (let i = 0; i < 600; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const job = await api.get<SortJob>(`/api/outreach/send/${jobId}`);
+        if (job.progress) setNote(job.progress);
+        if (job.status === "running") continue;
+        if (job.status === "error") { onFlash(`Sorting failed: ${job.error ?? "unknown"}`); break; }
+        const r = typeof job.result === "string" ? JSON.parse(job.result) : job.result;
+        const parts = [`${r?.sorted ?? 0} sorted`];
+        if (r?.unmatched) parts.push(`${r.unmatched} fit no description`);
+        if (r?.failed) parts.push(`${r.failed} couldn’t be read`);
+        onFlash(parts.join(", "));
+        onChanged();
+        break;
+      }
+    } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
+    finally { setSorting(false); setNote(null); }
+  };
+
   return (
     <Sec title="Groups"
-      hint="A group is a label on your contacts. Each one sends through its own Smartlead campaign.">
+      hint="Describe who belongs in each group and people are sorted in for you. Each group sends through its own Smartlead campaign.">
       {GROUPS.map((g) => {
         const mapped = campaigns.find((c) => c.tier === g);
         const people = readiness?.byGroup[g] ?? 0;
         return (
           <div key={g} className="au-group">
             <span className="au-group-tag">{g}</span>
-            <select className="au-input" disabled={disabled || loading}
-              value={mapped?.provider_campaign_id ?? ""}
-              onChange={(e) => {
-                const id = e.target.value;
-                if (!id) return;
-                setCampaign(g, id, remote?.find((r) => String(r.id) === id)?.name);
-              }}>
-              <option value="">{loading ? "Loading campaigns…" : "— pick a Smartlead campaign —"}</option>
-              {remote?.map((r) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
-              {mapped && !remote?.some((r) => String(r.id) === mapped.provider_campaign_id) && (
-                <option value={mapped.provider_campaign_id}>Campaign #{mapped.provider_campaign_id}</option>
-              )}
-            </select>
-            <span className="au-count">{people} {people === 1 ? "person" : "people"}</span>
+            <div className="au-group-body">
+              <textarea className="au-group-desc" rows={2} disabled={disabled}
+                placeholder={g === "A"
+                  ? "Who belongs here? e.g. Heads of AI or data at banks and insurers"
+                  : "Who belongs here? Leave blank to not use this group."}
+                value={defs[g] ?? ""}
+                onChange={(e) => setDefs({ ...defs, [g]: e.target.value })} />
+              <div className="au-group-row">
+                <select className="au-input" disabled={disabled || loading}
+                  value={mapped?.provider_campaign_id ?? ""}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    if (!id) return;
+                    setCampaign(g, id, remote?.find((r) => String(r.id) === id)?.name);
+                  }}>
+                  <option value="">{loading ? "Loading campaigns…" : "— pick a Smartlead campaign —"}</option>
+                  {remote?.map((r) => <option key={r.id} value={String(r.id)}>{r.name}</option>)}
+                  {mapped && !remote?.some((r) => String(r.id) === mapped.provider_campaign_id) && (
+                    <option value={mapped.provider_campaign_id}>Campaign #{mapped.provider_campaign_id}</option>
+                  )}
+                </select>
+                <span className="au-count">{people} {people === 1 ? "person" : "people"}</span>
+              </div>
+            </div>
           </div>
         );
       })}
+
+      <div className="au-actions">
+        <button className="pill-btn primary" disabled={disabled || !dirty} onClick={() => void saveDefs()}>
+          {dirty ? "Save descriptions" : "Saved"}
+        </button>
+        <button className="pill-btn" disabled={disabled || sorting || !described} onClick={() => void sortNow(false)}>
+          Sort the ungrouped now
+        </button>
+        <button className="pill-btn" disabled={disabled || sorting || !described} onClick={() => void sortNow(true)}>
+          Re-sort everyone
+        </button>
+        {note && <span className="au-count" style={{ minWidth: 0 }}>{note}</span>}
+      </div>
       <div className="au-note">
-        Put someone in a group by setting the <b>Group</b> field on their contact to A, B or C.
+        Sorting runs by itself before each drafting round. Anyone who fits none of your
+        descriptions is left out rather than guessed at — set the <b>Group</b> field on their
+        contact by hand to overrule a call.
       </div>
     </Sec>
   );

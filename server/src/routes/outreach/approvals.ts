@@ -12,10 +12,10 @@ import type { AuthedRequest } from "../../auth/session.js";
 import { extractUserKeys } from "../../ai/user-keys.js";
 import { getAccountByBoard } from "../../integrations/outreach/accounts.js";
 import {
-  autodraftAll, setOpener, listPending, pendingCount, undraftedCount, approveByIds,
+  autodraftAll, sortBoard, setOpener, listPending, pendingCount, undraftedCount, approveByIds,
 } from "../../integrations/outreach/openers/index.js";
 import { createJob, setProgress, finishJob, failJob } from "../../integrations/outreach/jobs.js";
-import { uid } from "./shared.js";
+import { uid, ownedBoard } from "./shared.js";
 import { startSend, sendableCampaign } from "./sending.js";
 
 const router = Router();
@@ -30,6 +30,21 @@ async function startDraftJob(userId: string, run: (onProgress: (n: string) => vo
   });
   return jobId;
 }
+
+/** Sort this board's people into groups now (re-sorting everyone if asked). */
+router.post("/board/:boardId/sort", async (req: AuthedRequest, res: Response) => {
+  const board = await ownedBoard(req);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+  const parsed = z.object({ resort: z.boolean().optional() }).safeParse(req.body ?? {});
+  if (!parsed.success) return res.status(400).json({ error: "invalid_body" });
+
+  const userId = uid(req);
+  const userKeys = extractUserKeys(req);
+  res.json({
+    jobId: await startDraftJob(userId, (onProgress) =>
+      sortBoard(userId, board.id, { userKeys, resort: parsed.data.resort, onProgress })),
+  });
+});
 
 // ── Global queue (all boards) ───────────────────────────────────────────────
 router.get("/pending", async (req: AuthedRequest, res: Response) => {

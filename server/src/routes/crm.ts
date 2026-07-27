@@ -100,6 +100,8 @@ function toCamelContact(row: Record<string, unknown>) {
     linkedin: row.linkedin,
     stage: row.stage,
     temp: row.temp,
+    group: (row.tier as string | null) ?? null,
+    groupReason: (row.group_reason as string | null) ?? null,
     sent: row.sent,
     opens: row.opens,
     replies: row.replies,
@@ -426,6 +428,9 @@ const contactInput = z.object({
   // string is accepted — validation only guards length.
   stage: z.string().min(1).max(40).optional(),
   temp: z.enum(TEMPS).optional(),
+  /** Outreach group: "A" | "B" | "C", or null/"" to take them out of one.
+   *  Stored in the `tier` column. Only people in a group can be emailed. */
+  group: z.enum(["A", "B", "C"]).nullish(),
   sent: z.number().int().min(0).optional(),
   opens: z.number().int().min(0).optional(),
   replies: z.number().int().min(0).optional(),
@@ -828,6 +833,7 @@ router.post("/boards/:boardId/contacts", async (req: AuthedRequest, res) => {
       linkedin: p.linkedin ?? null,
       stage: p.stage ?? "new",
       temp: p.temp ?? "warm",
+      tier: p.group ?? null,
       sent: p.sent ?? 0,
       opens: p.opens ?? 0,
       replies: p.replies ?? 0,
@@ -978,6 +984,7 @@ router.post("/boards/:boardId/contacts/bulk", async (req: AuthedRequest, res) =>
           linkedin: p.linkedin ?? null,
           stage: p.stage ?? "new",
           temp: p.temp ?? "warm",
+          tier: p.group ?? null,
           sent: p.sent ?? 0,
           opens: p.opens ?? 0,
           replies: p.replies ?? 0,
@@ -1018,7 +1025,7 @@ router.patch("/contacts/:id", async (req: AuthedRequest, res) => {
   const update: Record<string, unknown> = { updated_at: new Date() };
   const map = {
     name: "name", title: "title", company: "company", email: "email",
-    phone: "phone", linkedin: "linkedin", stage: "stage", temp: "temp",
+    phone: "phone", linkedin: "linkedin", stage: "stage", temp: "temp", group: "tier",
     sent: "sent", opens: "opens", replies: "replies",
     lastTouch: "last_touch", nextStep: "next_step", source: "source", notes: "notes",
     messageNotes: "message_notes",

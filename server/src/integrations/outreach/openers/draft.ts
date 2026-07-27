@@ -13,6 +13,7 @@ import { getCampaignFirstEmail } from "../../smartlead.js";
 import { getAccountByBoard } from "../accounts.js";
 import { contextFor, hasRealMaterial } from "./context.js";
 import { research } from "./research.js";
+import { sortAll } from "./sort.js";
 
 export const DEFAULT_PROMPT = `You write the FIRST LINE of a cold B2B email.
 
@@ -194,6 +195,19 @@ export async function autodraftAll(
   userId: string,
   opts: { userKeys?: UserKeys; onProgress?: (note: string) => void } = {},
 ): Promise<DraftResult> {
+  // Sort anyone still ungrouped first — a person with no group can't be
+  // drafted for, because the group decides which campaign email the line
+  // has to lead into.
+  try {
+    const s = await sortAll(userId, {
+      userKeys: opts.userKeys,
+      onProgress: (n) => opts.onProgress?.(`grouping — ${n}`),
+    });
+    if (s.sorted) opts.onProgress?.(`sorted ${s.sorted} into groups`);
+  } catch (err) {
+    console.error("[openers] sorting failed, drafting anyway:", (err as Error).message);
+  }
+
   const targets = await db
     .selectFrom("outreach_campaigns as oc")
     .innerJoin("crm_boards as b", "b.id", "oc.board_id")

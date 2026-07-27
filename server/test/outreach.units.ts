@@ -19,6 +19,7 @@ import { encryptSecret, decryptSecret } from "../src/integrations/crypto.ts";
 import { mapLeadStatusToState } from "../src/integrations/smartlead.ts";
 import { deriveName } from "../src/integrations/outreach/gate.ts";
 import { stageStopsSending } from "../src/integrations/outreach/stage-hook.ts";
+import { acceptGroup, hasDescriptions } from "../src/integrations/outreach/openers/sort.ts";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => { cond ? pass++ : fail++; console.log(`${cond ? "✓" : "✗"} ${name}`); };
@@ -107,6 +108,26 @@ const renamed = { noSend: ["meeting", "Meeting booked"] };
 eq("matches the stored stage id", stageStopsSending("meeting", renamed), true);
 eq("matches the label too", stageStopsSending("Meeting booked", renamed), true);
 eq("unrelated id does not match", stageStopsSending("new", renamed), false);
+
+// ── Group sorting: what the sorter is allowed to decide ────────────────────
+// Being in a group is what makes someone emailable, so a wrong "yes" here
+// mails the wrong person. Every uncertain answer must land on null.
+console.log("\n— group sorting —");
+const defs = { A: "Heads of AI at banks", B: "  ", C: "Everyone else in insurance" };
+
+eq("accepts a described group", acceptGroup("A", defs), "A");
+eq("accepts lowercase", acceptGroup("c", defs), "C");
+eq("accepts padded", acceptGroup(" a ", defs), "A");
+eq("refuses a group with a blank description", acceptGroup("B", defs), null);
+eq("refuses an invented group", acceptGroup("D", defs), null);
+eq("refuses a sentence", acceptGroup("probably group A", defs), null);
+eq("refuses null", acceptGroup(null, defs), null);
+eq("refuses a number", acceptGroup(1, defs), null);
+eq("refuses everything when nothing is described", acceptGroup("A", {}), null);
+
+eq("descriptions present", hasDescriptions(defs), true);
+eq("whitespace is not a description", hasDescriptions({ A: "   " }), false);
+eq("no descriptions at all", hasDescriptions({}), false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

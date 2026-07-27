@@ -16,7 +16,7 @@ import {
 } from "../../integrations/outreach/accounts.js";
 import { listCampaigns } from "../../integrations/smartlead.js";
 import { unreadAlertCount } from "../../integrations/outreach/alerts.js";
-import { DEFAULT_PROMPT } from "../../integrations/outreach/openers/index.js";
+import { DEFAULT_PROMPT, type GroupDefs } from "../../integrations/outreach/openers/index.js";
 import { uid, webhookUrl, ownedBoard, stopStagesOf } from "./shared.js";
 
 const router = Router();
@@ -71,6 +71,7 @@ router.get("/board/:boardId", async (req: AuthedRequest, res: Response) => {
     bounceThresholdPct: account?.bounceThresholdPct ?? 2,
     stopStages: stopStagesOf(board),
     openingPrompt: board.opening_prompt ?? "",
+    groupDefs: (board.outreach_groups ?? {}) as GroupDefs,
     defaultPrompt: DEFAULT_PROMPT,
     campaigns,
     suppressionCount: Number(suppressions?.n ?? 0),
@@ -149,6 +150,29 @@ router.post("/board/:boardId/prompt", async (req: AuthedRequest, res: Response) 
     .set({ opening_prompt: parsed.data.prompt.trim() || null, updated_at: new Date() as never })
     .where("id", "=", board.id).execute();
   res.json({ ok: true });
+});
+
+/**
+ * What each group means, in the operator's own words. Contacts are sorted into
+ * these automatically; a group left blank is never assigned to anyone.
+ */
+router.post("/board/:boardId/groups", async (req: AuthedRequest, res: Response) => {
+  const board = await ownedBoard(req);
+  if (!board) return res.status(404).json({ error: "board_not_found" });
+  const parsed = z.object({
+    A: z.string().max(600).optional(),
+    B: z.string().max(600).optional(),
+    C: z.string().max(600).optional(),
+  }).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: "invalid_body" });
+
+  const defs = Object.fromEntries(
+    Object.entries(parsed.data).map(([k, v]) => [k, (v ?? "").trim()]).filter(([, v]) => v),
+  );
+  await db.updateTable("crm_boards")
+    .set({ outreach_groups: sql`${JSON.stringify(defs)}::jsonb`, updated_at: new Date() as never })
+    .where("id", "=", board.id).execute();
+  res.json({ ok: true, groupDefs: defs });
 });
 
 /** Which of this board's stages mean "stop emailing". */
