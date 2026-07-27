@@ -60,6 +60,18 @@ const TRIGGERS: { id: Trigger; label: string }[] = [
   { id: "unsubscribed", label: "they unsubscribe" },
 ];
 
+/** A group with every field present, whatever the payload actually held. */
+function normalizeGroup(g: Partial<Group>): Group {
+  return {
+    id: g.id ?? "",
+    name: g.name ?? "",
+    description: g.description ?? "",
+    prompt: g.prompt ?? "",
+    testedAt: g.testedAt ?? null,
+    live: g.live === true,
+  };
+}
+
 /** One block of the page: a title row over a hairline, then a bordered body. */
 function Sec({ title, hint, chip, chipTone, muted, children }: {
   title: string; hint?: React.ReactNode; chip?: string;
@@ -438,7 +450,10 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
   const [tryouts, setTryouts] = useState<Record<string, Tryout[]>>({});
   const [testing, setTesting] = useState<string | null>(null);
 
-  const saved = JSON.stringify(groups);
+  // Fill in anything the payload is missing before it reaches the JSX. A group
+  // arriving without a description or prompt is not worth white-screening the
+  // whole page over.
+  const saved = JSON.stringify(groups.map(normalizeGroup));
   useEffect(() => { setDraft(JSON.parse(saved) as Group[]); }, [saved]);
 
   useEffect(() => {

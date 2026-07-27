@@ -82,6 +82,11 @@ router.get("/board/:boardId", async (req: AuthedRequest, res: Response) => {
     groups: await listGroups(board.id),
     stageRules: parseRules(board.outreach_stage_map),
     defaultPrompt: DEFAULT_PROMPT,
+    /** Deprecated: instructions moved to the group. Kept as an empty string so
+     *  a browser still running the previous bundle — which reads
+     *  `openingPrompt.trim()` — renders instead of crashing. Safe to delete
+     *  once nobody can be holding that build. */
+    openingPrompt: "",
     campaigns,
     suppressionCount: Number(suppressions?.n ?? 0),
     unreadAlerts: await unreadAlertCount(uid(req)),
