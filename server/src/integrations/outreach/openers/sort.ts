@@ -107,10 +107,14 @@ export async function sortBoard(
   boardId: string,
   opts: { userKeys?: UserKeys; onProgress?: (note: string) => void; resort?: boolean } = {},
 ): Promise<SortResult> {
+  // Deliberately NOT gated on the board's sending switch. Sorting only labels
+  // people; nothing here puts email on the wire, and setup has to be possible
+  // before you turn sending on. The automatic sweep (sortAll) still visits
+  // switched-on boards only, so an off board costs nothing unless asked.
   const board = await db
-    .selectFrom("crm_boards").select(["outreach_groups", "outreach_enabled"])
+    .selectFrom("crm_boards").select(["outreach_groups"])
     .where("id", "=", boardId).where("user_id", "=", userId).executeTakeFirst();
-  if (!board?.outreach_enabled) return { considered: 0, sorted: 0, unmatched: 0, failed: 0 };
+  if (!board) return { considered: 0, sorted: 0, unmatched: 0, failed: 0 };
 
   const groups = parseGroups(board.outreach_groups);
   // No descriptions means no opinion about anyone — never guess.

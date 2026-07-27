@@ -239,8 +239,7 @@ export function OutreachPanel({
 
       {/* Groups — the core setup. */}
       <Groups boardId={boardId} campaigns={st!.campaigns} readiness={ready} groups={st!.groups ?? []}
-        defaultPrompt={st!.defaultPrompt}
-        disabled={!on} onChanged={load} onFlash={onFlash} />
+        defaultPrompt={st!.defaultPrompt} onChanged={load} onFlash={onFlash} />
 
       <Sec title="Card moves">
         <StageRules boardId={boardId} stages={stages} current={st!.stageRules ?? []}
@@ -478,10 +477,10 @@ function Warnings({ boardId, threshold, bounceRate, sent, overBounce, onFlash, o
  * Groups → Smartlead campaigns, and the descriptions that decide who lands in
  * each one. You write who belongs; contacts are sorted in automatically.
  */
-function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled, onChanged, onFlash }: {
+function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, onChanged, onFlash }: {
   boardId: string; campaigns: Campaign[]; readiness: Readiness | null;
   groups: Group[]; defaultPrompt: string;
-  disabled?: boolean; onChanged: () => void; onFlash: (m: string) => void;
+  onChanged: () => void; onFlash: (m: string) => void;
 }) {
   const [remote, setRemote] = useState<RemoteCampaign[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -617,7 +616,7 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
   return (
     <Sec title="Groups"
       action={
-        <button className="pill-btn" disabled={disabled || draft.length >= 12} onClick={add}>
+        <button className="pill-btn" disabled={draft.length >= 12} onClick={add}>
           Add group
         </button>
       }>
@@ -648,14 +647,14 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
                 <div className="au-g-body">
                   <label className="au-f">
                     <span className="au-f-label">Name</span>
-                    <input className="au-input" disabled={disabled} value={g.name}
+                    <input className="au-input" value={g.name}
                       placeholder="Name this group"
                       onChange={(e) => edit(i, { name: e.target.value })} />
                   </label>
 
                   <label className="au-f">
                     <span className="au-f-label">Who belongs</span>
-                    <textarea className="au-group-desc" rows={2} disabled={disabled}
+                    <textarea className="au-group-desc" rows={2}
                       placeholder="e.g. Heads of AI or data at banks and insurers"
                       value={g.description}
                       onChange={(e) => edit(i, { description: e.target.value })} />
@@ -663,7 +662,7 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
 
                   <label className="au-f">
                     <span className="au-f-label">Campaign</span>
-                    <select className="au-input" disabled={disabled || loading || !g.id}
+                    <select className="au-input" disabled={loading || !g.id}
                       value={mapped?.provider_campaign_id ?? ""}
                       onChange={(e) => {
                         const id = e.target.value;
@@ -684,7 +683,7 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
                   <label className="au-f au-f-top">
                     <span className="au-f-label">Opening line</span>
                     <span className="au-f-stack">
-                      <textarea className="au-prompt" rows={5} disabled={disabled}
+                      <textarea className="au-prompt" rows={5}
                         placeholder={defaultPrompt}
                         value={g.prompt}
                         onChange={(e) => edit(i, { prompt: e.target.value })} />
@@ -696,18 +695,18 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
                   </label>
 
                   <div className="au-g-foot">
-                    <button className="pill-btn" disabled={disabled || !g.id || !g.prompt.trim() || dirty || testing === g.id}
+                    <button className="pill-btn" disabled={!g.id || !g.prompt.trim() || dirty || testing === g.id}
                       onClick={() => void test(g)}
                       title={dirty ? "Save your changes first" : "Write sample lines for real people in this group"}>
                       {testing === g.id ? "Testing…" : g.testedAt ? "Test again" : "Test"}
                     </button>
                     <button className={`pill-btn${g.live || !g.testedAt ? "" : " primary"}`}
-                      disabled={disabled || !g.id || dirty || (!g.live && !g.testedAt)}
+                      disabled={!g.id || dirty || (!g.live && !g.testedAt)}
                       onClick={() => void setLive(g, !g.live)}
                       title={!g.testedAt && !g.live ? "Test the opening line first" : ""}>
                       {g.live ? "Pause" : "Switch live"}
                     </button>
-                    <button className="pill-btn au-danger" disabled={disabled}
+                    <button className="pill-btn au-danger"
                       style={{ marginLeft: "auto" }} onClick={() => remove(g, i)}>Remove</button>
                   </div>
 
@@ -738,14 +737,14 @@ function Groups({ boardId, campaigns, readiness, groups, defaultPrompt, disabled
 
       <div className="au-actions">
         {dirty && (
-          <button className="pill-btn primary" disabled={disabled} onClick={() => void save()}>
+          <button className="pill-btn primary" onClick={() => void save()}>
             Save changes
           </button>
         )}
-        <button className="pill-btn" disabled={disabled || sorting || !described} onClick={() => void sortNow(false)}>
+        <button className="pill-btn" disabled={sorting || !described} onClick={() => void sortNow(false)}>
           Sort people into groups
         </button>
-        <button className="au-link" disabled={disabled || sorting || !described} onClick={() => void sortNow(true)}>
+        <button className="au-link" disabled={sorting || !described} onClick={() => void sortNow(true)}>
           re-sort everyone
         </button>
         {note && <span className="au-hint">{note}</span>}

@@ -837,10 +837,19 @@ async function main() {
       body: JSON.stringify({ groups: [{ id: "B", name: "Tier B outbound", description: "Heads of AI at banks" }] }),
     });
 
-    // Sending off means the sorter stays out of it entirely.
+    // Setup has to work before sending is switched on — that is the order
+    // anyone sets this up in. Sorting only labels people; the gate is what
+    // stops email, so an off board can still be organised.
+    const { sortAll } = await import(`${R}/integrations/outreach/openers/sort.ts`);
     await db.updateTable("crm_boards").set({ outreach_enabled: false }).where("id", "=", boardId).execute();
-    const off = await sortBoard(userId, boardId);
-    eq("board switched off sorts nobody", off.considered, 0);
+    // Getting as far as "needs an AI key" is the proof: the board switch is no
+    // longer what stops it. (No key is configured in this suite.)
+    let offMsg = "";
+    try { await sortBoard(userId, boardId); } catch (e) { offMsg = (e as Error).message; }
+    ok("an explicit sort is not blocked by the sending switch",
+      /AI key/.test(offMsg), offMsg || "(no error — it ran)");
+    // …but the automatic sweep still leaves switched-off boards alone.
+    eq("the automatic sweep skips it", (await sortAll(userId)).considered, 0);
     await db.updateTable("crm_boards").set({ outreach_enabled: true }).where("id", "=", boardId).execute();
 
     // A hand-set group is never revisited: the default pass only fills gaps.
