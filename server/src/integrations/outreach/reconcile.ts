@@ -145,6 +145,30 @@ export async function reconcileBoard(boardId: string): Promise<ReconcileCounts> 
   return reconcileAccount(account);
 }
 
+/**
+ * Boards Smartlead has never called back.
+ *
+ * With no webhook arriving, this sweep is the only thing that notices a reply
+ * and stops the follow-ups — so those boards are swept hourly instead of
+ * daily, and drop back to daily the moment a real event shows up.
+ */
+export async function reconcileWebhookless(): Promise<number> {
+  let n = 0;
+  for (const account of await listAccounts()) {
+    const seen = await db
+      .selectFrom("outreach_events").select("id")
+      .where("user_id", "=", account.userId).limit(1).executeTakeFirst();
+    if (seen) continue;
+    try {
+      await reconcileAccount(account);
+      n++;
+    } catch (err) {
+      console.error(`[reconcile] webhookless board ${account.boardId} failed:`, (err as Error).message);
+    }
+  }
+  return n;
+}
+
 /** Reconcile every connected board. Called by the daily scheduler. */
 export async function reconcileAll(): Promise<void> {
   for (const account of await listAccounts()) {

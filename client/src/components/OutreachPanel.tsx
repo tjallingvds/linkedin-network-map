@@ -274,10 +274,10 @@ export function OutreachPanel({
               {st!.lastEvent
                 ? <>Smartlead has called this webhook — last <b>{timeAgo(st!.lastEvent.at)}</b>{" "}
                    ({st!.lastEvent.type.toLowerCase().replace(/_/g, " ")}).</>
-                : <><b>Smartlead has never called this webhook.</b> That's separate from your API
-                   key: “Re-check with Smartlead” asks them questions and works on the key alone,
-                   but replies and bounces only stop sending when Smartlead calls <i>us</i>. Save
-                   the URL above in Smartlead and tick those four events.</>}
+                : <><b>Smartlead has never called this webhook</b> — which is separate from your
+                   API key working. Without it, a reply is only noticed on the next check instead
+                   of within seconds, so this board is being checked every hour until one arrives.
+                   Save the URL above in Smartlead and tick those four events.</>}
             </div>
           </div>
           <div className="au-actions">
@@ -312,6 +312,11 @@ export function OutreachPanel({
               } catch (e) { onFlash(`Couldn’t reach Smartlead — ${(e as Error).message}`); }
               finally { setChecking(false); }
             }}>{checking ? "Checking…" : "Re-check with Smartlead"}</button>
+            <span className="au-hint" style={{ flexBasis: "100%" }}>
+              Asks Smartlead who replied, who bounced and who is still sending, and fixes anything
+              that drifted — a reply whose webhook never arrived, or someone still being emailed
+              after you stopped them. Runs by itself too; this is for when you don't want to wait.
+            </span>
             <button className="pill-btn" onClick={async () => {
               try {
                 await api.post(`/api/outreach/board/${boardId}/disconnect`);

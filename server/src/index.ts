@@ -26,7 +26,7 @@ import messagesLogRoutes from "./routes/messages_log.js";
 import salesRoutes from "./routes/sales/index.js";
 import outreachRoutes from "./routes/outreach/index.js";
 import smartleadWebhookRoutes from "./routes/webhooks/smartlead.js";
-import { reconcileAll } from "./integrations/outreach/reconcile.js";
+import { reconcileAll, reconcileWebhookless } from "./integrations/outreach/reconcile.js";
 import { draftAhead } from "./integrations/outreach/openers/ahead.js";
 import { lastRunAt, createJob, finishJob, failJob } from "./integrations/outreach/jobs.js";
 
@@ -198,6 +198,15 @@ function startReconcileScheduler() {
   const HOUR_MS = 60 * 60 * 1000;
   const MIN_GAP_MS = 20 * HOUR_MS;
   const tick = async () => {
+    // Boards with no webhook have nothing else watching for replies, so they
+    // get swept every hour rather than waiting for the daily pass.
+    try {
+      const n = await reconcileWebhookless();
+      if (n) console.log(`[reconcile] hourly sweep of ${n} board(s) with no webhook`);
+    } catch (err) {
+      console.error("[reconcile] webhookless sweep failed:", (err as Error).message);
+    }
+
     try {
       const last = await lastRunAt("reconcile");
       if (last && Date.now() - last.getTime() < MIN_GAP_MS) return;

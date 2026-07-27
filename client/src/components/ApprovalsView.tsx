@@ -20,7 +20,6 @@ interface Pending {
   status: string | null;
   boardId: string; boardName: string; group: string; groupName: string;
   /** False = no personal line; this person would get the plain template. */
-  hasLine: boolean;
 }
 
 interface JobResp { status: "running" | "done" | "error"; progress: string | null; error: string | null; result: unknown }
@@ -39,7 +38,7 @@ export function ApprovalsView({ onFlash }: { onFlash: (m: string) => void }) {
       // Tick the people who have a line — reviewing those is the common case.
       // Anyone without one stays unticked: sending them the plain template
       // should be a deliberate choice, not something that happens by default.
-      setChecked(Object.fromEntries(r.filter((x) => x.hasLine).map((x) => [x.id, true])));
+      setChecked(Object.fromEntries(r.map((x) => [x.id, true])));
     } catch (e) { onFlash(`Couldn't load: ${(e as Error).message}`); }
   };
   /**
@@ -124,11 +123,6 @@ export function ApprovalsView({ onFlash }: { onFlash: (m: string) => void }) {
               : rows.length === 0 ? "Nothing waiting for you"
               : `${rows.length} email${rows.length === 1 ? " needs" : "s need"} approval`}
           </h2>
-          <div className="au-hero-sub">
-            Each person has their own first line, written from their LinkedIn or whatever the CRM knows
-            about them. Check the line reads true, then approve — nothing has been sent yet. People with
-            no line can still be ticked; they receive the campaign’s plain template.
-          </div>
         </div>
         <button className="pill-btn primary" disabled={busy || !!drafting || selected === 0} onClick={approve}>
           {busy ? "Sending…" : `Approve ${selected}`}
@@ -179,17 +173,15 @@ export function ApprovalsView({ onFlash }: { onFlash: (m: string) => void }) {
                       </td>
                       <td>
                         <textarea className="au-line" rows={2}
-                          placeholder="No personal line — sends the plain template. Write one here to personalise it."
+                          placeholder="Write the opening line"
                           value={edits[r.id] ?? r.openingLine ?? ""}
                           onChange={(e) => setEdits((x) => ({ ...x, [r.id]: e.target.value }))}
                           onBlur={() => saveLine(r.id)} />
                       </td>
                       <td className="au-src">
-                        {!r.hasLine
-                          ? <span className="au-chip">plain template</span>
-                          : r.source?.startsWith("http")
-                            ? <a href={r.source} target="_blank" rel="noreferrer">{r.source}</a>
-                            : (r.source ?? "—")}
+                        {r.source?.startsWith("http")
+                          ? <a href={r.source} target="_blank" rel="noreferrer">{r.source}</a>
+                          : (r.source ?? "—")}
                       </td>
                     </tr>
                   ))}

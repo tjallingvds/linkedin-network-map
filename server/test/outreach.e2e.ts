@@ -812,6 +812,25 @@ async function main() {
     await db.deleteFrom("crm_boards").where("id", "=", board2.id).execute();
   }
 
+  // A board Smartlead never calls has nothing else watching for replies, so it
+  // is swept hourly — and stops being swept once real events show up.
+  console.log("\n── Hourly sweep when no webhook arrives ──");
+  {
+    const { reconcileWebhookless } = await import(`${R}/integrations/outreach/reconcile.ts`);
+    const saved = await db.selectFrom("outreach_events").selectAll().execute();
+
+    await db.deleteFrom("outreach_events").execute();
+    eq("a board with no events is swept", await reconcileWebhookless(), 1);
+
+    await db.insertInto("outreach_events").values({
+      user_id: userId, request_id: "sweep-probe", event_type: "EMAIL_SENT", payload: "{}",
+    } as never).execute();
+    eq("once events arrive it is left to the daily pass", await reconcileWebhookless(), 0);
+
+    await db.deleteFrom("outreach_events").execute();
+    if (saved.length) await db.insertInto("outreach_events").values(saved as never).execute();
+  }
+
   console.log("\n── Accounted for ──");
   {
     const { selectExcluded } = await import(`${R}/integrations/outreach/excluded.ts`);
