@@ -17,7 +17,22 @@ export type Group = string;
 export const uid = (req: AuthedRequest): string => req.user!.id;
 
 /** The inbound webhook URL for a board's Smartlead account. */
-export const webhookUrl = (token: string): string => `${env.SERVER_URL}/hooks/smartlead/${token}`;
+/**
+ * The URL to paste into Smartlead.
+ *
+ * Built from the request that asked for it, not from config. SERVER_URL
+ * defaults to http://localhost:4000, so a deploy that never set it would hand
+ * out a dead address — and nothing about that failure is visible: Smartlead
+ * accepts the webhook, posts into the void, and replies simply never arrive.
+ * The browser asking for this page reached us on the right host by definition,
+ * so that host is the one to hand back. `trust proxy` is on, so req.protocol
+ * and Host already reflect the public origin behind Railway's proxy.
+ */
+export function webhookUrl(token: string, req?: { protocol: string; get(h: string): string | undefined }): string {
+  const host = req?.get("host");
+  const base = host ? `${req!.protocol}://${host}` : env.SERVER_URL;
+  return `${base}/hooks/smartlead/${token}`;
+}
 
 export interface OwnedBoard {
   id: string;

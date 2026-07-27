@@ -3536,8 +3536,10 @@ button:focus-visible { outline-offset: 3px; }
    row over a hairline with an inline hint, then a light bordered body. No
    competing card grid — this page is read top-to-bottom as a setup flow. */
 .au-wrap {
-  display: flex; flex-direction: column; gap: 24px;
-  padding: 20px 24px 40px;
+  display: flex; flex-direction: column; gap: 20px;
+  /* No horizontal padding: the cards line up with the board title, the
+     Overview/Board/Table/Automations tabs and the Actions button. */
+  padding: 4px 0 40px;
   overflow-y: auto;
   min-height: 0;
 }
@@ -3842,6 +3844,8 @@ button:focus-visible { outline-offset: 3px; }
 }
 .au-link:hover:not(:disabled) { color: var(--accent); }
 .au-link:disabled { opacity: .45; cursor: default; }
+
+.au-ok.is-waiting { color: var(--text-mute); }
 
 /* Sample opening lines from a group's test run */
 .au-tryout {

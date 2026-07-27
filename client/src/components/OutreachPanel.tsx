@@ -33,6 +33,7 @@ interface BoardStatus {
   defaultPrompt: string;
   groups: Group[];
   suppressionCount: number; unreadAlerts: number;
+  lastEvent: { type: string; at: string } | null;
 }
 interface Readiness {
   connected: boolean; enabled: boolean; total: number; withEmail: number;
@@ -59,6 +60,17 @@ const TRIGGERS: { id: Trigger; label: string }[] = [
   { id: "bounced", label: "it bounces" },
   { id: "unsubscribed", label: "they unsubscribe" },
 ];
+
+/** "3 minutes ago" — enough precision to tell working from silent. */
+function timeAgo(iso: string): string {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 90) return "just now";
+  const m = s / 60;
+  if (m < 60) return `${Math.round(m)} minutes ago`;
+  const h = m / 60;
+  if (h < 36) return `${Math.round(h)} hours ago`;
+  return `${Math.round(h / 24)} days ago`;
+}
 
 /** A group with every field present, whatever the payload actually held. */
 function normalizeGroup(g: Partial<Group>): Group {
@@ -252,6 +264,17 @@ export function OutreachPanel({
             Tick these four events: <b>First Email Sent</b>, <b>Email Reply</b>, <b>Email Bounce</b>,{" "}
             <b>Lead Unsubscribed</b>. Without the first one nobody is ever marked contacted;
             without the other three, sending never stops by itself.
+          </div>
+          {/* The only honest test of whether the URL above is right. */}
+          <div className={`au-ok${st!.lastEvent ? "" : " is-waiting"}`}>
+            <span>{st!.lastEvent ? "✓" : "…"}</span>
+            <div>
+              {st!.lastEvent
+                ? <>Smartlead last reached us <b>{timeAgo(st!.lastEvent.at)}</b> ({st!.lastEvent.type.toLowerCase().replace(/_/g, " ")}).</>
+                : <>Nothing has arrived from Smartlead yet. Until it does, replies and bounces
+                   won’t stop sending — check the URL above is saved in Smartlead and those
+                   four events are ticked.</>}
+            </div>
           </div>
           <div className="au-actions">
             <button className="pill-btn" onClick={async () => {

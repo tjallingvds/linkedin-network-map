@@ -16,6 +16,15 @@ import {
 } from "../../integrations/outreach/accounts.js";
 import { listCampaigns } from "../../integrations/smartlead.js";
 import { unreadAlertCount } from "../../integrations/outreach/alerts.js";
+
+/** The most recent webhook this user received, for the setup panel. */
+async function lastEventFor(userId: string) {
+  const row = await db
+    .selectFrom("outreach_events").select(["event_type", "created_at"])
+    .where("user_id", "=", userId)
+    .orderBy("created_at", "desc").limit(1).executeTakeFirst();
+  return row ? { type: row.event_type, at: row.created_at } : null;
+}
 import { DEFAULT_PROMPT } from "../../integrations/outreach/openers/index.js";
 import { listGroups, saveGroups, MAX_GROUPS } from "../../integrations/outreach/groups.js";
 import { parseRules, STAGE_TRIGGERS } from "../../integrations/outreach/stage-rules.js";
@@ -76,7 +85,7 @@ router.get("/board/:boardId", async (req: AuthedRequest, res: Response) => {
     name: board.name,
     connected: !!account,
     enabled: !!board.outreach_enabled,
-    webhookUrl: account ? webhookUrl(account.webhookToken) : null,
+    webhookUrl: account ? webhookUrl(account.webhookToken, req) : null,
     bounceThresholdPct: account?.bounceThresholdPct ?? 2,
     stopStages: stopStagesOf(board),
     groups: await listGroups(board.id),
@@ -90,6 +99,10 @@ router.get("/board/:boardId", async (req: AuthedRequest, res: Response) => {
     campaigns,
     suppressionCount: Number(suppressions?.n ?? 0),
     unreadAlerts: await unreadAlertCount(uid(req)),
+    /** Proof the webhook is actually wired up: when Smartlead last reached us,
+     *  and what it said. Null means nothing has ever arrived — which is what a
+     *  wrong URL, a missing signature or unticked events all look like. */
+    lastEvent: await lastEventFor(uid(req)),
   });
 });
 
@@ -105,7 +118,7 @@ router.post("/board/:boardId/connect", async (req: AuthedRequest, res: Response)
     return res.status(400).json({ error: "invalid_api_key" });
   }
   const { webhookToken, webhookSecret } = await connectAccount(uid(req), board.id, parsed.data.apiKey);
-  res.json({ connected: true, webhookUrl: webhookUrl(webhookToken), webhookSecret, subscribeTo: WEBHOOK_EVENTS });
+  res.json({ connected: true, webhookUrl: webhookUrl(webhookToken, req), webhookSecret, subscribeTo: WEBHOOK_EVENTS });
 });
 
 router.post("/board/:boardId/disconnect", async (req: AuthedRequest, res: Response) => {
@@ -121,7 +134,7 @@ router.post("/board/:boardId/rotate-webhook", async (req: AuthedRequest, res: Re
   if (!board) return res.status(404).json({ error: "board_not_found" });
   if (!(await getAccountByBoard(board.id))) return res.status(400).json({ error: "not_connected" });
   const { webhookToken, webhookSecret } = await rotateWebhook(board.id);
-  res.json({ webhookUrl: webhookUrl(webhookToken), webhookSecret });
+  res.json({ webhookUrl: webhookUrl(webhookToken, req), webhookSecret });
 });
 
 /** The on/off switch. Turning a board off never un-pauses anyone already

@@ -23,7 +23,7 @@ interface Pending {
   hasLine: boolean;
 }
 
-interface JobResp { status: "running" | "done" | "error"; progress: string | null; error: string | null }
+interface JobResp { status: "running" | "done" | "error"; progress: string | null; error: string | null; result: unknown }
 
 export function ApprovalsView({ onFlash }: { onFlash: (m: string) => void }) {
   const [rows, setRows] = useState<Pending[] | null>(null);
@@ -61,7 +61,20 @@ export function ApprovalsView({ onFlash }: { onFlash: (m: string) => void }) {
           await new Promise((r) => setTimeout(r, 2000));
           const job = await api.get<JobResp>(`/api/outreach/send/${jobId}`);
           if (job.progress) setDrafting(job.progress);
-          if (job.status !== "running") break;
+          if (job.status === "running") continue;
+          // Silence here is how "no line yet, forever" happens: say what went
+          // wrong, and say when nothing was written and why.
+          if (job.status === "error") { onFlash(`Couldn't write the lines: ${job.error ?? "unknown"}`); break; }
+          const r = (typeof job.result === "string" ? JSON.parse(job.result) : job.result) as {
+            drafted?: number; skipped?: number; failed?: number; notLive?: string[];
+          } | null;
+          if (r?.failed) onFlash(`${r.failed} couldn't be written — check the board's Automations tab.`);
+          else if (!r?.drafted && r?.notLive?.length) {
+            onFlash(`No lines written: ${r.notLive.join(", ")} ${r.notLive.length === 1 ? "isn't" : "aren't"} live yet.`);
+          } else if (!r?.drafted && r?.skipped) {
+            onFlash(`${r.skipped} had too little to say something true about.`);
+          }
+          break;
         }
         await load();
       } catch (e) {

@@ -18,6 +18,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { db } from "../../db/index.js";
 import { getAccountByWebhookToken } from "../../integrations/outreach/accounts.js";
 import { processEvent, eventTypeOf, type SmartleadWebhookPayload } from "../../integrations/outreach/events.js";
+import { alertUser } from "../../integrations/outreach/alerts.js";
 
 const router = Router();
 
@@ -36,7 +37,19 @@ router.post("/:token", async (req: Request, res: Response) => {
   // express.raw leaves a Buffer on req.body; fall back defensively.
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from(typeof req.body === "string" ? req.body : "");
   const sig = req.header("x-smartlead-signature") ?? "";
-  if (!sig || !verifySignature(raw, sig, account.webhookSecret)) return res.status(401).end();
+  if (!sig || !verifySignature(raw, sig, account.webhookSecret)) {
+    // The token was right, so this really is Smartlead — the secret is wrong,
+    // or it isn't signing at all. Rejecting silently is the worst outcome:
+    // replies and bounces would never arrive and nothing would say why.
+    await alertUser(
+      account.userId,
+      sig
+        ? "Smartlead is reaching your webhook but the signature doesn't match. Make a new secret and paste it into Smartlead."
+        : "Smartlead is reaching your webhook without a signature. Set the signing secret in Smartlead, or replies and bounces will be ignored.",
+      { kind: "webhook_rejected", severity: "critical" },
+    ).catch(() => { /* never let alerting fail the response */ });
+    return res.status(401).end();
+  }
 
   let payload: SmartleadWebhookPayload;
   try {

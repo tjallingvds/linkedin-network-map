@@ -311,6 +311,14 @@ async function main() {
   };
 
   eq("bad signature rejected", (await post({ event_type: "EMAIL_SENT" }, { sig: "deadbeef" })).status, 401);
+  // …and says so, rather than dropping real deliveries in silence.
+  await new Promise((r) => setTimeout(r, 300));
+  const rejectAlert: any = await db.selectFrom("outreach_alerts").select(["message", "severity"])
+    .where("user_id", "=", userId).where("kind", "=", "webhook_rejected").executeTakeFirst();
+  ok("a rejected delivery raises an alert", !!rejectAlert, rejectAlert);
+  ok("and the alert says what to do",
+    /signature doesn't match/.test(rejectAlert?.message ?? ""), rejectAlert?.message);
+  await db.deleteFrom("outreach_alerts").where("kind", "=", "webhook_rejected").execute();
   eq("unknown token rejected",
     (await fetch(`http://127.0.0.1:${PORT}/hooks/smartlead/nope`, { method: "POST", body: "{}" })).status, 401);
 
@@ -722,6 +730,61 @@ async function main() {
       .where("id", "=", held).executeTakeFirst();
     eq("hand-set group survives with its reason", [grouped?.tier, grouped?.group_reason], ["B", "set by hand"]);
     await db.deleteFrom("crm_contacts").where("id", "=", held).execute();
+  }
+
+  // ── Everyone is accounted for ───────────────────────────────────────────
+  // The question this answers is "why isn't everybody in the queue?". If a
+  // contact is in neither list, they have silently vanished and no screen in
+  // the app can explain them.
+  console.log("\n── Accounted for ──");
+  {
+    const { selectExcluded } = await import(`${R}/integrations/outreach/excluded.ts`);
+    const { listPending } = await import(`${R}/integrations/outreach/openers/queue.ts`);
+
+    const all = await db.selectFrom("crm_contacts").select(["id", "name"])
+      .where("board_id", "=", boardId).execute();
+    const excluded = await selectExcluded(userId, boardId);
+    const queued = (await listPending(userId)).filter((p: any) => p.boardId === boardId);
+
+    const explained = new Set([...excluded.map((e: any) => e.id), ...queued.map((p: any) => p.id)]);
+    const missing = all.filter((c: any) => !explained.has(c.id));
+    eq("every contact is either queued or explained", missing.map((m: any) => m.name), []);
+
+    const both = queued.filter((p: any) => excluded.some((e: any) => e.id === p.id));
+    eq("nobody is in both lists", both.map((b: any) => b.name), []);
+
+    ok("every reason is plain language",
+      excluded.every((e: any) => e.reason.length > 5 && !/[_A-Z]{3,}/.test(e.reason)),
+      excluded.map((e: any) => e.reason));
+
+    // The specific gaps that prompted this: the new checks must be explained.
+    await db.updateTable("crm_boards").set({ outreach_enabled: false }).where("id", "=", boardId).execute();
+    const offList = await selectExcluded(userId, boardId);
+    ok("board switched off is given as a reason",
+      offList.some((e: any) => /Sending is off/.test(e.reason)), offList.map((e: any) => e.reason));
+    await db.updateTable("crm_boards").set({ outreach_enabled: true }).where("id", "=", boardId).execute();
+
+    // Somebody clean in the group, or every row is already excluded earlier
+    // for a different reason and this check is never reached.
+    const fresh = await add("Fresh Face", "fresh.face@acme.com", "B");
+    await saveGroups(userId, boardId, [
+      { id: "B", name: "Tier B outbound", description: "Heads of AI at banks", prompt: "Open with their AI work." },
+    ]);
+    const notLive = await selectExcluded(userId, boardId);
+    eq("a group that isn't live is given as the reason, with the missing step",
+      notLive.find((e: any) => e.id === fresh)?.reason,
+      "Group “Tier B outbound” isn’t live — instructions not tested yet");
+
+    // And once it is live but has no campaign, that is the reason instead.
+    await markTested(userId, boardId, "B");
+    await saveGroups(userId, boardId, [
+      { id: "B", name: "Tier B outbound", description: "Heads of AI at banks", prompt: "Open with their AI work.", live: true },
+    ]);
+    await db.deleteFrom("outreach_campaigns").where("board_id", "=", boardId).execute();
+    const noCampaign = await selectExcluded(userId, boardId);
+    eq("a group with no campaign says so",
+      noCampaign.find((e: any) => e.id === fresh)?.reason,
+      "Group “Tier B outbound” has no Smartlead campaign");
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

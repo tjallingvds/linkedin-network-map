@@ -12,7 +12,7 @@
  */
 import { db } from "../../db/index.js";
 
-export type AlertKind = "bounce_rate" | "bounce_threshold" | "live_leak" | "reply_recovered";
+export type AlertKind = "bounce_rate" | "bounce_threshold" | "live_leak" | "reply_recovered" | "webhook_rejected";
 
 export interface OutreachAlert {
   id: string;

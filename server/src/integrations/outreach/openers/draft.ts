@@ -86,6 +86,8 @@ export async function draftOne(
 }
 
 export interface DraftResult { considered: number; drafted: number; skipped: number; failed: number }
+/** Plus which groups were passed over, so "nothing happened" can say why. */
+export interface AutodraftResult extends DraftResult { notLive: string[] }
 
 /**
  * Draft opening lines for everyone in a group on this board who doesn't have
@@ -133,6 +135,11 @@ export async function draftOpeners(
   }
 
   const result: DraftResult = { considered: contacts.length, drafted: 0, skipped: 0, failed: 0 };
+  if (!contacts.length) return result;
+  if (!availableProviders(opts.userKeys).length) {
+    throw new Error("Add an AI key under Manage API keys before drafting.");
+  }
+
   let i = 0;
   for (const c of contacts) {
     i++;
@@ -199,7 +206,7 @@ export async function draftOpeners(
 export async function autodraftAll(
   userId: string,
   opts: { userKeys?: UserKeys; onProgress?: (note: string) => void } = {},
-): Promise<DraftResult> {
+): Promise<AutodraftResult> {
   // Sort anyone still ungrouped first — a person with no group can't be
   // drafted for, because the group decides which campaign email the line
   // has to lead into.
@@ -222,10 +229,14 @@ export async function autodraftAll(
     .where("b.outreach_enabled", "=", true)
     .execute();
 
-  const total: DraftResult = { considered: 0, drafted: 0, skipped: 0, failed: 0 };
+  const total: AutodraftResult = { considered: 0, drafted: 0, skipped: 0, failed: 0, notLive: [] };
   let i = 0;
   for (const t of targets) {
     i++;
+    // A group that can't send doesn't get lines written for it: every one
+    // costs a web lookup and a model call, and nobody could act on them.
+    const g = await findGroup(t.board_id, t.tier);
+    if (!g?.live) { total.notLive.push(g?.name ?? t.tier); continue; }
     const r = await draftOpeners(userId, t.board_id, t.tier, {
       userKeys: opts.userKeys,
       onProgress: (n) => opts.onProgress?.(`group ${i}/${targets.length} — ${n}`),
