@@ -34,6 +34,7 @@ interface BoardStatus {
   groups: Group[];
   suppressionCount: number; unreadAlerts: number;
   lastEvent: { type: string; at: string } | null;
+  rejected: { count: number; at: string | null; reason: string | null } | null;
 }
 interface Readiness {
   connected: boolean; enabled: boolean; total: number; withEmail: number;
@@ -257,12 +258,14 @@ export function OutreachPanel({
             <button className="icon-btn" onClick={() => setShowAdvanced(false)}><IconClose size={16} /></button>
           </div>
           <div className="app-modal-body au-modal-body">
-            <div className="au-hint">Paste into Smartlead → Settings → Webhooks.</div>
+            <div className="au-hint">
+              In Smartlead → Settings → Webhooks, add a webhook with this URL and tick the four
+              events below. There is nothing else to fill in — Smartlead doesn’t ask you for a
+              secret, so <b>this URL is the password</b>. Anyone who has it can post events to
+              this board, so don’t share it; if it leaks, make a new one.
+            </div>
           <Row label="URL" value={setup?.webhookUrl ?? st!.webhookUrl ?? ""} onCopy={copy} />
-          {setup?.webhookSecret
-            ? <Row label="Secret" value={setup.webhookSecret} onCopy={copy} secret />
-            : <div className="au-note">The secret is shown once — when you connect, or make a new one.</div>}
-          <div className="au-note">
+          <div className="au-hint">
             Tick these four events: <b>First Email Sent</b>, <b>Email Reply</b>, <b>Email Bounce</b>,{" "}
             <b>Lead Unsubscribed</b>. Without the first one nobody is ever marked contacted;
             without the other three, sending never stops by itself.
@@ -274,26 +277,31 @@ export function OutreachPanel({
               {st!.lastEvent
                 ? <>Smartlead has called this webhook — last <b>{timeAgo(st!.lastEvent.at)}</b>{" "}
                    ({st!.lastEvent.type.toLowerCase().replace(/_/g, " ")}).</>
-                : <><b>Smartlead has never called this webhook</b> — which is separate from your
-                   API key working. Without it, a reply is only noticed on the next check instead
-                   of within seconds, so this board is being checked every hour until one arrives.
-                   Save the URL above in Smartlead and tick those four events.</>}
+                : st!.rejected
+                  ? <><b>{st!.rejected.count} deliveries were turned away.</b>{" "}
+                     {st!.rejected.reason === "secret_key"
+                       ? "Smartlead's secret_key changed — that happens if the webhook was recreated there. Make a new URL here and paste it back."
+                       : "The signature didn't match. Make a new URL here and paste it back into Smartlead."}</>
+                  : <><b>Smartlead has never called this webhook</b> — which is separate from your
+                     API key working. Without it, a reply is only noticed on the next check instead
+                     of within seconds, so this board is being checked every hour until one arrives.
+                     Save the URL above in Smartlead and tick those four events.</>}
             </div>
           </div>
           <div className="au-actions">
             <button className="pill-btn" onClick={async () => {
               try {
                 setSetup(await api.post<ConnectResp>(`/api/outreach/board/${boardId}/rotate-webhook`));
-                onFlash("New secret — update Smartlead now, the old URL is dead.");
+                onFlash("New URL — paste it into Smartlead now, the old one is dead.");
                 await load();
               } catch (e) { onFlash(`Failed: ${(e as Error).message}`); }
-            }}>New secret</button>
+            }}>New URL</button>
             <button className="pill-btn" disabled={checking} onClick={async () => {
               setChecking(true);
               try {
                 const c = await api.post<{
                   ok: boolean; error?: string; checked: number; campaigns: number;
-                  releaks: number; repliesRecovered: number; unreadable: number;
+                  releaks: number; repliesRecovered: number; sendsNoticed: number; unreadable: number;
                 }>(`/api/outreach/board/${boardId}/reconcile`);
                 if (!c.ok) { onFlash(`Couldn’t reach Smartlead — ${c.error ?? "unknown error"}`); return; }
                 if (c.unreadable) {
@@ -302,6 +310,7 @@ export function OutreachPanel({
                 }
                 if (!c.campaigns) { onFlash("No campaign is mapped to a group yet, so there was nothing to check."); return; }
                 const fixed = [
+                  c.sendsNoticed ? `caught up ${c.sendsNoticed} already emailed` : "",
                   c.releaks ? `stopped ${c.releaks}` : "",
                   c.repliesRecovered ? `found ${c.repliesRecovered} missed ${c.repliesRecovered === 1 ? "reply" : "replies"}` : "",
                 ].filter(Boolean);

@@ -20,20 +20,43 @@ import { pauseContactCampaigns, suppressEmail, normalizeEmail } from "./suppress
 import { alertUser } from "./alerts.js";
 import { applyStageRule } from "./stage-rules.js";
 
-/** Loose shape — Smartlead payload fields vary; read defensively. */
+/**
+ * Loose shape — Smartlead's payload has several generations of field names
+ * live at once (documented deprecations that still ship), so every reader
+ * below takes the new name first and falls back through the old ones.
+ */
 export interface SmartleadWebhookPayload {
   event_type?: string;
   event?: string;
   campaign_id?: number | string;
+  /** Current name for the lead's id. `lead_id` is the older spelling. */
+  sl_email_lead_id?: number | string;
+  sl_email_lead_map_id?: number | string;
   lead_id?: number | string;
+  /** The lead's address. `sl_lead_email` is the original, pre-alias one. */
   to_email?: string;
+  sl_lead_email?: string;
   email?: string;
   lead_email?: string;
+  /** Smartlead's own id for the event — the stable dedupe key. */
+  stats_id?: string | number;
+  /** The value pasted into Smartlead's webhook form, echoed on every
+   *  delivery. This is how a delivery proves it came from Smartlead. */
+  secret_key?: string;
   bounce_type?: string;
-  /** Reply categorisation, when present (LEAD_CATEGORY_UPDATED / EMAIL_REPLY). */
+  bounce_message?: { message_id?: string; html?: string; text?: string; time?: string };
+  description?: string;
+  /** Reply categorisation. `reply_category` is the current name. */
+  reply_category?: string;
   lead_category?: string;
   category?: string;
   [k: string]: unknown;
+}
+
+/** Smartlead's own event id, used to recognise a redelivery. */
+export function eventIdOf(p: SmartleadWebhookPayload): string | null {
+  const id = p.stats_id;
+  return id === undefined || id === null || id === "" ? null : String(id);
 }
 
 /**
@@ -54,14 +77,17 @@ export function eventTypeOf(p: SmartleadWebhookPayload): string {
     .replace(/^_+|_+$/g, "");
 }
 function emailOf(p: SmartleadWebhookPayload): string | null {
-  const e = p.to_email ?? p.email ?? p.lead_email;
+  // to_email can be an alias on a reply; sl_lead_email is the address we
+  // actually stored, so prefer it when both are present.
+  const e = p.sl_lead_email ?? p.to_email ?? p.email ?? p.lead_email;
   return e ? normalizeEmail(String(e)) : null;
 }
 function campaignOf(p: SmartleadWebhookPayload): string | null {
   return p.campaign_id === undefined || p.campaign_id === null ? null : String(p.campaign_id);
 }
 function leadIdOf(p: SmartleadWebhookPayload): string | null {
-  return p.lead_id === undefined || p.lead_id === null ? null : String(p.lead_id);
+  const id = p.sl_email_lead_id ?? p.lead_id;
+  return id === undefined || id === null || id === "" ? null : String(id);
 }
 
 /** A reply category that means "never email this person again". Smartlead
@@ -126,7 +152,7 @@ export async function processEvent(account: OutreachAccount, p: SmartleadWebhook
   const email = emailOf(p);
   const campaignId = campaignOf(p);
   const leadId = leadIdOf(p);
-  const category = (p.lead_category ?? p.category) as string | undefined;
+  const category = (p.reply_category ?? p.lead_category ?? p.category) as string | undefined;
   const match = await findContact(account.userId, account.boardId, campaignId, leadId, email);
 
   switch (type) {
@@ -185,8 +211,12 @@ export async function processEvent(account: OutreachAccount, p: SmartleadWebhook
       // The docs never specified this field, and guessing wrong means hard
       // bounces silently never suppress. Read every plausible carrier and
       // treat "permanent"/5xx as hard too.
+      // The documented payload carries no bounce_type at all — the only clue
+      // is the bounce message itself, so read that too before falling back to
+      // the older field names.
       const bounceHint = [
         p.bounce_type, p.bounceType, p.bounce_category, p.type, p.reason, p.bounce_reason,
+        p.bounce_message?.text, p.bounce_message?.html, p.description,
       ].map((v) => String(v ?? "").toLowerCase()).join(" ");
       const smtpCode = String(p.smtp_code ?? p.code ?? "");
       const hard = /hard|permanent|invalid|does not exist|no such user|unknown user/.test(bounceHint)

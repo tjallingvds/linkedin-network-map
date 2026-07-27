@@ -236,6 +236,10 @@ export interface SmartleadCampaignLead {
    *  replies whose webhook we never received — the reconciler cannot detect a
    *  missed reply by comparing states alone (both sides just say "active"). */
   replied: boolean;
+  /** True when Smartlead shows the sequence has actually gone out to this
+   *  lead. Without a webhook this is the only way to learn that someone was
+   *  emailed — nothing else in the payload changes when a send happens. */
+  sent: boolean;
   /** Smartlead's reply categorisation, when present, so a recovered reply can
    *  still be filtered for out-of-office / auto-responders. */
   category: string | null;
@@ -269,11 +273,22 @@ export async function getCampaignLeads(campaignId: string, apiKey: string): Prom
       const category =
         (row.lead_category as string) ?? (row.category as string) ??
         ((lead as Record<string, unknown>).lead_category as string) ?? null;
+      // VERIFY: like the reply flag, the sent marker is spelled differently
+      // across payloads — read every plausible one, then fall back to the
+      // status, since a lead only leaves "not started" once a mail goes out.
+      const sentCount = Number(row.sent_count ?? row.sent ?? row.email_sent_count ?? 0);
+      const state = mapLeadStatusToState(status);
+      const sent =
+        sentCount > 0 ||
+        !!row.sent_time || !!row.last_email_sent_at || !!row.first_email_sent_at ||
+        replied ||
+        state === "active" || state === "completed";
       out.push({
         leadId: lead.id === undefined ? null : String(lead.id),
         email: (lead.email as string) ?? null,
         status,
         replied,
+        sent,
         category,
       });
     }

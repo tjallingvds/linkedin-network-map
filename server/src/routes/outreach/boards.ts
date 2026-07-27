@@ -105,6 +105,10 @@ router.get("/board/:boardId", async (req: AuthedRequest, res: Response) => {
      *  and what it said. Null means nothing has ever arrived — which is what a
      *  wrong URL, a missing signature or unticked events all look like. */
     lastEvent: await lastEventFor(uid(req)),
+    /** Deliveries turned away — tells "never called" apart from "rejected". */
+    rejected: account?.webhookRejectedCount
+      ? { count: account.webhookRejectedCount, at: account.webhookRejectedAt, reason: account.webhookRejectedReason }
+      : null,
   });
 });
 

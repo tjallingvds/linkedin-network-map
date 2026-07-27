@@ -336,6 +336,11 @@ export interface SmartleadAccountsTable {
   webhook_secret: string;
   /** Bounce % at which a campaign raises an in-app alert. */
   bounce_threshold_pct: Generated<number>;
+  /** Deliveries turned away for a bad or missing signature. */
+  webhook_rejected_count: Generated<number>;
+  webhook_rejected_at: Date | null;
+  webhook_rejected_reason: string | null;
+  observed_secret_key: string | null;
   created_at: Generated<Timestamp>;
   updated_at: Generated<Timestamp>;
 }

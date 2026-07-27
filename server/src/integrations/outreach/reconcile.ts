@@ -19,6 +19,7 @@ import { pauseContactCampaigns } from "./suppress.js";
 import { isAutoReply } from "./events.js";
 import { bounceBreaches, BOUNCE_LIMIT_PCT, BOUNCE_MIN_SENDS } from "./metrics.js";
 import { alertUser } from "./alerts.js";
+import { applyStageRule } from "./stage-rules.js";
 
 export interface ReconcileCounts {
   campaigns: number;
@@ -26,6 +27,9 @@ export interface ReconcileCounts {
   releaks: number;
   corrected: number;
   repliesRecovered: number;
+  /** People Smartlead had already emailed that we hadn't noticed — the state
+   *  the send webhook normally reports. */
+  sendsNoticed: number;
   bounceAlerts?: number;
   /** Campaigns whose leads couldn't be read from Smartlead. Reported, because
    *  a run that checked nothing must never be described as "all matches". */
@@ -33,7 +37,7 @@ export interface ReconcileCounts {
 }
 
 const zero = (): ReconcileCounts =>
-  ({ campaigns: 0, checked: 0, releaks: 0, corrected: 0, repliesRecovered: 0, unreadable: 0 });
+  ({ campaigns: 0, checked: 0, releaks: 0, corrected: 0, repliesRecovered: 0, sendsNoticed: 0, unreadable: 0 });
 
 /** Reconcile a single connected board. */
 export async function reconcileAccount(account: OutreachAccount): Promise<ReconcileCounts> {
@@ -92,6 +96,17 @@ export async function reconcileAccount(account: OutreachAccount): Promise<Reconc
         counts.repliesRecovered++;
         console.warn(`[reconcile] recovered missed reply for ${m.email ?? m.contact_id}`);
         continue;
+      }
+
+      // Smartlead has emailed them and we never heard about it. Without this
+      // the card sits in its first column for ever and nobody is marked
+      // contacted — exactly what a silent webhook looks like from the board.
+      if (sl.sent && (m.outreach_status === null || m.outreach_status === "queued")) {
+        await db.updateTable("crm_contacts")
+          .set({ outreach_status: "contacted", outreach_status_at: new Date() })
+          .where("id", "=", m.contact_id).execute();
+        await applyStageRule(userId, m.contact_id, "sent");
+        counts.sendsNoticed++;
       }
 
       const slState = mapLeadStatusToState(sl.status);

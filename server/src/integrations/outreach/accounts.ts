@@ -23,6 +23,11 @@ export interface OutreachAccount {
   webhookToken: string;
   webhookSecret: string;
   bounceThresholdPct: number;
+  /** Smartlead's own secret_key, learned from the first delivery. */
+  observedSecretKey: string | null;
+  webhookRejectedCount: number;
+  webhookRejectedAt: Date | null;
+  webhookRejectedReason: string | null;
 }
 
 interface AccountRow {
@@ -33,6 +38,10 @@ interface AccountRow {
   webhook_token: string;
   webhook_secret: string;
   bounce_threshold_pct: number;
+  observed_secret_key?: string | null;
+  webhook_rejected_count?: number | null;
+  webhook_rejected_at?: Date | null;
+  webhook_rejected_reason?: string | null;
 }
 
 function decodeRow(row: AccountRow): OutreachAccount {
@@ -44,6 +53,10 @@ function decodeRow(row: AccountRow): OutreachAccount {
     webhookToken: row.webhook_token,
     webhookSecret: row.webhook_secret,
     bounceThresholdPct: Number(row.bounce_threshold_pct ?? 2),
+    observedSecretKey: (row.observed_secret_key as string | null) ?? null,
+    webhookRejectedCount: Number(row.webhook_rejected_count ?? 0),
+    webhookRejectedAt: (row.webhook_rejected_at as Date | null) ?? null,
+    webhookRejectedReason: (row.webhook_rejected_reason as string | null) ?? null,
   };
 }
 

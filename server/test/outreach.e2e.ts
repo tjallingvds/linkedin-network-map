@@ -299,26 +299,58 @@ async function main() {
     });
 
   const hookUrl = `http://127.0.0.1:${PORT}/hooks/smartlead/${account!.webhookToken}`;
-  const post = async (payload: unknown, opts: { sig?: string; reqId?: string } = {}) => {
-    const raw = JSON.stringify(payload);
-    const sig = opts.sig ?? createHmac("sha256", account!.webhookSecret).update(raw).digest("hex");
+  /**
+   * Post the way Smartlead actually does: no signature header, and its own
+   * `secret_key` in the body. `sig` opts in to the header for the tests that
+   * still exercise it.
+   */
+  const post = async (payload: unknown, opts: { sig?: string; reqId?: string; secretKey?: string | null } = {}) => {
+    const key = opts.secretKey === null ? undefined : opts.secretKey ?? "smartlead-generated-key";
+    const raw = JSON.stringify(key === undefined ? payload : { ...(payload as object), secret_key: key });
     return fetch(hookUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Smartlead-Signature": sig,
-                 ...(opts.reqId ? { "X-Request-Id": opts.reqId } : {}) },
+      headers: {
+        "Content-Type": "application/json",
+        ...(opts.sig ? { "X-Smartlead-Signature": opts.sig } : {}),
+        ...(opts.reqId ? { "X-Request-Id": opts.reqId } : {}),
+      },
       body: raw,
     });
   };
 
-  eq("bad signature rejected", (await post({ event_type: "EMAIL_SENT" }, { sig: "deadbeef" })).status, 401);
+  // Smartlead sends no signature at all — the URL token is the credential, and
+  // requiring a header meant every real delivery was thrown away with a 401.
+  eq("an unsigned delivery is accepted",
+    (await post({ event_type: "EMAIL_SENT", stats_id: "probe-unsigned" })).status, 200);
+  eq("a wrong signature is still rejected when one is sent",
+    (await post({ event_type: "EMAIL_SENT" }, { sig: "deadbeef", secretKey: null })).status, 401);
   // …and says so, rather than dropping real deliveries in silence.
   await new Promise((r) => setTimeout(r, 300));
   const rejectAlert: any = await db.selectFrom("outreach_alerts").select(["message", "severity"])
     .where("user_id", "=", userId).where("kind", "=", "webhook_rejected").executeTakeFirst();
   ok("a rejected delivery raises an alert", !!rejectAlert, rejectAlert);
   ok("and the alert says what to do",
-    /signature doesn't match/.test(rejectAlert?.message ?? ""), rejectAlert?.message);
+    /signature that doesn't match/.test(rejectAlert?.message ?? ""), rejectAlert?.message);
+  const rejCount: any = await db.selectFrom("smartlead_accounts")
+    .select(["webhook_rejected_count", "webhook_rejected_reason"])
+    .where("id", "=", account!.id).executeTakeFirst();
+  ok("the rejection is counted on the account", Number(rejCount?.webhook_rejected_count ?? 0) >= 1, rejCount);
   await db.deleteFrom("outreach_alerts").where("kind", "=", "webhook_rejected").execute();
+
+  // Smartlead's own secret_key is learned on first contact, then required —
+  // so a leaked URL alone stops being enough once real traffic has arrived.
+  {
+    const learned: any = await db.selectFrom("smartlead_accounts").select("observed_secret_key")
+      .where("id", "=", account!.id).executeTakeFirst();
+    eq("secret_key is learned from the first delivery", learned?.observed_secret_key, "smartlead-generated-key");
+
+    const wrong = await post({ event_type: "EMAIL_SENT", stats_id: "probe-wrong-key" }, { secretKey: "not-the-key" });
+    eq("a delivery with the wrong secret_key is rejected", wrong.status, 401);
+
+    const right = await post({ event_type: "EMAIL_SENT", stats_id: "probe-right-key" });
+    eq("and the right one still gets through", right.status, 200);
+    await db.deleteFrom("outreach_alerts").where("kind", "=", "webhook_rejected").execute();
+  }
   eq("unknown token rejected",
     (await fetch(`http://127.0.0.1:${PORT}/hooks/smartlead/nope`, { method: "POST", body: "{}" })).status, 401);
 
@@ -388,6 +420,48 @@ async function main() {
     .where("id", "=", cDupA).executeTakeFirst();
   eq('"First Email Sent" is understood', raviRow?.outreach_status, "contacted");
   eq("and it moved the card", raviRow?.stage, "Contacted");
+
+  // A delivery in Smartlead's documented shape: no signature, secret_key in
+  // the body, sl_email_lead_id instead of lead_id, stats_id as the event id.
+  {
+    const theo = await add("Doc Shape", "doc.shape@acme.com", "B");
+    await db.updateTable("crm_contacts").set({ stage: "New" }).where("id", "=", theo).execute();
+    await db.insertInto("outreach_campaign_memberships").values({
+      user_id: userId, contact_id: theo,
+      campaign_id: (await db.selectFrom("outreach_campaigns").select("id")
+        .where("board_id", "=", boardId).executeTakeFirstOrThrow()).id,
+      provider_campaign_id: "4821", provider_lead_id: "55501", state: "active",
+    } as never).execute();
+
+    const r = await post({
+      event_type: "EMAIL_SENT",
+      stats_id: "doc-shape-1",
+      sl_email_lead_id: 55501,
+      sl_lead_email: "doc.shape@acme.com",
+      to_email: "doc.shape@acme.com",
+      to_name: "Doc Shape",
+      campaign_id: 4821,
+      campaign_name: "Tier B",
+      sequence_number: 1,
+      event_timestamp: "2026-07-27T17:27:27.234+00:00",
+      sent_message: { message_id: "<sw-id@test.com>", html: "<div>Opening</div>", text: "Opening" },
+      description: "Email 1 sent to doc.shape@acme.com",
+      metadata: { webhook_created_at: "2026-07-26T10:19:49.535Z" },
+    });
+    eq("Smartlead's documented payload is accepted", r.status, 200);
+    await new Promise((x) => setTimeout(x, 600));
+    const row: any = await db.selectFrom("crm_contacts").select(["outreach_status", "stage"])
+      .where("id", "=", theo).executeTakeFirst();
+    eq("it marks them contacted", row?.outreach_status, "contacted");
+    eq("and moves the card", row?.stage, "Contacted");
+
+    // stats_id is the dedupe key when there's no X-Request-Id header.
+    const again = await post({ event_type: "EMAIL_SENT", stats_id: "doc-shape-1", sl_email_lead_id: 55501 });
+    eq("a redelivery of the same stats_id is not reprocessed", again.status, 200);
+    const events = await db.selectFrom("outreach_events").select("id")
+      .where("request_id", "=", "doc-shape-1").execute();
+    eq("only one event row was written", events.length, 1);
+  }
 
   const sashaLead = fake.leads.get("4821")!.find((l) => l.email === "s.lim@acme.com")!;
   eq("valid signature accepted",
