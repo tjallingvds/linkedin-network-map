@@ -11,7 +11,6 @@ import { availableProviders } from "../../../ai/providers.js";
 import type { UserKeys } from "../../../ai/user-keys.js";
 import { getCampaignFirstEmail } from "../../smartlead.js";
 import { getAccountByBoard } from "../accounts.js";
-import { contextFor, columnLabels } from "./context.js";
 import { research } from "./research.js";
 import { sortAll } from "./sort.js";
 import { findGroup } from "../groups.js";
@@ -30,10 +29,10 @@ Rules, in order of importance:
 5. Reference the specific thing, not the job title. "CTO at Acme" is not
    personal; a detail from the notes is.
 
-6. The line must be about something on their LINKEDIN. That is the material
-   this feature exists to use. CRM_NOTES is context to help you read LinkedIn
-   correctly and to avoid contradicting what is already known — it is not the
-   subject of the line. If LINKEDIN is empty, return {"line": null}.
+6. LINKEDIN is their profile page, and it is the only material you have. The
+   line must be about something on it. WHO is just the person's name, so you
+   can tell which person the page is about — it is not something to write
+   about. If LINKEDIN is empty, return {"line": null}.
 
 7. You are given THE_EMAIL — the campaign email this line will sit on top of.
    The line must lead naturally into it: same register, no repetition of what
@@ -77,17 +76,15 @@ export async function draftOne(
   const providers = availableProviders(userKeys);
   if (!providers.length) throw new Error("no_ai_provider");
   const provider = providers[0]!;
-  // LinkedIn is kept separate from the CRM so the model can't quietly write
-  // the line from a note when the profile gave it nothing.
-  const linkedin: Record<string, string> = {};
-  const crm: Record<string, string> = {};
-  for (const [k, v] of Object.entries(facts)) {
-    (k.startsWith("web_") ? linkedin : crm)[k] = v;
-  }
+  // Only the profile. The CRM's own columns used to be sent alongside, which
+  // just handed the model other things to write about — and a line about a
+  // city or a job title is the mail-merge this feature exists to avoid. The
+  // name comes too, and only so the model can tell which person a page is
+  // about when it covers more than one.
   const payload = {
     THE_EMAIL: email ? { subject: email.subject, body: email.body } : null,
-    LINKEDIN: Object.values(linkedin),
-    CRM_NOTES: crm,
+    WHO: facts.name ?? null,
+    LINKEDIN: Object.entries(facts).filter(([k]) => k.startsWith("web_")).map(([, v]) => v),
   };
   const out = await aiJson<{ line?: string | null; used?: string[] }>(
     provider,
@@ -148,7 +145,6 @@ export async function draftOpeners(
     if (!campaignEmail) console.warn(`[openers] no readable sequence for campaign ${campaign.provider_campaign_id}`);
   }
 
-  const labels = await columnLabels(boardId);
   const result: DraftResult = { considered: contacts.length, drafted: 0, skipped: 0, failed: 0 };
   if (!contacts.length) return result;
   if (!availableProviders(opts.userKeys).length) {
@@ -159,10 +155,11 @@ export async function draftOpeners(
   for (const c of contacts) {
     i++;
     opts.onProgress?.(`drafting ${i}/${contacts.length}`);
-    const { facts, sources } = contextFor(c as never, labels);
-
-    // Look them up online and add whatever is actually returned.
+    // Their profile, and nothing else. The name rides along only so the model
+    // can tell which person a page is about.
     const found = await research(c as never, userId, opts.userKeys);
+    const facts: Record<string, string> = { name: c.name };
+    const sources: string[] = [];
     found.snippets.forEach((sn, idx) => {
       facts[`web_${idx + 1}`] = `${sn.title} — ${sn.content}`;
       sources.push(sn.url || found.note);
@@ -194,10 +191,10 @@ export async function draftOpeners(
         result.skipped++;
         continue;
       }
-      const from = (used.length ? used : sources)
-        .map((k) => k.replace(/^custom_/, "").replace(/_/g, " "))
-        .filter((v, idx, a) => a.indexOf(v) === idx)
-        .join(", ");
+      // Where it came from is the profile itself; `used` names the fact keys,
+      // which are all web_N now, so the URL is the useful answer.
+      void used;
+      const from = [...new Set(sources)].join(", ");
       await db.updateTable("crm_contacts").set({
         opening_line: line,
         opening_line_source: from || sources.join(", "),

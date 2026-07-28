@@ -16,7 +16,6 @@ import { availableProviders } from "../../../ai/providers.js";
 import { getCampaignFirstEmail } from "../../smartlead.js";
 import { getAccountByBoard } from "../accounts.js";
 import { findGroup, markTested } from "../groups.js";
-import { contextFor, columnLabels } from "./context.js";
 import { research } from "./research.js";
 import { draftOne, promptFor } from "./draft.js";
 
@@ -90,15 +89,16 @@ export async function tryoutGroup(
     campaignEmail = await getCampaignFirstEmail(campaign.provider_campaign_id, account.apiKey);
   }
 
-  const labels = await columnLabels(boardId);
   const prompt = promptFor(group.prompt);
   const lines: Tryout[] = [];
   let i = 0;
   for (const c of contacts) {
     i++;
     opts.onProgress?.(`writing ${i}/${contacts.length}`);
-    const { facts, sources } = contextFor(c as never, labels);
+    // Same as the real run: the profile, and the name to disambiguate it.
     const found = await research(c as never, userId, opts.userKeys);
+    const facts: Record<string, string> = { name: c.name };
+    const sources: string[] = [];
     found.snippets.forEach((sn, idx) => {
       facts[`web_${idx + 1}`] = `${sn.title} — ${sn.content}`;
       sources.push(sn.url || found.note);
@@ -112,11 +112,8 @@ export async function tryoutGroup(
     }
     try {
       const { line, used } = await draftOne(facts, userId, opts.userKeys, campaignEmail, prompt);
-      const from = (used.length ? used : sources)
-        .map((k) => k.replace(/^custom_/, "").replace(/_/g, " "))
-        .filter((v, idx, a) => a.indexOf(v) === idx)
-        .join(", ");
-      lines.push({ ...base, line, from: from || found.note });
+      void used;
+      lines.push({ ...base, line, from: [...new Set(sources)].join(", ") || found.note });
     } catch (err) {
       lines.push({ ...base, line: null, from: "", error: (err as Error).message });
     }
