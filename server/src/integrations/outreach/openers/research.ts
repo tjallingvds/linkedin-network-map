@@ -12,6 +12,10 @@
  * they're skipped, which is the right outcome for a thin record.
  */
 import { tavilySearch } from "../../../ai/tavily.js";
+
+/** How much of the profile page to keep. Generous — it is one page, for one
+ *  person, and the interesting part is often well past the first paragraph. */
+const PROFILE_CHARS = 6000;
 import type { UserKeys } from "../../../ai/user-keys.js";
 
 /**
@@ -101,16 +105,28 @@ export async function research(
 
   try {
     const results = await tavilySearch(url!, {
-      depth: "advanced", maxResults: 5, includeDomains: ["linkedin.com"], userId, userKeys,
+      depth: "advanced", maxResults: 5, includeDomains: ["linkedin.com"],
+      // The whole page, not the one-line snippet. A profile's substance — the
+      // About section, what they actually run, how they describe it — is never
+      // in the snippet, and that substance is the only thing a truthful
+      // opening line can be built from. Raw content costs no extra credits.
+      rawContent: true, rawContentChars: PROFILE_CHARS,
+      userId, userKeys,
     });
 
     // Tavily answers a URL query with whatever it finds relevant, which
     // includes other people's profiles. Keep only this exact one.
     const mine = results
       .filter((r) => isSameProfile(r.url, wanted))
-      .filter((r) => (r.content ?? "").trim().length > 40)
-      .slice(0, 4)
-      .map((r) => ({ title: r.title ?? "", url: r.url ?? "", content: (r.content ?? "").slice(0, 1200) }));
+      .map((r) => ({
+        title: r.title ?? "",
+        url: r.url ?? "",
+        // Prefer the page text; fall back to the snippet when LinkedIn served
+        // us nothing crawlable.
+        content: (r.rawContent?.trim() || r.content?.trim() || "").slice(0, PROFILE_CHARS),
+      }))
+      .filter((r) => r.content.length > 40)
+      .slice(0, 2);
 
     if (mine.length) return { snippets: mine, note: "LinkedIn" };
     // LinkedIn blocks most crawling, so an empty result is ordinary. There is

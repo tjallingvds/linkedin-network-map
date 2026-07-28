@@ -98,6 +98,10 @@ export async function tavilySearch(
     /** Ask Tavily for each result's full page text (`raw_content`). Costs the
      *  same credits; use for breadth passes that mine dense list pages. */
     rawContent?: boolean;
+    /** How much of that page text to keep. The default suits the extractor,
+     *  which batches ~40 results into one LLM call; a caller reading a single
+     *  page (one person's profile) can afford much more. */
+    rawContentChars?: number;
     userId?: string;
     userKeys?: UserKeys;
   } = {},
@@ -204,6 +208,6 @@ export async function tavilySearch(
     // because the extractor batches ~40 results per LLM call — at 2.5k chars
     // each that's ~25k tokens/call (safe for smaller models), while still
     // being 5-10× the snippet so dense pages surface their full roster.
-    rawContent: x.raw_content ? x.raw_content.slice(0, 2500) : undefined,
+    rawContent: x.raw_content ? x.raw_content.slice(0, opts.rawContentChars ?? 2500) : undefined,
   }));
 }
