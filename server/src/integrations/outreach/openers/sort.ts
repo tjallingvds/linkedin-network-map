@@ -19,6 +19,7 @@ import { aiJson } from "../../../ai/json.js";
 import { availableProviders } from "../../../ai/providers.js";
 import type { UserKeys } from "../../../ai/user-keys.js";
 import { parseGroups, describedGroups, type OutreachGroup } from "../groups.js";
+import { columnLabels } from "./context.js";
 
 export interface SortResult { considered: number; sorted: number; unmatched: number; failed: number }
 
@@ -36,11 +37,12 @@ Rules:
 Answer with the group's exact id.
 Return strict JSON: {"group": <id>|null, "why": string}`;
 
-/** The facts we let the sorter see. */
+/** The facts we let the sorter see. `labels` maps a board's custom column ids
+ *  to their names, so the model reads "role" rather than "c_role_u7de2". */
 function factsFor(c: {
   name: string; title: string | null; company: string | null;
   notes: string | null; background: string | null; custom_fields: unknown;
-}): Record<string, string> {
+}, labels: Record<string, string> = {}): Record<string, string> {
   const f: Record<string, string> = {};
   const put = (k: string, v: unknown) => {
     const s = typeof v === "string" ? v.trim() : "";
@@ -52,7 +54,10 @@ function factsFor(c: {
   put("notes", c.notes);
   put("background", c.background);
   for (const [k, v] of Object.entries((c.custom_fields ?? {}) as Record<string, unknown>)) {
-    if (typeof v === "string" && v.trim()) f[`custom_${k}`] = v.trim().slice(0, 300);
+    if (typeof v === "string" && v.trim()) {
+      const key = (labels[k] ?? k).toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      f[`custom_${key || "field"}`] = v.trim().slice(0, 300);
+    }
   }
   return f;
 }
@@ -130,6 +135,7 @@ export async function sortBoard(
   if (!opts.resort) q = q.where("tier", "is", null);
 
   const contacts = await q.execute();
+  const labels = await columnLabels(boardId);
   const result: SortResult = { considered: contacts.length, sorted: 0, unmatched: 0, failed: 0 };
   if (!contacts.length) return result;
 
@@ -143,7 +149,7 @@ export async function sortBoard(
     i++;
     opts.onProgress?.(`sorting ${i}/${contacts.length}`);
     try {
-      const { group, why } = await sortOne(groups, factsFor(c as never), userId, opts.userKeys);
+      const { group, why } = await sortOne(groups, factsFor(c as never, labels), userId, opts.userKeys);
       if (!group) {
         await db.updateTable("crm_contacts")
           .set({ group_reason: why || "Matched none of the groups" })

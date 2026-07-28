@@ -16,7 +16,7 @@ import { availableProviders } from "../../../ai/providers.js";
 import { getCampaignFirstEmail } from "../../smartlead.js";
 import { getAccountByBoard } from "../accounts.js";
 import { findGroup, markTested } from "../groups.js";
-import { contextFor } from "./context.js";
+import { contextFor, columnLabels } from "./context.js";
 import { research } from "./research.js";
 import { draftOne, promptFor } from "./draft.js";
 
@@ -90,13 +90,14 @@ export async function tryoutGroup(
     campaignEmail = await getCampaignFirstEmail(campaign.provider_campaign_id, account.apiKey);
   }
 
+  const labels = await columnLabels(boardId);
   const prompt = promptFor(group.prompt);
   const lines: Tryout[] = [];
   let i = 0;
   for (const c of contacts) {
     i++;
     opts.onProgress?.(`writing ${i}/${contacts.length}`);
-    const { facts, sources } = contextFor(c as never);
+    const { facts, sources } = contextFor(c as never, labels);
     const found = await research(c as never, userId, opts.userKeys);
     found.snippets.forEach((sn, idx) => {
       facts[`web_${idx + 1}`] = `${sn.title} — ${sn.content}`;

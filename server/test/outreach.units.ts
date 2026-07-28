@@ -24,6 +24,7 @@ import { parseGroups, describedGroups, blockers } from "../src/integrations/outr
 import { parseRules, ruleFor } from "../src/integrations/outreach/stage-rules.ts";
 import { eventTypeOf } from "../src/integrations/outreach/events.ts";
 import { profileKey, isSameProfile, findProfileUrl } from "../src/integrations/outreach/openers/research.ts";
+import { contextFor } from "../src/integrations/outreach/openers/context.ts";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => { cond ? pass++ : fail++; console.log(`${cond ? "✓" : "✗"} ${name}`); };
@@ -272,6 +273,39 @@ eq("non-LinkedIn values are ignored",
   findProfileUrl({ linkedin: null, custom_fields: { site: "https://acme.com", note: "call him" } }), null);
 eq("non-string custom values don't throw",
   findProfileUrl({ linkedin: null, custom_fields: { n: 42, b: true, o: { x: 1 } } }), null);
+
+// Custom columns are keyed by generated ids (c_linkedin_swbdz). Handing those
+// to the model as fact names is handing it noise, and showing them as "where
+// this came from" reads like corruption.
+console.log("\n— custom column names —");
+{
+  const contact = {
+    name: "Alisha Lehr", title: "COO AI", company: null,
+    notes: null, background: null, message_notes: null, linkedin: null,
+    custom_fields: {
+      c_linkedin_swbdz: "https://www.linkedin.com/in/alishalehr",
+      c_role_u7de2: "Agentic & GenAI Governance",
+      c_city_jge3t: "Amsterdam",
+    },
+  };
+  const labels = { c_linkedin_swbdz: "LinkedIn", c_role_u7de2: "Role", c_city_jge3t: "City" };
+
+  const named = contextFor(contact as never, labels);
+  eq("fields are keyed by their column name",
+    Object.keys(named.facts).filter((k) => k.startsWith("custom_")).sort(),
+    ["custom_city", "custom_linkedin", "custom_role"]);
+  eq("and the source line reads as names",
+    named.sources.filter((x) => /City|Role|LinkedIn/.test(x)).sort(), ["City", "LinkedIn", "Role"]);
+  eq("the values survive", named.facts.custom_role, "Agentic & GenAI Governance");
+
+  // A board whose schema we can't read must still work, just less prettily.
+  const unnamed = contextFor(contact as never);
+  eq("no labels falls back to the id", "custom_c_role_u7de2" in unnamed.facts, true);
+
+  // Odd labels still produce a usable key.
+  const odd = contextFor(contact as never, { c_role_u7de2: "Head of AI / Data!" });
+  eq("an awkward label becomes a clean key", "custom_head_of_ai_data" in odd.facts, true);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

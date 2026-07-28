@@ -11,7 +11,7 @@ import { availableProviders } from "../../../ai/providers.js";
 import type { UserKeys } from "../../../ai/user-keys.js";
 import { getCampaignFirstEmail } from "../../smartlead.js";
 import { getAccountByBoard } from "../accounts.js";
-import { contextFor } from "./context.js";
+import { contextFor, columnLabels } from "./context.js";
 import { research } from "./research.js";
 import { sortAll } from "./sort.js";
 import { findGroup } from "../groups.js";
@@ -148,6 +148,7 @@ export async function draftOpeners(
     if (!campaignEmail) console.warn(`[openers] no readable sequence for campaign ${campaign.provider_campaign_id}`);
   }
 
+  const labels = await columnLabels(boardId);
   const result: DraftResult = { considered: contacts.length, drafted: 0, skipped: 0, failed: 0 };
   if (!contacts.length) return result;
   if (!availableProviders(opts.userKeys).length) {
@@ -158,7 +159,7 @@ export async function draftOpeners(
   for (const c of contacts) {
     i++;
     opts.onProgress?.(`drafting ${i}/${contacts.length}`);
-    const { facts, sources } = contextFor(c as never);
+    const { facts, sources } = contextFor(c as never, labels);
 
     // Look them up online and add whatever is actually returned.
     const found = await research(c as never, userId, opts.userKeys);
