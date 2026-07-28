@@ -13,9 +13,20 @@
  */
 import { tavilySearch } from "../../../ai/tavily.js";
 
-/** How much of the profile page to keep. Generous — it is one page, for one
- *  person, and the interesting part is often well past the first paragraph. */
-const PROFILE_CHARS = 6000;
+/**
+ * The profile page is passed on whole — no content limit. It is one page about
+ * one person, read once, and deciding in advance which half of someone's
+ * profile matters is exactly the judgement this feature exists to avoid making
+ * badly. Raw content costs no extra Tavily credits; the cost is input tokens
+ * on a single model call per contact.
+ *
+ * The number below is not a content decision. It is a last-resort guard so a
+ * pathological page cannot overflow the model's context and turn "a slightly
+ * shorter profile" into "no line at all" — which is the worse outcome. A full
+ * LinkedIn profile extracts to roughly 5–15k characters, so this is an order
+ * of magnitude clear of anything real.
+ */
+const SAFETY_CEILING = 200_000;
 import type { UserKeys } from "../../../ai/user-keys.js";
 
 /**
@@ -110,7 +121,8 @@ export async function research(
       // About section, what they actually run, how they describe it — is never
       // in the snippet, and that substance is the only thing a truthful
       // opening line can be built from. Raw content costs no extra credits.
-      rawContent: true, rawContentChars: PROFILE_CHARS,
+      rawContent: true, rawContentChars: 0, // 0 = don't truncate
+
       userId, userKeys,
     });
 
@@ -123,7 +135,7 @@ export async function research(
         url: r.url ?? "",
         // Prefer the page text; fall back to the snippet when LinkedIn served
         // us nothing crawlable.
-        content: (r.rawContent?.trim() || r.content?.trim() || "").slice(0, PROFILE_CHARS),
+        content: (r.rawContent?.trim() || r.content?.trim() || "").slice(0, SAFETY_CEILING),
       }))
       .filter((r) => r.content.length > 40)
       .slice(0, 2);
