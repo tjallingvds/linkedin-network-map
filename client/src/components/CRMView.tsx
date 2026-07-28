@@ -382,7 +382,7 @@ function rowsToContacts(rows: string[][]): CrmImportRow[] {
 // ========== Pieces ==========
 
 function KanbanCard({
-  p, idx, onOpen, onDelete, onDragStart, onDragEnd, dragging, fields, columns,
+  p, idx, onOpen, onDelete, onDragStart, onDragEnd, dragging, fields, columns, outreachGroups,
 }: {
   p: CrmContact;
   idx: number;
@@ -396,6 +396,8 @@ function KanbanCard({
   /** The board's full column schema — the card derives BOTH which fields
    *  exist AND how to render them from this. No hardcoded built-in list. */
   columns: CrmColumnDef[];
+  /** Outreach groups, so the card can show which one this person is in. */
+  outreachGroups: OutreachGroupOption[];
 }) {
   const modal = useModal();
   const colById = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
@@ -540,6 +542,13 @@ function KanbanCard({
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="kc-name">{p.name}</div>
           {fields.map(renderField)}
+          {/* Which outreach group they're in — the thing that decides whether
+              they can be emailed at all, so it belongs on the card. */}
+          {p.group && outreachGroups.length > 0 && (
+            <span className="kc-group" title={p.groupReason ?? undefined}>
+              {outreachGroups.find((g) => g.id === p.group)?.name ?? p.group}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -802,7 +811,7 @@ function KanbanColumnHeader({
 
 function KanbanBoard({
   contacts, onOpen, onMoveStage, onDelete, fields, columns, stages,
-  onStagesChange, onReassign,
+  onStagesChange, onReassign, outreachGroups,
 }: {
   contacts: CrmContact[];
   onOpen: (c: CrmContact) => void;
@@ -816,6 +825,8 @@ function KanbanBoard({
   onStagesChange: (next: StageDef[]) => void;
   /** Called when a stage is deleted so contacts in it can be moved. */
   onReassign: (fromId: string, toId: string) => void;
+  /** Outreach groups, shown on each card. */
+  outreachGroups: OutreachGroupOption[];
 }) {
   const modal = useModal();
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -958,6 +969,7 @@ function KanbanBoard({
                   dragging={draggingId === p.id}
                   fields={fields}
                   columns={columns}
+                  outreachGroups={outreachGroups}
                 />
               ))}
               {items.length === 0 && (
@@ -992,6 +1004,7 @@ function KanbanBoard({
                 dragging={draggingId === p.id}
                 fields={fields}
                 columns={columns}
+                outreachGroups={outreachGroups}
               />
             ))}
           </div>
@@ -5078,6 +5091,7 @@ export function CRMView({
           stages={stages}
           onStagesChange={persistStages}
           onReassign={reassignStage}
+          outreachGroups={outreachGroups}
         />
       )}
       {viewMode === "table" && (

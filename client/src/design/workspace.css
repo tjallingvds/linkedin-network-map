@@ -3946,3 +3946,12 @@ button:focus-visible { outline-offset: 3px; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .nav-profile-sub { font-size: 10.5px; color: var(--text-mute); }
+
+
+/* Which outreach group a card's person is in. */
+.kc-group {
+  display: inline-block; margin-top: 5px;
+  font-size: 10.5px; line-height: 1.4; color: var(--accent);
+  padding: 1px 7px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}

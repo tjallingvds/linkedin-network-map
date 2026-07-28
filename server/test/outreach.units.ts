@@ -23,7 +23,7 @@ import { acceptGroup } from "../src/integrations/outreach/openers/sort.ts";
 import { parseGroups, describedGroups, blockers } from "../src/integrations/outreach/groups.ts";
 import { parseRules, ruleFor } from "../src/integrations/outreach/stage-rules.ts";
 import { eventTypeOf } from "../src/integrations/outreach/events.ts";
-import { profileKey, isSameProfile } from "../src/integrations/outreach/openers/research.ts";
+import { profileKey, isSameProfile, findProfileUrl } from "../src/integrations/outreach/openers/research.ts";
 
 let pass = 0, fail = 0;
 const ok = (name: string, cond: boolean) => { cond ? pass++ : fail++; console.log(`${cond ? "✓" : "✗"} ${name}`); };
@@ -246,6 +246,32 @@ eq("a different person is rejected", isSameProfile("https://www.linkedin.com/in/
 eq("a similar slug is rejected", isSameProfile("https://linkedin.com/in/sasha-lim", WANT), false);
 eq("a non-profile result is rejected", isSameProfile("https://linkedin.com/pulse/some-article", WANT), false);
 eq("a missing url is rejected", isSameProfile(undefined, WANT), false);
+
+// Where the profile actually lives. Reading only the built-in column told
+// people with an obvious LinkedIn link that they had none.
+console.log("\n— finding the profile on a contact —");
+const PROF = "https://www.linkedin.com/in/alisha-lehr-1a2b3";
+
+eq("the built-in column", findProfileUrl({ linkedin: PROF }), PROF);
+eq("a custom field named for it",
+  findProfileUrl({ linkedin: null, custom_fields: { "LinkedIn URL": PROF } }), PROF);
+eq("a custom field named anything",
+  findProfileUrl({ linkedin: null, custom_fields: { Source: PROF } }), PROF);
+eq("the named field wins over a stray one",
+  findProfileUrl({ linkedin: null, custom_fields: { Website: "https://linkedin.com/in/someone-else", linkedin: PROF } }),
+  PROF);
+eq("the built-in column wins over a custom one",
+  findProfileUrl({ linkedin: PROF, custom_fields: { li_url: "https://linkedin.com/in/other" } }), PROF);
+eq("a company page counts as a profile URL",
+  findProfileUrl({ linkedin: null, custom_fields: { x: "https://linkedin.com/company/acme" } }),
+  "https://linkedin.com/company/acme");
+
+eq("nothing anywhere", findProfileUrl({ linkedin: null }), null);
+eq("blank column", findProfileUrl({ linkedin: "   " }), null);
+eq("non-LinkedIn values are ignored",
+  findProfileUrl({ linkedin: null, custom_fields: { site: "https://acme.com", note: "call him" } }), null);
+eq("non-string custom values don't throw",
+  findProfileUrl({ linkedin: null, custom_fields: { n: 42, b: true, o: { x: 1 } } }), null);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

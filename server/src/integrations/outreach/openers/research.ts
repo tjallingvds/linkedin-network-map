@@ -40,6 +40,37 @@ export function profileKey(raw: string | null | undefined): string | null {
   return parts.length >= 2 && parts[1] ? `${parts[0]}/${parts[1]}` : null;
 }
 
+/**
+ * Find the person's LinkedIn profile wherever it is on the contact.
+ *
+ * The built-in `linkedin` column is only one of the places it lands: a board
+ * can have its own column for it, and imports often put it in a custom field.
+ * Reading only the built-in one meant contacts that plainly had a profile were
+ * reported as "no LinkedIn link on this contact", which is both wrong and
+ * impossible to argue with. So every field is considered, and anything that
+ * parses as a profile URL counts — the shape is the test, not the column name.
+ */
+export function findProfileUrl(c: {
+  linkedin?: string | null;
+  linkedin_url?: string | null;
+  custom_fields?: unknown;
+}): string | null {
+  const candidates: string[] = [];
+  const add = (v: unknown) => { if (typeof v === "string" && v.trim()) candidates.push(v.trim()); };
+
+  add(c.linkedin);
+  add(c.linkedin_url);
+  const custom = (c.custom_fields ?? {}) as Record<string, unknown>;
+  // Prefer a field that says what it is, then fall back to any field whose
+  // value looks like a profile.
+  for (const [k, v] of Object.entries(custom)) {
+    if (/linked\s*in|profile|li[\s_-]?url/i.test(k)) add(v);
+  }
+  for (const v of Object.values(custom)) add(v);
+
+  return candidates.find((v) => profileKey(v) !== null) ?? null;
+}
+
 /** Is this search result the profile we asked for, rather than someone else's? */
 export function isSameProfile(resultUrl: string | undefined, wanted: string): boolean {
   const got = profileKey(resultUrl);
@@ -47,22 +78,29 @@ export function isSameProfile(resultUrl: string | undefined, wanted: string): bo
 }
 
 export async function research(
-  c: { name: string; company: string | null; title: string | null; linkedin: string | null },
+  c: {
+    name: string; company: string | null; title: string | null;
+    linkedin: string | null; custom_fields?: unknown;
+  },
   userId: string,
   userKeys?: UserKeys,
 ): Promise<{ snippets: { title: string; url: string; content: string }[]; note: string }> {
-  const wanted = profileKey(c.linkedin);
+  const url = findProfileUrl(c);
+  const wanted = profileKey(url);
   if (!wanted) {
+    const anythingThere = (c.linkedin ?? "").trim()
+      || Object.values((c.custom_fields ?? {}) as Record<string, unknown>)
+        .some((v) => typeof v === "string" && /linkedin/i.test(v));
     return {
       snippets: [],
-      note: (c.linkedin ?? "").trim()
+      note: anythingThere
         ? "the LinkedIn link on this contact isn't a profile URL"
         : "no LinkedIn link on this contact",
     };
   }
 
   try {
-    const results = await tavilySearch(c.linkedin!.trim(), {
+    const results = await tavilySearch(url!, {
       depth: "advanced", maxResults: 5, includeDomains: ["linkedin.com"], userId, userKeys,
     });
 

@@ -22,6 +22,7 @@ import { db } from "../../db/index.js";
 import { normalizeEmail } from "./suppress.js";
 import { deriveName } from "./names.js";
 import { listGroups, blockers } from "./groups.js";
+import { findProfileUrl } from "./openers/research.js";
 
 export interface ExcludedContact {
   id: string;
@@ -42,7 +43,7 @@ export async function selectExcluded(userId: string, boardId: string): Promise<E
   const contacts = await db
     .selectFrom("crm_contacts")
     .select(["id", "name", "email", "stage", "tier", "outreach_status",
-             "linkedin", "opening_line_status", "opening_line_source"])
+             "linkedin", "custom_fields", "opening_line_status", "opening_line_source"])
     .where("user_id", "=", userId)
     .where("board_id", "=", boardId)
     .orderBy("created_at", "asc")
@@ -119,7 +120,8 @@ export async function selectExcluded(userId: string, boardId: string): Promise<E
     else if (claimed.has(email)) { reason = "Same email as an earlier contact"; fixable = true; }
     // Past the gate — so whether they're on the approval screen comes down to
     // their opening line, which is written from their LinkedIn.
-    else if (!c.linkedin?.trim()) { reason = "No LinkedIn link on their contact"; fixable = true; }
+    // Any column can hold it, so ask the same finder the drafter uses.
+    else if (!findProfileUrl(c)) { reason = "No LinkedIn link on their contact"; fixable = true; }
     else if (c.opening_line_status === "approved") reason = "Approved — going out now";
     else if (c.opening_line_status === "skipped") {
       reason = c.opening_line_source?.startsWith("Nothing usable")
