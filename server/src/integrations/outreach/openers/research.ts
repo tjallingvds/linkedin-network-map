@@ -11,7 +11,7 @@
  * simply has no web facts, and their line comes from the CRM notes alone — or
  * they're skipped, which is the right outcome for a thin record.
  */
-import { tavilySearch } from "../../../ai/tavily.js";
+import { tavilySearch, tavilyExtract } from "../../../ai/tavily.js";
 
 /**
  * The profile page is passed on whole — no content limit. It is one page about
@@ -115,6 +115,26 @@ export async function research(
   }
 
   try {
+    // Fetch the page itself first. `/search` only answers with what Tavily has
+    // indexed, and LinkedIn profiles usually aren't — which is why so many
+    // people came back as "couldn't be read" despite having a valid link.
+    // `/extract` goes and reads the URL we name.
+    try {
+      const [page] = await tavilyExtract([url!], { depth: "advanced", userId, userKeys });
+      if (page && page.rawContent.length > 40) {
+        return {
+          snippets: [{ title: c.name, url: page.url || url!, content: page.rawContent.slice(0, SAFETY_CEILING) }],
+          note: "LinkedIn",
+        };
+      }
+    } catch (err) {
+      // Quota and auth problems are worth surfacing, but a page we simply
+      // couldn't fetch just falls through to the search attempt below.
+      const kind = (err as { kind?: string }).kind;
+      if (kind === "tavily_quota" || kind === "tavily_auth" || kind === "tavily_key_missing") throw err;
+      console.warn(`[openers] extract failed for ${url}: ${(err as Error).message}`);
+    }
+
     const results = await tavilySearch(url!, {
       depth: "advanced", maxResults: 5, includeDomains: ["linkedin.com"],
       // The whole page, not the one-line snippet. A profile's substance — the
@@ -141,8 +161,9 @@ export async function research(
       .slice(0, 2);
 
     if (mine.length) return { snippets: mine, note: "LinkedIn" };
-    // LinkedIn blocks most crawling, so an empty result is ordinary. There is
-    // deliberately no fallback search: someone else's page is worse than none.
+    // LinkedIn blocks a lot of crawling, so this still happens. There is
+    // deliberately no name-search fallback: someone else's page is worse than
+    // none.
     return { snippets: [], note: "their LinkedIn page couldn't be read" };
   } catch (err) {
     // A missing Tavily key or a provider blip must not fail the whole run —

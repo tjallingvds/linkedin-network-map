@@ -89,6 +89,79 @@ export function hasTavilyKey(userKeys?: UserKeys): boolean {
   return !!(userKeys?.tavily ?? env.TAVILY_API_KEY);
 }
 
+/**
+ * Fetch specific URLs and return their page text.
+ *
+ * Different endpoint, different question. `/search` asks "what does your index
+ * hold for this query" — which for a LinkedIn profile is frequently nothing,
+ * because LinkedIn is barely crawled. `/extract` asks Tavily to go and read
+ * the page you name. When you already know the exact URL, that is the call.
+ *
+ * Returns only URLs it actually read; failures are reported by Tavily in a
+ * separate list and simply don't appear here.
+ */
+export async function tavilyExtract(
+  urls: string[],
+  opts: {
+    /** "advanced" costs more but retrieves pages basic can't. */
+    depth?: "basic" | "advanced";
+    userId?: string;
+    userKeys?: UserKeys;
+  } = {},
+): Promise<Array<{ url: string; rawContent: string }>> {
+  if (!urls.length) return [];
+  const apiKey = opts.userKeys?.tavily ?? env.TAVILY_API_KEY;
+  if (!apiKey) throw new TavilyKeyMissingError();
+  const byok = !!opts.userKeys?.tavily;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  let r: Response;
+  try {
+    r = await fetch("https://api.tavily.com/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ urls, extract_depth: opts.depth ?? "advanced" }),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeout);
+    if ((err as Error).name === "AbortError") throw new Error("tavily extract timed out after 30s");
+    throw err;
+  }
+  clearTimeout(timeout);
+
+  if (!r.ok) {
+    const text = await r.text();
+    const lower = text.toLowerCase();
+    if (r.status === 432 || r.status === 429 || r.status === 402 || lower.includes("credit") || lower.includes("quota")) {
+      throw new TavilyQuotaError(`tavily quota exhausted (HTTP ${r.status}): ${text.slice(0, 200)}`, byok);
+    }
+    if (r.status === 401 || r.status === 403 || lower.includes("invalid api key") || lower.includes("unauthorized")) {
+      throw new TavilyAuthError(`tavily auth failed (HTTP ${r.status}): ${text.slice(0, 200)}`, byok);
+    }
+    throw new Error(`tavily extract ${r.status}: ${text.slice(0, 300)}`);
+  }
+
+  const data = (await r.json()) as {
+    results?: Array<{ url?: string; raw_content?: string; rawContent?: string }>;
+  };
+
+  if (opts.userId) {
+    await recordUsage({
+      userId: opts.userId,
+      provider: "tavily",
+      kind: "search",
+      credits: opts.depth === "basic" ? 1 : 2,
+      metadata: { extract: urls.length, byok },
+    });
+  }
+
+  return (data.results ?? [])
+    .map((x) => ({ url: x.url ?? "", rawContent: (x.raw_content ?? x.rawContent ?? "").trim() }))
+    .filter((x) => x.url && x.rawContent);
+}
+
 export async function tavilySearch(
   query: string,
   opts: {
