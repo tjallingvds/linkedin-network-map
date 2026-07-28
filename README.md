@@ -1,10 +1,10 @@
 # Network Map
 
-AI-driven sales prospecting + lightweight CRM. Type a brief in chat ("Find Heads of AI at mid-tier US investment banks, 50 prospects") and get a ranked list of real people with LinkedIn URLs and outreach signals, drawn from live web search. Save them to a kanban-style board, draft personalised outreach, and share boards with teammates.
+AI-driven sales prospecting, a lightweight CRM, and approval-gated cold email. Type a brief in chat ("Find Heads of AI at mid-tier US investment banks, 50 prospects") and get a ranked list of real people with LinkedIn URLs and outreach signals, drawn from live web search. Save them to a kanban-style board, share it with teammates, and — once you switch it on per board — have each person sorted into an audience, given an opening line written from their LinkedIn, and queued for your approval before Smartlead sends anything.
 
 The web-search and LLM cost is borne **by the user** when they paste their own API keys in Settings (BYOK) — the server prefers user keys over its own env keys and skips usage accounting in that case. A workspace-shared key set is also supported via the server's env vars.
 
-Stack: Vite + React + TypeScript SPA, Express + TypeScript API, Postgres via Kysely, Auth.js (email/password + Google OAuth), Tavily for web search, OpenAI/Anthropic/DeepSeek for the LLM calls, Apollo.io for verified contact lookup.
+Stack: Vite + React + TypeScript SPA, Express + TypeScript API, Postgres via Kysely, Auth.js (email/password + Google OAuth), Tavily for web search and profile reads, OpenAI/Anthropic/DeepSeek for the LLM calls, Apollo.io for verified contact lookup, Smartlead for sending email.
 
 ## What it actually does
 
@@ -25,6 +25,34 @@ The chat dispatches on the brief's intent. All modes run server-side; the client
 CRM features: kanban + table views, drag-and-drop stage changes, bulk add from a Find result, shareable boards (revocable join tokens), one-click background-fill (Tavily research per contact), Apollo enrichment per board.
 
 Auth: email/password, Google OAuth, opaque session cookie (`nm_session`). A dev-only mock auth (`VITE_MOCK_AUTH=1`) skips the backend entirely and uses localStorage so the UI works with no server running.
+
+## Outreach
+
+Email only, and nothing leaves without a human clicking approve. Smartlead is a dumb sender: the emails themselves are written there, this decides **who** receives them and stops sending when someone answers.
+
+Each board connects to its own Smartlead account and is **off by default** — connecting arms nothing.
+
+**Groups.** A board has a list of audiences. You write what each one means ("Heads of AI or data at banks"), and contacts are sorted into them automatically; anyone matching no description stays ungrouped rather than being guessed at, and the reason is stored so a wrong call is visible. Each group points at its own Smartlead campaign and has its own opening-line instructions.
+
+**A group can't send until it's been tested.** Instructions are the one part of the setup you can't check by reading, so *Test* writes sample lines for real people in that group — saving nothing — and only then does *Switch live* unlock. Editing the instructions clears the test.
+
+**Opening lines** come from the person's LinkedIn profile and nothing else. The profile is fetched by URL (Tavily `/extract`), matched against the exact contact so a same-named stranger can't be used, and passed to the model whole. No readable profile means no line, not a line invented from somewhere else.
+
+**Approval.** Everyone ready sits under *Need approval* in the sidebar, across all boards, with their line and where it came from. Approving is what hands them to Smartlead — it is the only path that calls `addLeadsToCampaign`.
+
+**Afterwards.** Smartlead's webhooks (First Email Sent, Email Reply, Email Bounce, Lead Unsubscribed) mark people contacted, stop sending on a reply, suppress hard bounces and unsubscribes, and can move the kanban card per rules you write ("when the email is sent and the card is in New, move it to Contacted"). A reconcile sweep is the backstop for anything a webhook missed — hourly while no webhook has ever arrived, daily after that.
+
+Smartlead doesn't sign its webhooks and has no field for a shared secret, so **the webhook URL is the credential** — 24 random bytes per board, rotatable. Smartlead's own `secret_key` is learned from the first delivery and required afterwards.
+
+| Table | Holds |
+|---|---|
+| `smartlead_accounts` | Per-board API key (AES-256-GCM at rest), webhook token/secret, rejected-delivery diagnostics |
+| `outreach_campaigns` | Group → Smartlead campaign mapping |
+| `outreach_campaign_memberships` | Who is in which campaign, and their state |
+| `suppressions` | Never-contact, per user: exact email or whole domain |
+| `outreach_events` | Every webhook received, deduped on Smartlead's `stats_id` |
+| `outreach_jobs` | Background sends, sorts and drafts, plus last-run timestamps |
+| `outreach_alerts` | In-app warnings (bounce rate, rejected webhooks) |
 
 ## Repo layout
 
@@ -88,6 +116,8 @@ The client proxies `/api/*` to `:4000`, so cookies flow same-origin.
 | `npm run migrate` | Apply pending Kysely migrations |
 | `npm run migrate:make <name>` | Scaffold a new migration file |
 | `npm run --workspace=server migrate:down` | Roll back the last migration |
+| `npm run --workspace=server test:units` | Pure-function tests (no database) |
+| `npm run --workspace=server test:outreach` | Outreach end-to-end: real Postgres, real Express, fake Smartlead. **Wipes the database** — needs `OUTREACH_E2E_ALLOW_DESTRUCTIVE=1` and a database whose name looks like a test one |
 
 ## Environment variables
 
@@ -134,6 +164,10 @@ All routes are under `/api`. Auth is a session cookie set by `/api/auth/*`. Most
 | Board sharing | `POST /api/crm/boards/:id/share`, `DELETE /api/crm/boards/:id/share`, `POST /api/crm/share/:token/join` |
 | Apollo (direct) | `GET /api/apollo/status`, `POST /api/apollo/search`, `POST /api/apollo/match` |
 | Message log (LinkedIn `messages.csv`) | `GET /api/messages-log/stats`, `POST /api/messages-log/bulk` (upserts; `replace:true` wipes first), `DELETE /api/messages-log` |
+| Outreach — board setup | `GET /api/outreach/boards`, `GET /api/outreach/board/:id`, `POST /api/outreach/board/:id/connect`, `POST .../enabled`, `POST .../groups`, `POST .../campaigns`, `POST .../stop-stages`, `POST .../stage-rules`, `POST .../rotate-webhook`, `POST .../disconnect` |
+| Outreach — running it | `POST /api/outreach/board/:id/sort`, `POST /api/outreach/board/:id/groups/:groupId/test`, `GET /api/outreach/pending`, `POST /api/outreach/pending/autodraft`, `POST /api/outreach/pending/approve-and-send`, `GET /api/outreach/send/:jobId` |
+| Outreach — monitoring | `GET /api/outreach/board/:id/readiness`, `.../metrics`, `.../excluded`, `.../alerts`, `POST /api/outreach/board/:id/reconcile`, `POST /api/outreach/suppress` |
+| Smartlead webhooks | `POST /hooks/smartlead/:token` — public, mounted before the JSON parser |
 | Usage | `GET /api/usage` (per-provider buckets) |
 | Health | `GET /health` |
 
@@ -153,3 +187,6 @@ See [DEPLOY.md](./DEPLOY.md) for Railway / Render / Fly recipes. The server's `D
 - **`Connections.csv` schema.** Network mode reads from the local `people` table — load it via Settings → Import LinkedIn Connections, or `POST /api/people/bulk`.
 - **Apollo and Tavily are paid services.** A free Apollo tier exists; Tavily's free tier covers ~1k searches/mo. Set up BYOK for any user who'll run heavy briefs.
 - **Mock-auth is dev-only.** `VITE_MOCK_AUTH=1` bypasses the server completely. Never set in production.
+- **LinkedIn blocks a lot of automated reading.** Some profiles simply can't be fetched; those people are skipped with the reason shown rather than given a line built from something else. The fix is a better link on the contact, not a looser rule.
+- **The webhook URL is a secret.** Anyone holding it can post events for that board. It isn't recoverable if leaked — rotate it and re-paste into Smartlead.
+- **Suppression is per user, deliberately.** One user's never-contact list does not leak into another's.
