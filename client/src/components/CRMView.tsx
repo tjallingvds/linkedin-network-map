@@ -4123,7 +4123,10 @@ export function CRMView({
   const [messagedLinkedIns, setMessagedLinkedIns] = useState<Set<string>>(new Set());
   const [invitedCount, setInvitedCount] = useState(0);
   const [messagedCount, setMessagedCount] = useState(0);
-  const [networkFilter, setNetworkFilter] = useState<"all" | "fresh">("all");
+  //   - "untouched": the inverse — people you have NO relationship with yet:
+  //                   everyone minus your connections minus anyone you've
+  //                   already invited or messaged. The list to actually work.
+  const [networkFilter, setNetworkFilter] = useState<"all" | "fresh" | "untouched">("all");
   // Table stage filter — a set of stage ids to keep. Empty = show all.
   const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
   const [importOpen, setImportOpen] = useState(false);
@@ -4174,6 +4177,20 @@ export function CRMView({
       .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\?.*$/, "").replace(/\/+$/, "");
     const hasHideSet = invitedNames.size > 0 || invitedLinkedIns.size > 0;
     const hasConnSet = connectedNames.size > 0 || connectedLinkedIns.size > 0;
+    // "Not connected yet" — subtract every kind of existing relationship.
+    // Deliberately subtractive on all three sets: a connection, a pending
+    // invitation and someone already messaged are all "touched", and the
+    // point of this list is the people who aren't.
+    if (networkFilter === "untouched" && (hasHideSet || hasConnSet)) {
+      return contacts.filter((c) => {
+        const n = normN(c.name ?? "");
+        const li = normL(c.linkedin ?? "");
+        if ((n && connectedNames.has(n)) || (li && connectedLinkedIns.has(li))) return false;
+        if ((n && invitedNames.has(n)) || (li && invitedLinkedIns.has(li))) return false;
+        if ((n && messagedNames.has(n)) || (li && messagedLinkedIns.has(li))) return false;
+        return true;
+      });
+    }
     if (networkFilter === "fresh" && (hasHideSet || hasConnSet)) {
       return contacts.filter((c) => {
         const n = normN(c.name ?? "");
@@ -4242,6 +4259,12 @@ export function CRMView({
       .finally(() => setLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onFlash]);
+
+  // The "Not connected yet" pill lives in the table only, so leaving the table
+  // would otherwise apply an invisible filter with no way to clear it.
+  useEffect(() => {
+    if (viewMode !== "table") setNetworkFilter((v) => (v === "untouched" ? "all" : v));
+  }, [viewMode]);
 
   // The active board's outreach groups, for naming the Group column. A board
   // that was never connected to email has none; that is not an error.
@@ -4950,6 +4973,35 @@ export function CRMView({
               </span>
             )}
           </button>
+          {/* The inverse of "Connected & new": everyone you have no
+              relationship with yet. Table view only — this is a working list
+              you read as rows, not something to scan a kanban for. */}
+          {viewMode === "table" && (
+            <button
+              type="button"
+              className={`pill-btn${networkFilter === "untouched" ? " primary" : ""}`}
+              onClick={() => setNetworkFilter((v) => (v === "untouched" ? "all" : "untouched"))}
+              disabled={
+                invitedNames.size === 0 && invitedLinkedIns.size === 0 &&
+                connectedNames.size === 0 && connectedLinkedIns.size === 0
+              }
+              title={
+                invitedNames.size === 0 && invitedLinkedIns.size === 0 &&
+                connectedNames.size === 0 && connectedLinkedIns.size === 0
+                  ? "Import your LinkedIn data first (Actions → Import LinkedIn data)"
+                  : `Everyone except your connections, the ${invitedCount} you've invited and the ${messagedCount} you've messaged`
+              }
+            >
+              <IconUsers size={12} />
+              Not connected yet
+              {networkFilter === "untouched" && (
+                <span style={{ fontSize: 10.5, color: "var(--text-mute)" }}>
+                  ({filteredContacts.length})
+                </span>
+              )}
+            </button>
+          )}
+
           {/* Stage filter — table view only; the kanban already reads
               stage-by-stage as columns, so a stage filter there is redundant. */}
           {viewMode === "table" && (
