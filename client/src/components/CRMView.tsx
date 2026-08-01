@@ -3827,6 +3827,52 @@ function PageOverlayEditor({
  */
 export interface OutreachGroupOption { id: string; name: string }
 
+/**
+ * Reduce a LinkedIn URL to the bit that identifies the person —
+ * `linkedin.com/in/paul-dongha-123` → `in/paul-dongha-123` — so the same
+ * profile written differently still compares equal. Mirrors the server's
+ * profileKey; both sides of a comparison must agree on what "same person"
+ * means or the match silently never fires.
+ */
+export function liKey(raw?: string | null): string | null {
+  const s = (raw ?? "").trim().toLowerCase();
+  if (!s) return null;
+  const m = s.match(/(?:^|\/\/)(?:[a-z0-9-]+\.)*linkedin\.com\/(.+)$/)
+    ?? s.match(/^\/?((?:in|pub|company)\/.+)$/);
+  if (!m) return null;
+  const path = m[1]!.split(/[?#]/)[0]!.replace(/^\/+|\/+$/g, "");
+  if (!/^(in|pub|company)\//.test(path)) return null;
+  const parts = path.split("/");
+  return parts.length >= 2 && parts[1] ? `${parts[0]}/${parts[1]}` : null;
+}
+
+/**
+ * A contact's LinkedIn, wherever this board keeps it. The built-in column is
+ * only one of the places it lands — a board can have its own column for it,
+ * and CSV imports usually put it there. Matching only the built-in field is
+ * why people you're plainly connected to still showed as "not connected".
+ */
+export function contactLiKey(c: { linkedin?: string | null; customFields?: Record<string, string> | null }): string | null {
+  const direct = liKey(c.linkedin);
+  if (direct) return direct;
+  for (const v of Object.values(c.customFields ?? {})) {
+    const k = liKey(typeof v === "string" ? v : null);
+    if (k) return k;
+  }
+  return null;
+}
+
+/** Names for matching: lowercase, no punctuation, no honorifics. */
+export function nameKey(raw?: string | null): string {
+  return (raw ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(dr|prof|professor|mr|mrs|ms|mx|sir|ir|drs|mag)\s+/, "")
+    .trim();
+}
+
 function GroupCell({ group, reason, groups, onChange }: {
   group: string | null;
   reason?: string | null;
@@ -4172,9 +4218,9 @@ export function CRMView({
   //   networkFiltered → search-filtered
   // Each stage only recomputes when its own inputs change.
   const networkFiltered = useMemo(() => {
-    const normN = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-    const normL = (s: string) => s.toLowerCase().trim()
-      .replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\?.*$/, "").replace(/\/+$/, "");
+    const normN = nameKey;
+    // The contact's profile, from any column — see contactLiKey.
+    const normL = (c: CrmContact) => contactLiKey(c) ?? "";
     const hasHideSet = invitedNames.size > 0 || invitedLinkedIns.size > 0;
     const hasConnSet = connectedNames.size > 0 || connectedLinkedIns.size > 0;
     // "Not connected yet" — subtract every kind of existing relationship.
@@ -4184,7 +4230,7 @@ export function CRMView({
     if (networkFilter === "untouched" && (hasHideSet || hasConnSet)) {
       return contacts.filter((c) => {
         const n = normN(c.name ?? "");
-        const li = normL(c.linkedin ?? "");
+        const li = normL(c);
         if ((n && connectedNames.has(n)) || (li && connectedLinkedIns.has(li))) return false;
         if ((n && invitedNames.has(n)) || (li && invitedLinkedIns.has(li))) return false;
         if ((n && messagedNames.has(n)) || (li && messagedLinkedIns.has(li))) return false;
@@ -4194,7 +4240,7 @@ export function CRMView({
     if (networkFilter === "fresh" && (hasHideSet || hasConnSet)) {
       return contacts.filter((c) => {
         const n = normN(c.name ?? "");
-        const li = normL(c.linkedin ?? "");
+        const li = normL(c);
         // Inclusive mode: when we know the user's connections, the contact
         // must actually be one of them — this drops non-connections that
         // the old subtractive filter let through.
@@ -4289,18 +4335,23 @@ export function CRMView({
       messagedCount?: number;
     }>("/api/people/invitations")
       .then((r) => {
+        const keys = (rows: Array<{ linkedin: string }>) =>
+          new Set(rows.map((i) => liKey(i.linkedin)).filter((k): k is string => !!k));
+        const names = (rows: Array<{ name: string }>) =>
+          new Set(rows.map((i) => nameKey(i.name)).filter(Boolean));
+
         const hideRows = r.invitations.filter((i) => i.kind === "invitation" || i.kind === "messaged");
-        setInvitedNames(new Set(hideRows.map((i) => i.name).filter(Boolean)));
-        setInvitedLinkedIns(new Set(hideRows.map((i) => i.linkedin).filter(Boolean)));
+        setInvitedNames(names(hideRows));
+        setInvitedLinkedIns(keys(hideRows));
         const connRows = r.invitations.filter((i) => i.kind === "connection");
-        setConnectedNames(new Set(connRows.map((i) => i.name).filter(Boolean)));
-        setConnectedLinkedIns(new Set(connRows.map((i) => i.linkedin).filter(Boolean)));
+        setConnectedNames(names(connRows));
+        setConnectedLinkedIns(keys(connRows));
         // Messaged-only subset: these stay hidden even for connections (you've
         // already engaged them), unlike a stale pending-invite which a
         // connection should override.
         const messagedRows = r.invitations.filter((i) => i.kind === "messaged");
-        setMessagedNames(new Set(messagedRows.map((i) => i.name).filter(Boolean)));
-        setMessagedLinkedIns(new Set(messagedRows.map((i) => i.linkedin).filter(Boolean)));
+        setMessagedNames(names(messagedRows));
+        setMessagedLinkedIns(keys(messagedRows));
         setInvitedCount(r.invitedCount ?? 0);
         setMessagedCount(r.messagedCount ?? 0);
       })
