@@ -179,6 +179,10 @@ router.get("/invitations", async (req: AuthedRequest, res) => {
     .where((eb) => eb.or([
       eb("kind", "=", "invitation"),
       eb("kind", "=", "connection"),
+      // Imports created before `kind` was added are connections. Keep this
+      // in sync with the replacement logic in POST /bulk above; otherwise
+      // those established connections are missing from the CRM filters.
+      eb("kind", "is", null),
     ]))
     .execute();
 
@@ -193,7 +197,10 @@ router.get("/invitations", async (req: AuthedRequest, res) => {
     ...peopleRows.map((r) => ({
       name: normaliseName(`${r.first_name} ${r.last_name}`.trim()),
       linkedin: normaliseLinkedIn(r.linkedin_url),
-      kind: r.kind ?? null,
+      // Legacy NULL-kind people predate invitation imports, so they are
+      // connections. Normalize the wire format so clients do not each need
+      // to know this storage detail.
+      kind: r.kind ?? "connection",
     })),
     ...messageRows.map((r) => ({
       name: r.counterpart_name_normalized ?? "",

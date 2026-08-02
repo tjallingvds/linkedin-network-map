@@ -4173,6 +4173,14 @@ export function CRMView({
   //                   everyone minus your connections minus anyone you've
   //                   already invited or messaged. The list to actually work.
   const [networkFilter, setNetworkFilter] = useState<"all" | "fresh" | "untouched">("all");
+
+  // Any imported relationship makes the network pills meaningful. Keep the
+  // predicate shared by rendering and filtering so the controls cannot drift
+  // into a disabled-but-filterable state as new relationship types are added.
+  const hasNetworkData =
+    invitedNames.size > 0 || invitedLinkedIns.size > 0 ||
+    connectedNames.size > 0 || connectedLinkedIns.size > 0 ||
+    messagedNames.size > 0 || messagedLinkedIns.size > 0;
   // Table stage filter — a set of stage ids to keep. Empty = show all.
   const [stageFilter, setStageFilter] = useState<Set<string>>(new Set());
   const [importOpen, setImportOpen] = useState(false);
@@ -5001,13 +5009,9 @@ export function CRMView({
             type="button"
             className={`pill-btn${networkFilter === "fresh" ? " primary" : ""}`}
             onClick={() => setNetworkFilter((v) => (v === "fresh" ? "all" : "fresh"))}
-            disabled={
-              invitedNames.size === 0 && invitedLinkedIns.size === 0 &&
-              connectedNames.size === 0 && connectedLinkedIns.size === 0
-            }
+            disabled={!hasNetworkData}
             title={
-              invitedNames.size === 0 && invitedLinkedIns.size === 0 &&
-              connectedNames.size === 0 && connectedLinkedIns.size === 0
+              !hasNetworkData
                 ? "Import a Connections.csv first (Actions → Import LinkedIn data)"
                 : connectedNames.size > 0 || connectedLinkedIns.size > 0
                   ? `Show only 1st-degree connections you haven't messaged yet (hides ${invitedCount} pending invites + ${messagedCount} messaged)`
@@ -5032,13 +5036,9 @@ export function CRMView({
               type="button"
               className={`pill-btn${networkFilter === "untouched" ? " primary" : ""}`}
               onClick={() => setNetworkFilter((v) => (v === "untouched" ? "all" : "untouched"))}
-              disabled={
-                invitedNames.size === 0 && invitedLinkedIns.size === 0 &&
-                connectedNames.size === 0 && connectedLinkedIns.size === 0
-              }
+              disabled={!hasNetworkData}
               title={
-                invitedNames.size === 0 && invitedLinkedIns.size === 0 &&
-                connectedNames.size === 0 && connectedLinkedIns.size === 0
+                !hasNetworkData
                   ? "Import your LinkedIn data first (Actions → Import LinkedIn data)"
                   : `Everyone except your connections, the ${invitedCount} you've invited and the ${messagedCount} you've messaged`
               }
@@ -5307,4 +5307,3 @@ export function CRMView({
     </div>
   );
 }
-
