@@ -1,74 +1,90 @@
 /* === Observable Intuition Prospecting — ported from the design bundle === */
 :root {
-  /* Observable Intuition — the flowviz design system, ported verbatim.
-     Editorial-feeling, calm, dense. Newsreader serif carries display text;
-     Source Sans 3 carries the UI. Borders over shadows. One indigo accent,
-     used sparingly. Values are flowviz's, mapped onto this app's var names. */
+  /* Observable Intuition — midday's design system, ported onto this app's
+     var names. Warm-cream surfaces, near-monochrome ink, no colour accent:
+     hierarchy comes from tone + size, not hue. Hedvig Letters Serif carries
+     display text; Hedvig Letters Sans carries the UI. Borders over shadows.
+     Values map midday's HSL tokens onto this app's semantic layer. */
 
-  /* Surfaces */
-  --bg-0: #fafafa;        /* app background (flowviz --bg) */
-  --bg-1: #f5f5f6;        /* secondary background tone */
+  /* Surfaces — midday runs a warm-cream shell with a floating white canvas.
+     (midday --card 45 18% 96% → the cream; --background → the white sheet) */
+  --bg-0: #f6f5f1;        /* warm-cream app shell (midday cream) */
+  --bg-1: #f1f0ec;        /* secondary background tone */
   --bg: var(--bg-0);      /* alias — some components reference bare --bg */
-  --shell: #ffffff;       /* white surface (flowviz --surface); also on-dark fg */
-  --panel: #ffffff;       /* cards, canvas, popovers */
-  --panel-2: #f5f5f6;     /* second-tone fill: hovered rows, insets, rails, inputs */
+  --shell: #ffffff;       /* white surface; also on-dark fg */
+  --panel: #ffffff;       /* cards, canvas, popovers — the floating sheet */
+  --panel-2: #f4f3ef;     /* second-tone fill: hovered rows, insets, rails, inputs */
 
-  /* Borders — flowviz hairlines. Most surfaces are a 1px line on white. */
-  --hairline: rgba(11, 11, 15, 0.09);
-  --hairline-strong: rgba(11, 11, 15, 0.14);
-  --hover: rgba(11, 11, 15, 0.045);
+  /* Borders — midday warm-grey hairlines (--border 45 5% 85%). */
+  --hairline: rgba(30, 27, 18, 0.10);
+  --hairline-strong: rgba(30, 27, 18, 0.16);
+  --hover: rgba(30, 27, 18, 0.045);
 
-  /* Text (flowviz --text / --text-muted / --text-subtle) */
-  --text: #0b0b0f;
-  --text-dim: #67676d;
-  --text-mute: #9f9fa6;
+  /* Text — midday --foreground 7% / --muted-foreground 38%, plus a tertiary. */
+  --text: #121212;
+  --text-dim: #5c5c5c;
+  --text-mute: #8f8f8f;
 
-  /* Accent — flowviz indigo-blue. Reserved for selected state, primary
-     highlights inside data, the quote rule. Primary buttons go black. */
-  --accent: #0203d1;
-  --accent-deep: #0202a3;
-  --accent-2: #0202a3;
-  --accent-soft: rgba(2, 3, 209, 0.08);
-  --accent-tint: rgba(2, 3, 209, 0.05);
-  --accent-ring: rgba(2, 3, 209, 0.16);
+  /* Accent — midday has NO colour accent. Primary is near-black ink; selected
+     state, focus rings and primary highlights all render as ink on cream. */
+  --accent: #18181b;
+  --accent-deep: #000000;
+  --accent-2: #18181b;
+  --accent-soft: rgba(24, 24, 27, 0.06);
+  --accent-tint: rgba(24, 24, 27, 0.04);
+  --accent-ring: rgba(24, 24, 27, 0.20);
+  /* Text/icon colour that sits ON an accent fill. Flips with the theme so a
+     primary button stays legible: white ink on dark accent (light theme),
+     dark ink on white accent (dark theme — midday's --primary-foreground). */
+  --on-accent: #ffffff;
 
-  /* Semantic — flowviz foreground tones. */
-  --success: #15894a;
-  --warn: #a55a00;
-  --danger: #c1313a;
+  /* Semantic — used sparingly; midday leans on ink + one destructive red. */
+  --success: #1d7a4d;
+  --warn: #9a6b00;
+  --danger: #e5484d;
 
-  /* Editorial display face — flowviz uses Newsreader for hero/titles. */
-  --font-display: 'Newsreader', 'Source Serif Pro', 'Iowan Old Style', Georgia, serif;
+  /* Editorial display face — midday uses Hedvig Letters Serif for titles. */
+  --font-display: 'Hedvig Letters Serif', 'Iowan Old Style', Georgia, serif;
 
-  /* Radius — flowviz caps at 5px. Nothing rounds soft: cards/nav 5, buttons
-     4, badges/kbd 3, micro 2. Circles/pills use 999px. */
-  --r-sm: 3px;
-  --r-md: 4px;
-  --r-lg: 5px;
-  --r-xl: 5px;
-  --card-r: 5px;
+  /* Radius — midday --radius 0.5rem (8px): lg 8, md 6, sm 4. Modest, squarish.
+     Circles/pills use 999px. */
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 8px;
+  --card-r: 8px;
 
-  /* Shadows — flowviz: near-invisible; they imply lift, they don't render it. */
-  --shadow-sm: 0 1px 0 rgba(11, 11, 15, 0.03);
-  --shadow-card: 0 0 0 1px rgba(11, 11, 15, 0.02),
-    0 1px 0 rgba(11, 11, 15, 0.025),
-    0 4px 14px -6px rgba(11, 11, 15, 0.05);
-  --shadow-pop: 0 12px 32px -10px rgba(11, 11, 15, 0.18),
-    0 0 0 1px rgba(11, 11, 15, 0.03);
+  /* Shadows — midday: near-invisible; borders imply lift, they don't render it. */
+  --shadow-sm: 0 1px 0 rgba(30, 27, 18, 0.03);
+  --shadow-card: 0 0 0 1px rgba(30, 27, 18, 0.02),
+    0 1px 0 rgba(30, 27, 18, 0.025),
+    0 4px 14px -6px rgba(30, 27, 18, 0.05);
+  --shadow-pop: 0 12px 32px -10px rgba(30, 27, 18, 0.18),
+    0 0 0 1px rgba(30, 27, 18, 0.03);
 }
 
 [data-theme="dark"] {
-  --bg-0: #0a0810;
-  --bg-1: #100b1a;
-  --shell: rgba(8, 6, 14, 0.78);
-  --panel: rgba(18, 14, 28, 0.72);
-  --panel-2: rgba(28, 22, 42, 0.55);
-  --hairline: rgba(255, 255, 255, 0.07);
-  --hairline-strong: rgba(255, 255, 255, 0.14);
-  --text: #ece8f5;
-  --text-dim: #a89fc0;
-  --text-mute: #6e6688;
-  --accent-tint: oklch(0.28 0.04 266);
+  /* midday dark — flat near-black. --background 5%, --card 7%, --muted 11%. */
+  --bg-0: #0d0d0d;
+  --bg-1: #0f0f0f;
+  --shell: #0d0d0d;
+  --panel: #121212;
+  --panel-2: #1c1c1c;
+  --hairline: rgba(255, 255, 255, 0.09);
+  --hairline-strong: rgba(255, 255, 255, 0.15);
+  --hover: rgba(255, 255, 255, 0.05);
+  --text: #fafafa;
+  --text-dim: #a0a0a0;
+  --text-mute: #6b6b6b;
+  /* Dark primary is white ink — selected/focus render light on near-black. */
+  --accent: #fafafa;
+  --accent-deep: #ffffff;
+  --accent-2: #e5e5e5;
+  --accent-soft: rgba(255, 255, 255, 0.08);
+  --accent-tint: rgba(255, 255, 255, 0.06);
+  --accent-ring: rgba(255, 255, 255, 0.22);
+  --on-accent: #121212;
+  --danger: #ff383b;
 }
 
 /* Global border-box so width:100% + padding never overflows the parent —
@@ -76,20 +92,21 @@
 *, *::before, *::after { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
 body {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #fafafa;
+  font-family: 'Hedvig Letters Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg-0);
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* Inter, tuned the way Linear runs it — tight tracking + the modern
-     character variants (single-story a/g, tabular figures). */
-  letter-spacing: -0.011em;
-  font-feature-settings: "cv01", "cv02", "cv03", "cv04", "cv11", "ss03", "tnum", "calt";
+  /* Hedvig Letters Sans ships a single 400 weight — midday's editorial look.
+     No tight tracking; let the wide, calm letterforms breathe. Tabular
+     figures + contextual alternates only. */
+  letter-spacing: 0;
+  font-feature-settings: "tnum", "calt";
 }
-[data-theme="dark"] body { background: #0b0a10; }
+[data-theme="dark"] body { background: var(--bg-0); }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 input, textarea { font: inherit; color: inherit; background: none; border: 0; outline: 0; resize: none; }
 
@@ -100,11 +117,8 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   background: var(--bg-0);
 }
 .wallpaper.light-mist { background: var(--bg-0); }
-.wallpaper.dark-nebula {
-  background:
-    radial-gradient(80% 60% at 50% 0%, oklch(0.35 0.08 266 / 0.4), transparent 65%),
-    linear-gradient(180deg, #15131a 0%, #0b0a10 100%);
-}
+/* midday dark is flat near-black — no coloured bloom. */
+.wallpaper.dark-nebula { background: var(--bg-0); }
 
 /* Register --sidebar-w as an actual length so CSS can interpolate it
    smoothly (without @property, custom properties animate as plain strings
@@ -554,7 +568,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   font-size: 12.5px; color: var(--text-dim);
 }
 .upstream-error a {
-  color: oklch(0.55 0.15 250); text-decoration: underline;
+  color: var(--accent); text-decoration: underline;
   text-underline-offset: 2px;
 }
 .upstream-error strong { color: var(--text); font-weight: 600; }
@@ -965,11 +979,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .send {
   width: 28px; height: 28px; border-radius: 5px;
-  background: oklch(0.55 0.07 266);
-  display: grid; place-items: center; color: white;
+  background: var(--accent);
+  display: grid; place-items: center; color: var(--on-accent);
   transition: transform 150ms, opacity 150ms, background 150ms;
 }
-.send:hover:not(:disabled) { background: oklch(0.5 0.07 266); }
+.send:hover:not(:disabled) { background: var(--accent-deep); }
 .send:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Thread */
@@ -985,7 +999,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .user-msg {
   align-self: flex-end; max-width: 70%;
   padding: 10px 14px; border-radius: 5px 5px 2px 5px;
-  background: var(--accent); color: white;
+  background: var(--accent); color: var(--on-accent);
   font-size: 13.5px; line-height: 1.5;
   animation: msg-in 350ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -993,7 +1007,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .ai-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 12.5px; color: var(--text-dim); }
 .ai-avatar {
   width: 22px; height: 22px; border-radius: 50%;
-  background: radial-gradient(circle at 30% 28%, oklch(0.85 0.05 266), oklch(0.5 0.07 266) 70%);
+  background: radial-gradient(circle at 30% 28%, var(--text-dim), var(--accent) 70%);
   box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.15);
 }
 .ai-summary { font-size: 13.5px; line-height: 1.55; color: var(--text); margin-bottom: 14px; max-width: 880px; }
@@ -1098,7 +1112,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .prospect-card.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px oklch(0.72 0.14 266 / 0.25), 0 10px 24px oklch(0.55 0.07 266 / 0.12);
+  box-shadow: 0 0 0 2px oklch(0.72 0 0 / 0.25), 0 10px 24px oklch(0.55 0 0 / 0.12);
 }
 @keyframes card-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -1106,7 +1120,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .pc-check {
   width: 18px; height: 18px; border-radius: 5px;
   border: 1.5px solid var(--hairline-strong);
-  display: grid; place-items: center; color: white;
+  display: grid; place-items: center; color: var(--on-accent);
   flex-shrink: 0; transition: all 150ms; cursor: pointer;
   background: var(--shell);
 }
@@ -1144,14 +1158,14 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .signal.hot::before   { background: oklch(0.7 0.16 55); }
 .signal.fresh::before { background: oklch(0.7 0.12 220); }
-.signal.match::before { background: oklch(0.72 0.14 266); }
+.signal.match::before { background: var(--accent); }
 .signal.hot   { background: oklch(0.98 0.02 60 / 0.7); }
 .signal.fresh { background: oklch(0.98 0.02 220 / 0.7); }
-.signal.match { background: oklch(0.98 0.02 266 / 0.7); }
-[data-theme="dark"] .signal        { background: oklch(0.2 0.02 280 / 0.4); }
+.signal.match { background: oklch(0.98 0 0 / 0.7); }
+[data-theme="dark"] .signal        { background: oklch(0.2 0 0 / 0.4); }
 [data-theme="dark"] .signal.hot    { background: oklch(0.25 0.08 60 / 0.35); }
 [data-theme="dark"] .signal.fresh  { background: oklch(0.25 0.05 220 / 0.35); }
-[data-theme="dark"] .signal.match  { background: oklch(0.25 0.05 266 / 0.35); }
+[data-theme="dark"] .signal.match  { background: oklch(0.25 0 0 / 0.35); }
 
 /* Bottom meta row — location + company-size, single line. */
 .pc-meta {
@@ -1927,11 +1941,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .pack-card.popular {
   border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent), 0 12px 28px oklch(0.55 0.07 266 / 0.1);
+  box-shadow: 0 0 0 1px var(--accent), 0 12px 28px rgba(24,24,27,0.10);
 }
 .pack-badge {
   position: absolute; top: -10px; right: 14px;
-  background: var(--accent); color: white;
+  background: var(--accent); color: var(--on-accent);
   font-size: 10px; font-weight: 600;
   padding: 3px 8px; border-radius: 999px;
   text-transform: uppercase; letter-spacing: 0.06em;
@@ -1969,7 +1983,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   padding: 2px 8px;
   border-radius: 999px;
   background: var(--accent-soft);
-  border: 1px solid oklch(0.58 0.07 266 / 0.18);
+  border: 1px solid oklch(0.58 0 0 / 0.18);
 }
 
 /* Toast */
@@ -1999,7 +2013,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 /* Global: keyboard focus ring — subtle accent glow, no ugly browser default. */
 :focus-visible {
-  outline: 2px solid oklch(0.72 0.14 266 / 0.55);
+  outline: 2px solid oklch(0.72 0 0 / 0.55);
   outline-offset: 2px;
   border-radius: 5px;
   transition: outline-offset 120ms ease;
@@ -2097,9 +2111,9 @@ button:focus-visible { outline-offset: 3px; }
 }
 .send:hover:not(:disabled) {
   transform: translateY(-1px) scale(1.05);
-  box-shadow: 0 8px 22px oklch(0.55 0.07 266 / 0.5), 0 0 0 3px oklch(0.72 0.12 266 / 0.15);
+  box-shadow: 0 8px 22px oklch(0.55 0 0 / 0.5), 0 0 0 3px oklch(0.72 0 0 / 0.15);
 }
-.send:active:not(:disabled) { transform: translateY(0) scale(0.94); box-shadow: 0 2px 6px oklch(0.5 0.07 266 / 0.4); }
+.send:active:not(:disabled) { transform: translateY(0) scale(0.94); box-shadow: 0 2px 6px oklch(0.5 0 0 / 0.4); }
 
 /* ---- Composer tool buttons (Attach list, mode switch) ---- */
 .tool {
@@ -2131,7 +2145,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .search-input:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px oklch(0.72 0.14 266 / 0.15);
+  box-shadow: 0 0 0 3px oklch(0.72 0 0 / 0.15);
 }
 
 /* ---- Composer shell lifts subtly when the textarea is focused, and the
@@ -2140,9 +2154,9 @@ button:focus-visible { outline-offset: 3px; }
   transition: border-color 200ms ease, box-shadow 240ms ease;
 }
 .composer:focus-within {
-  border-color: oklch(0.72 0.14 266 / 0.8);
+  border-color: oklch(0.72 0 0 / 0.8);
   box-shadow:
-    0 0 0 3px oklch(0.72 0.14 266 / 0.18),
+    0 0 0 3px oklch(0.72 0 0 / 0.18),
     0 10px 32px rgba(17, 17, 20,0.08);
 }
 /* Kill the default focus ring on the inner textarea — the outer composer
@@ -2452,7 +2466,7 @@ button:focus-visible { outline-offset: 3px; }
 .cb-box.on {
   background: var(--accent);
   border-color: var(--accent);
-  color: white;
+  color: var(--on-accent);
 }
 
 /* Counter cell — tally with subtle −/+ steppers (e.g. "Follow-ups sent"). */
@@ -2664,7 +2678,7 @@ button:focus-visible { outline-offset: 3px; }
   white-space: pre-wrap;
 }
 .sa-chat-turn.user .sa-chat-bubble {
-  background: var(--accent); color: white;
+  background: var(--accent); color: var(--on-accent);
 }
 .sa-chat-turn.assistant .sa-chat-bubble {
   background: rgba(17, 17, 20, 0.04); color: var(--text);
@@ -2704,7 +2718,7 @@ button:focus-visible { outline-offset: 3px; }
 
 .sa-flash {
   position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
-  background: var(--text); color: white;
+  background: var(--text); color: var(--bg-0);
   padding: 8px 14px; border-radius: 999px;
   font-size: 12px; z-index: 20;
   box-shadow: 0 4px 12px rgba(17, 17, 20, 0.18);
@@ -2777,8 +2791,8 @@ button:focus-visible { outline-offset: 3px; }
   animation: sa-step-pulse 1.4s ease-in-out infinite;
 }
 @keyframes sa-step-pulse {
-  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 oklch(0.55 0.07 266 / 0.5); }
-  50%      { transform: scale(1.4); box-shadow: 0 0 0 4px oklch(0.55 0.07 266 / 0); }
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 oklch(0.55 0 0 / 0.5); }
+  50%      { transform: scale(1.4); box-shadow: 0 0 0 4px oklch(0.55 0 0 / 0); }
 }
 
 /* Audit form (replaces chat) — sits below the orb hero on the empty state. */
@@ -3020,12 +3034,12 @@ button:focus-visible { outline-offset: 3px; }
 .sa-team-add {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 12px; border-radius: 999px;
-  background: var(--text); color: white;
+  background: var(--text); color: var(--bg-0);
   font-size: 12px; font-weight: 500;
   border: none; cursor: pointer;
   white-space: nowrap;
 }
-.sa-team-add:hover { background: oklch(0.25 0.02 280); }
+.sa-team-add:hover { background: var(--panel-2); }
 
 /* Sales analysis — chat surface (mirrors the main chat aesthetic).
  * Shell takes the full content width; thread + composer cap themselves
@@ -3195,14 +3209,14 @@ button:focus-visible { outline-offset: 3px; }
 }
 .touch-btn:hover { background: var(--panel-2); border-color: var(--hairline-strong); color: var(--text); }
 .touch-btn.touch-out:hover { color: oklch(0.55 0.14 240); border-color: oklch(0.7 0.10 240); }
-.touch-btn.touch-in:hover  { color: oklch(0.55 0.14 266); border-color: oklch(0.65 0.14 266); }
+.touch-btn.touch-in:hover  { color: oklch(0.55 0 0); border-color: oklch(0.65 0 0); }
 .touch-arrow {
   font-family: 'Geist Mono', monospace;
   font-size: 11.5px; font-weight: 600;
   line-height: 1;
 }
 .touch-out-arrow { color: oklch(0.55 0.14 240); }
-.touch-in-arrow  { color: oklch(0.55 0.14 266); }
+.touch-in-arrow  { color: oklch(0.55 0 0); }
 .touch-display {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 9px;
@@ -3450,9 +3464,9 @@ button:focus-visible { outline-offset: 3px; }
   transition: background 120ms, border-color 120ms, color 120ms;
 }
 .ov-done:hover {
-  background: oklch(0.96 0.06 266);
-  color: oklch(0.45 0.14 266);
-  border-color: oklch(0.65 0.14 266);
+  background: oklch(0.96 0 0);
+  color: oklch(0.45 0 0);
+  border-color: oklch(0.65 0 0);
 }
 
 /* ---------- Companies group header row ---------- */

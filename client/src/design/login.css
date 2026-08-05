@@ -1,4 +1,4 @@
-/* Observable Intuition Login — split-screen, sage palette. Ported from design bundle. */
+/* Observable Intuition Login — midday palette: warm-cream surfaces, ink button, no colour accent. */
 
 .l-page {
   display: grid;
@@ -149,8 +149,8 @@
 .l-alert.err .l-alert-dot { background: oklch(0.58 0.17 25); }
 .l-alert.ok {
   background: var(--accent-soft);
-  color: oklch(0.42 0.07 266);
-  border: 1px solid oklch(0.58 0.07 266 / 0.2);
+  color: oklch(0.42 0 0);
+  border: 1px solid oklch(0.58 0 0 / 0.2);
 }
 .l-alert.ok .l-alert-dot { background: var(--accent); }
 
@@ -197,7 +197,7 @@
   height: 44px;
   border-radius: 5px;
   background: var(--text);
-  color: var(--on-dark, #fff);
+  color: var(--bg-0);
   font-size: 14px; font-weight: 500;
   letter-spacing: -0.005em;
   display: inline-flex; align-items: center; justify-content: center;
@@ -249,7 +249,7 @@
 .l-right {
   position: relative; overflow: hidden;
   background:
-    radial-gradient(120% 90% at 50% 0%, oklch(0.28 0.05 266), transparent 60%),
+    radial-gradient(120% 90% at 50% 0%, oklch(0.28 0 0), transparent 60%),
     linear-gradient(180deg, #16161c 0%, #0d0d11 100%);
   color: #fff;
   display: flex; align-items: center; justify-content: center;
@@ -268,7 +268,7 @@
 }
 .l-blob-2 {
   width: 360px; height: 360px;
-  background: oklch(0.5 0.10 266);
+  background: oklch(0.5 0 0);
   bottom: -120px; right: -80px;
 }
 .l-blob-3 { display: none; }
@@ -291,7 +291,7 @@
   position: relative;
   width: 96px; height: 96px; border-radius: 20px;
   background: var(--accent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 12px 40px oklch(0.3 0.07 266 / 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 12px 40px oklch(0.3 0 0 / 0.4);
   display: grid; place-items: center;
   z-index: 3;
 }
@@ -319,7 +319,7 @@
   color: oklch(1 0 0 / 0.94);
   margin: 0; text-wrap: balance;
 }
-.l-stage-caption h2 em { font-style: italic; color: oklch(0.8 0.09 266); }
+.l-stage-caption h2 em { font-style: italic; color: oklch(0.8 0 0); }
 
 @media (max-width: 960px) {
   .l-page { grid-template-columns: 1fr; }
