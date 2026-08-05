@@ -61,6 +61,32 @@
     0 4px 14px -6px rgba(30, 27, 18, 0.05);
   --shadow-pop: 0 12px 32px -10px rgba(30, 27, 18, 0.18),
     0 0 0 1px rgba(30, 27, 18, 0.03);
+
+  /* ── midday shadcn palette (light) ─────────────────────────────────────
+     Consumed by the ported component library in src/ui via Tailwind classes
+     (bg-background, text-muted-foreground, border-border …). Space-separated
+     HSL channels so Tailwind's `/opacity` modifier composes correctly.
+     Values are midday-ai/midday's globals.css tokens, verbatim. */
+  --md-background: 0 0% 100%;
+  --md-foreground: 0 0% 7%;
+  --md-card: 45 18% 96%;
+  --md-card-foreground: 240 10% 3.9%;
+  --md-popover: 45 18% 96%;
+  --md-popover-foreground: 240 10% 3.9%;
+  --md-primary: 240 5.9% 10%;
+  --md-primary-foreground: 0 0% 98%;
+  --md-secondary: 40 11% 89%;
+  --md-secondary-foreground: 240 5.9% 10%;
+  --md-muted: 40 11% 89%;
+  --md-muted-foreground: 0 0% 38%;
+  --md-accent: 40 10% 94%;
+  --md-accent-foreground: 240 5.9% 10%;
+  --md-destructive: 0 84.2% 60.2%;
+  --md-destructive-foreground: 0 0% 98%;
+  --md-border: 45 5% 85%;
+  --md-input: 240 5.9% 90%;
+  --md-ring: 240 5.9% 10%;
+  --md-radius: 0.5rem;
 }
 
 [data-theme="dark"] {
@@ -85,6 +111,27 @@
   --accent-ring: rgba(255, 255, 255, 0.22);
   --on-accent: #121212;
   --danger: #ff383b;
+
+  /* ── midday shadcn palette (dark) — midday globals.css .dark, verbatim ── */
+  --md-background: 0 0% 5%;
+  --md-foreground: 0 0% 98%;
+  --md-card: 0 0% 7%;
+  --md-card-foreground: 0 0% 98%;
+  --md-popover: 0 0% 7%;
+  --md-popover-foreground: 0 0% 98%;
+  --md-primary: 0 0% 98%;
+  --md-primary-foreground: 240 5.9% 10%;
+  --md-secondary: 0 0% 7%;
+  --md-secondary-foreground: 0 0% 98%;
+  --md-muted: 0 0% 11%;
+  --md-muted-foreground: 0 0% 38%;
+  --md-accent: 0 0% 11%;
+  --md-accent-foreground: 0 0% 98%;
+  --md-destructive: 359 100% 61%;
+  --md-destructive-foreground: 0 0% 100%;
+  --md-border: 0 0% 11%;
+  --md-input: 0 0% 11%;
+  --md-ring: 240 4.9% 83.9%;
 }
 
 /* Global border-box so width:100% + padding never overflows the parent —
@@ -133,14 +180,13 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .app {
   position: absolute; inset: 0; z-index: 1;
   background: var(--bg-0);
-  /* flowviz shell: a 12px gutter around everything; the canvas floats. */
-  padding: 12px;
-  display: grid;
-  --sidebar-w: 248px;
-  grid-template-columns: var(--sidebar-w) 1fr;
+  /* midday shell: flush, edge-to-edge. The rail is a fixed 70px overlay
+     (see .md-rail / Sidebar.tsx); .main is simply offset by that width. */
+  padding: 0;
   overflow: hidden;
-  transition: --sidebar-w 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
+.scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
 /* Rail content never wraps as the column narrows — it clips cleanly. */
 .sidebar, .sidebar-header, .sidebar-body { min-width: 0; }
 .sidebar-header, .nav-item, .nav-label, .brand-name, .brand-sub { white-space: nowrap; }
@@ -151,8 +197,8 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .app-modal {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
   width: min(440px, calc(100vw - 32px));
-  background: var(--shell); border: 1px solid var(--hairline-strong);
-  border-radius: 5px; z-index: 200;
+  background: var(--panel); border: 1px solid var(--hairline-strong);
+  border-radius: 0; z-index: 200;   /* midday dialog — sharp, bordered */
   box-shadow: 0 24px 60px rgba(17, 17, 20,0.24), 0 2px 8px rgba(17, 17, 20,0.08);
   /* Animate opacity only — using kmc-rise here would overwrite the
      translate(-50%, -50%) centering and cause the dialog to fly in from
@@ -173,10 +219,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .app-modal-foot {
   display: flex; justify-content: flex-end; gap: 8px;
   padding: 12px 18px; border-top: 1px solid var(--hairline);
-  background: var(--panel-2);
+  background: transparent;
 }
 .pill-btn.primary.danger {
   background: var(--danger, oklch(0.55 0.2 25));
+  color: #fff;
   border-color: transparent;
 }
 
@@ -209,7 +256,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   align-items: center; gap: 10px;
   padding: 2px 6px; margin: 0 -6px;
   min-height: 30px;
-  border-radius: 5px;
+  border-radius: 0;
   transition: background 100ms;
 }
 .dp-row:hover { background: var(--panel-2); }
@@ -222,7 +269,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .dp-del {
   width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 5px;
+  border-radius: 0;
   color: var(--text-mute);
   background: transparent;
   border: 0; cursor: pointer;
@@ -242,7 +289,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   width: 100%;
   min-height: 28px;
   padding: 4px 6px; margin: -4px -6px;
-  border-radius: 5px;
+  border-radius: 0;
   cursor: pointer;
   transition: background 100ms;
 }
@@ -261,7 +308,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .dp-add-btn {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 6px 10px; margin-left: -10px;
-  border-radius: 5px;
+  border-radius: 0;
   background: transparent; color: var(--text-mute);
   font-size: 12px; font-weight: 500;
   border: 0; cursor: pointer;
@@ -310,7 +357,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: flex; flex-direction: column; gap: 2px;
   padding: 8px 10px;
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--panel);
   text-align: left;
   cursor: pointer;
@@ -359,7 +406,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   height: min(86vh, 920px);
   z-index: 221;
   display: flex; flex-direction: column;
-  border-radius: 5px;
+  border-radius: 0;
   /* Same effective tone as the rest of the workspace, but opaque so
      the table behind doesn't bleed through. */
   background:
@@ -404,7 +451,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .page-cell { cursor: pointer; }
 .page-chip {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 9px; border-radius: 5px;
+  padding: 3px 9px; border-radius: 0;
   background: var(--accent-soft); color: var(--accent);
   font-size: 11.5px; font-weight: 500;
   max-width: 100%;
@@ -425,7 +472,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .file-cell { cursor: pointer; }
 .file-chip {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 6px 3px 9px; border-radius: 5px;
+  padding: 3px 6px 3px 9px; border-radius: 0;
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--hairline);
   font-size: 11.5px; font-weight: 500;
@@ -442,7 +489,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .file-chip-x {
   width: 16px; height: 16px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 4px;
+  border-radius: 0;
   color: var(--text-mute);
   background: transparent; border: 0;
   opacity: 0; transition: opacity 100ms, background 100ms, color 100ms;
@@ -458,7 +505,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .pc-quick { display: flex; gap: 4px; margin-left: auto; flex-shrink: 0; }
 .pc-quick-btn {
   width: 24px; height: 24px; display: grid; place-items: center;
-  border-radius: 5px; color: var(--text-mute);
+  border-radius: 0; color: var(--text-mute);
   background: transparent;
   text-decoration: none;
   transition: background 140ms ease, color 140ms ease, transform 120ms ease;
@@ -468,7 +515,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 /* Sidebar section "+" add button. */
 .nav-add {
-  width: 18px; height: 18px; border-radius: 4px;
+  width: 18px; height: 18px; border-radius: 0;
   display: grid; place-items: center;
   color: var(--text-mute);
   transition: background 140ms ease, color 140ms ease, transform 120ms ease;
@@ -479,7 +526,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 /* Kanban card delete button — only visible on hover. */
 .kc-delete {
   position: absolute; top: 6px; right: 6px;
-  width: 20px; height: 20px; border-radius: 5px;
+  width: 20px; height: 20px; border-radius: 0;
   display: grid; place-items: center;
   color: var(--text-mute);
   opacity: 0; transform: translateX(4px);
@@ -498,7 +545,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   background: oklch(from var(--stage-tint) l c h / 0.9);
   outline: 2px dashed var(--stage-color);
   outline-offset: -4px;
-  border-radius: 5px;
+  border-radius: 0;
 }
 .kanban-empty.drop-target {
   color: var(--stage-color); font-weight: 500;
@@ -517,14 +564,14 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
    workspace so it doesn't look bolted on. */
 .key-missing-card {
   display: flex; align-items: center; gap: 14px;
-  padding: 16px 18px; border-radius: 5px;
+  padding: 16px 18px; border-radius: 0;
   background: var(--panel);
   border: 1px solid var(--hairline-strong);
   box-shadow: 0 1px 0 rgba(17, 17, 20,0.02), 0 6px 18px rgba(17, 17, 20,0.04);
   animation: kmc-rise 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .kmc-icon {
-  width: 34px; height: 34px; flex: 0 0 34px; border-radius: 5px;
+  width: 34px; height: 34px; flex: 0 0 34px; border-radius: 0;
   background: var(--accent-soft); color: var(--accent);
   display: grid; place-items: center;
 }
@@ -554,7 +601,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
  * or auth error so the user gets a clear, actionable message instead of a
  * raw "completion_failed" string or a misleading "no results found". */
 .upstream-error {
-  padding: 14px 16px; border-radius: 5px;
+  padding: 14px 16px; border-radius: 0;
   background: linear-gradient(180deg, oklch(0.97 0.03 60 / 0.7), oklch(0.95 0.04 50 / 0.5));
   border: 1px solid oklch(0.78 0.13 65 / 0.35);
   animation: kmc-rise 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -661,7 +708,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .brand-l { display: flex; align-items: center; gap: 11px; }
 /* flowviz workspace mark — a flat 24px tile, no gradient, no glow. */
 .brand-mark {
-  width: 24px; height: 24px; border-radius: 4px; flex-shrink: 0;
+  width: 24px; height: 24px; border-radius: 0; flex-shrink: 0;
   background: var(--accent);
   display: inline-flex; align-items: center; justify-content: center;
   position: relative;
@@ -682,14 +729,14 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .icon-btn {
   width: 26px; height: 26px; display: grid; place-items: center;
-  border-radius: 4px; color: var(--text-mute);
+  border-radius: 0; color: var(--text-mute);
   transition: background 120ms, color 120ms;
 }
 .icon-btn:hover { background: var(--hover); color: var(--text); }
 
 .new-chat {
   display: flex; align-items: center; gap: 9px;
-  padding: 9px 12px; border-radius: 5px;
+  padding: 9px 12px; border-radius: 0;
   background: var(--text); color: var(--shell);
   font-size: 13px; font-weight: 500;
   transition: opacity 150ms;
@@ -699,7 +746,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 .search-input {
   display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px; border-radius: 5px;
+  padding: 7px 10px; border-radius: 0;
   background: var(--panel-2); border: 1px solid var(--hairline);
   color: var(--text-dim); font-size: 12.5px;
 }
@@ -723,14 +770,14 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   color: var(--text-mute); font-weight: 600; padding: 14px 8px 4px;
   display: flex; justify-content: space-between; align-items: center;
 }
-.nav-label .add { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 4px; color: var(--text-mute); }
+.nav-label .add { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 0; color: var(--text-mute); }
 .nav-label .add:hover { background: var(--hover); color: var(--text); }
 
 /* Sidebar nav is chrome — it should sit quieter than page content. 13px,
    differentiated by weight, on a quiet hover/active wash. */
 .nav-item {
   display: flex; align-items: center; gap: 9px;
-  padding: 5px 8px; border-radius: 5px;
+  padding: 5px 8px; border-radius: 0;
   color: var(--text-dim); font-size: 13px; font-weight: 400;
   letter-spacing: -0.005em;
   transition: background 120ms, color 120ms;
@@ -754,7 +801,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .nav-search {
   display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 7px 10px; margin-bottom: 10px;
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--shell);
   border: 1px solid var(--hairline-strong);
   color: var(--text-dim); font-size: 13px; font-weight: 450;
@@ -778,7 +825,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 .upgrade {
   margin-top: auto; padding: 12px;
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--panel-2); border: 1px solid var(--hairline);
   position: relative; overflow: hidden;
 }
@@ -789,7 +836,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .upgrade p { margin: 6px 0 12px; font-size: 11.5px; line-height: 1.5; color: var(--text-dim); }
 .upgrade-btn {
-  width: 100%; padding: 7px 12px; border-radius: 5px;
+  width: 100%; padding: 7px 12px; border-radius: 0;
   background: var(--text); color: var(--shell);
   font-size: 12px; font-weight: 500;
 }
@@ -800,19 +847,18 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .main {
   display: grid; grid-template-rows: auto 1fr auto;
   min-height: 0; min-width: 0; position: relative;
-  margin-left: 12px;
-  background: var(--shell);
-  border: 1px solid var(--hairline);
-  border-radius: 5px;
-  box-shadow: var(--shadow-card);
+  /* midday: content sits to the right of the fixed 70px rail, flat + flush. */
+  margin-left: 70px;
+  height: 100%;
+  background: var(--panel);
   overflow: hidden;
 }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  /* Border removed — user requested the breadcrumb to sit flush with the
-     canvas below. Padding unchanged so the 54px row height is preserved. */
-  padding: 11px 24px;
+  /* midday header: a bordered top strip. */
+  padding: 11px 28px;
   min-height: 54px; box-sizing: border-box;
+  border-bottom: 1px solid var(--hairline);
 }
 .crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
 .crumbs .cur { color: var(--text); font-weight: 500; }
@@ -820,48 +866,52 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 .model-pill {
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 6px 11px 6px 13px; border-radius: 999px;
-  background: var(--panel); border: 1px solid var(--hairline);
+  padding: 6px 11px 6px 13px; border-radius: 0;   /* midday: sharp outline */
+  background: transparent; border: 1px solid var(--hairline);
   font-size: 12px; color: var(--text);
   transition: background 150ms;
 }
 .model-pill:hover { background: var(--panel-2); }
 .model-pill .ver { color: var(--text-dim); font-family: 'Geist Mono', monospace; font-size: 11px; }
 .top-actions { display: flex; gap: 8px; align-items: center; }
+/* midday button — sharp corners, outline default, ink primary. */
 .pill-btn {
   display: inline-flex; align-items: center; gap: 7px;
-  padding: 5px 11px; border-radius: 5px;
-  background: var(--panel); border: 1px solid var(--hairline-strong);
+  padding: 0 14px; height: 34px; border-radius: 0;
+  background: transparent; border: 1px solid var(--hairline-strong);
   color: var(--text); font-size: 13px; font-weight: 500;
   transition: background 150ms, border-color 150ms;
 }
-.pill-btn:hover { background: var(--panel-2); }
-.pill-btn.primary { background: var(--text); color: var(--shell); border-color: transparent; }
+.pill-btn:hover { background: var(--md-hover, var(--panel-2)); }
+.pill-btn.primary {
+  background: var(--accent); color: var(--on-accent); border-color: transparent;
+}
 .pill-btn.primary:hover { opacity: 0.9; }
 .pill-btn.primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .avatar-mini {
-  width: 26px; height: 26px; border-radius: 5px;
-  background: var(--text); color: var(--shell);
+  width: 28px; height: 28px; border-radius: 0;   /* midday team-tile: sharp */
+  background: var(--accent); color: var(--on-accent);
   display: grid; place-items: center;
   font-size: 11px; font-weight: 600;
 }
 
 /* Mode switch — flowviz segmented control. Both toggles (Web/My network and
    Broad/Strict) share this, so they always render at the same size + weight. */
+/* midday segmented control — sharp, flat, hairline-bounded. */
 .mode-switch {
-  display: flex; background: var(--panel-2);
-  border: 1px solid var(--hairline); border-radius: 5px; padding: 2px;
+  display: flex; background: transparent;
+  border: 1px solid var(--hairline); border-radius: 0; padding: 0;
 }
 .mode-switch button {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 10px; border-radius: 4px;
+  padding: 5px 12px; border-radius: 0;
   font-size: 12px; color: var(--text-dim);
   font-weight: 500; letter-spacing: -0.005em; transition: all 150ms;
 }
+.mode-switch button + button { border-left: 1px solid var(--hairline); }
 .mode-switch button.active {
-  background: var(--shell); color: var(--text);
-  box-shadow: var(--shadow-sm);
+  background: var(--accent); color: var(--on-accent);
 }
 
 /* Canvas / hero */
@@ -901,13 +951,13 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .orb-wrap { width: 52px; height: 52px; position: relative; display: grid; place-items: center; }
 .orb-wrap::before { content: none; }
 .orb {
-  width: 44px; height: 44px; border-radius: 5px; position: relative;
+  width: 44px; height: 44px; border-radius: 0; position: relative;
   background: var(--accent);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.18);
   display: grid; place-items: center;
 }
 .orb::before {
-  content: ''; width: 15px; height: 15px; border-radius: 3px;
+  content: ''; width: 15px; height: 15px; border-radius: 0;
   border: 2px solid rgba(255,255,255,0.92);
   background: transparent;
 }
@@ -919,8 +969,8 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 4px; max-width: 720px; }
 .chip {
   display: inline-flex; align-items: center; gap: 7px;
-  padding: 7px 12px; border-radius: 999px;
-  background: var(--panel); border: 1px solid var(--hairline);
+  padding: 7px 12px; border-radius: 0;
+  background: transparent; border: 1px solid var(--hairline);
   color: var(--text); font-size: 12.5px;
   transition: transform 150ms, background 150ms, border-color 150ms;
 }
@@ -940,14 +990,12 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   width: 100%;
   max-width: 720px;
   background: var(--panel); border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-lg);
+  border-radius: 0;
   padding: 14px 16px 10px;
-  box-shadow: var(--shadow-card);
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  transition: border-color 160ms ease;
 }
 .composer:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-ring), var(--shadow-card);
 }
 .composer-row { display: flex; gap: 10px; align-items: flex-start; }
 .composer-spark { width: 24px; height: 24px; display: grid; place-items: center; flex-shrink: 0; margin-top: 2px; }
@@ -961,24 +1009,24 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .tool-group { display: flex; gap: 2px; }
 .tool {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 9px; border-radius: 5px;
+  padding: 5px 9px; border-radius: 0;
   color: var(--text-dim); font-size: 12px;
   transition: background 150ms, color 150ms;
 }
 .tool:hover { background: var(--hairline); color: var(--text); }
 .send-group { display: flex; gap: 8px; align-items: center; }
-.mode-toggle { display: flex; background: var(--hairline); border-radius: 5px; padding: 2px; }
+.mode-toggle { display: flex; background: transparent; border: 1px solid var(--hairline); border-radius: 0; }
 .mode-toggle button {
-  padding: 4px 10px; border-radius: 5px;
+  padding: 5px 11px; border-radius: 0;
   font-size: 11.5px; color: var(--text-dim);
   font-family: 'Geist Mono', monospace;
 }
+.mode-toggle button + button { border-left: 1px solid var(--hairline); }
 .mode-toggle button.active {
-  background: var(--shell); color: var(--text);
-  box-shadow: 0 1px 2px rgba(17, 17, 20,0.06);
+  background: var(--accent); color: var(--on-accent);
 }
 .send {
-  width: 28px; height: 28px; border-radius: 5px;
+  width: 30px; height: 30px; border-radius: 0;
   background: var(--accent);
   display: grid; place-items: center; color: var(--on-accent);
   transition: transform 150ms, opacity 150ms, background 150ms;
@@ -998,7 +1046,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .user-msg {
   align-self: flex-end; max-width: 70%;
-  padding: 10px 14px; border-radius: 5px 5px 2px 5px;
+  padding: 10px 14px; border-radius: 0 5px 2px 5px;
   background: var(--accent); color: var(--on-accent);
   font-size: 13.5px; line-height: 1.5;
   animation: msg-in 350ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -1069,7 +1117,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .msg-actions:has(.version-switch) { opacity: 1; }
 .msg-act {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; border-radius: 5px;
+  width: 26px; height: 26px; border-radius: 0;
   border: none; background: transparent; color: var(--text-mute);
   cursor: pointer; transition: background 140ms ease, color 140ms ease;
 }
@@ -1083,7 +1131,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 /* Inline edit of a sent message — a composer-style textarea + actions. */
 .user-edit-input {
   width: 100%; box-sizing: border-box; resize: vertical; min-height: 56px;
-  padding: 10px 14px; border-radius: 5px;
+  padding: 10px 14px; border-radius: 0;
   border: 1px solid var(--accent); background: var(--bg);
   color: var(--text); font: inherit; font-size: 13.5px; line-height: 1.5;
   outline: none;
@@ -1097,7 +1145,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .prospect-card {
   position: relative; padding: 16px;
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--shell); border: 1px solid var(--hairline);
   text-align: left;
   transition: background 180ms, border-color 180ms, transform 180ms, box-shadow 220ms;
@@ -1118,7 +1166,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 .pc-head { display: flex; gap: 10px; align-items: center; min-width: 0; }
 .pc-check {
-  width: 18px; height: 18px; border-radius: 5px;
+  width: 18px; height: 18px; border-radius: 0;
   border: 1.5px solid var(--hairline-strong);
   display: grid; place-items: center; color: var(--on-accent);
   flex-shrink: 0; transition: all 150ms; cursor: pointer;
@@ -1145,7 +1193,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .signal {
   position: relative;
   padding: 8px 10px 8px 12px;
-  border-radius: 5px;
+  border-radius: 0;
   font-size: 12px; line-height: 1.45;
   color: var(--text);
   background: var(--panel);
@@ -1209,7 +1257,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 /* Drawer */
 .drawer-bg {
   position: fixed; inset: 0;
-  background: rgba(17, 17, 20, 0.4); backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.45);
   z-index: 80; animation: fade-in 200ms ease;
 }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -1246,7 +1294,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .field-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
   background: var(--hairline); border: 1px solid var(--hairline);
-  border-radius: 5px; overflow: hidden;
+  border-radius: 0; overflow: hidden;
 }
 .field { background: var(--panel); padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
 .field-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-mute); }
@@ -1262,10 +1310,10 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: flex; gap: 10px;
   padding: 10px 12px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px; font-size: 12.5px;
+  border-radius: 0; font-size: 12.5px;
 }
 .signal-item .si-icon {
-  width: 22px; height: 22px; border-radius: 5px;
+  width: 22px; height: 22px; border-radius: 0;
   background: var(--accent-soft); color: var(--accent);
   display: grid; place-items: center; flex-shrink: 0;
 }
@@ -1276,7 +1324,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .exp-row { display: flex; gap: 10px; padding: 8px 0; }
 .exp-row + .exp-row { border-top: 1px solid var(--hairline); }
 .exp-logo {
-  width: 28px; height: 28px; border-radius: 5px;
+  width: 28px; height: 28px; border-radius: 0;
   background: var(--hairline); display: grid; place-items: center;
   font-size: 10px; font-family: 'Geist Mono', monospace;
   color: var(--text-dim); flex-shrink: 0;
@@ -1310,7 +1358,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 
 .draft-box {
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px; padding: 14px 16px;
+  border-radius: 0; padding: 14px 16px;
   display: flex; flex-direction: column; gap: 10px;
 }
 .draft-box .from-row {
@@ -1342,18 +1390,18 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .crm-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .view-toggle {
-  display: flex; background: var(--panel-2);
-  border: 1px solid var(--hairline); border-radius: 5px; padding: 2px;
+  display: flex; background: transparent;
+  border: 1px solid var(--hairline); border-radius: 0; padding: 0;
 }
 .view-toggle button {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 11px; border-radius: 4px;
+  padding: 6px 12px; border-radius: 0;
   font-size: 12px; color: var(--text-dim); font-weight: 500;
   letter-spacing: -0.005em;
 }
+.view-toggle button + button { border-left: 1px solid var(--hairline); }
 .view-toggle button.active {
-  background: var(--shell); color: var(--text);
-  box-shadow: var(--shadow-sm);
+  background: var(--accent); color: var(--on-accent);
 }
 .crm-tools { display: flex; gap: 6px; align-items: center; }
 
@@ -1366,9 +1414,9 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: inline-flex; align-items: center; gap: 6px;
   padding: 0 10px;
   height: 30px;
-  background: var(--panel-2);
+  background: transparent;
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   color: var(--text-dim);
   transition: border-color 160ms, background 160ms;
 }
@@ -1388,7 +1436,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; height: 16px;
   border: 0; background: transparent; padding: 0; margin-right: -2px;
-  border-radius: 4px; color: var(--text-dim);
+  border-radius: 0; color: var(--text-dim);
   cursor: pointer;
 }
 .crm-search-clear:hover { background: var(--panel); color: var(--text); }
@@ -1404,8 +1452,8 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .crm-progress-pill {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  border-radius: 0;
   background: var(--panel);
   font-size: 12px; color: var(--text-dim); font-weight: 500;
   white-space: nowrap;
@@ -1432,7 +1480,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   scrollbar-color: rgba(17, 17, 20,0.15) transparent;
 }
 .kanban::-webkit-scrollbar { height: 8px; }
-.kanban::-webkit-scrollbar-thumb { background: rgba(17, 17, 20,0.12); border-radius: 4px; }
+.kanban::-webkit-scrollbar-thumb { background: rgba(17, 17, 20,0.12); border-radius: 0; }
 /* Linear-style columns: no grey fill, no border, no top bar. The column is
    just a header + a stack of floating cards on the canvas. */
 .kanban-col {
@@ -1492,7 +1540,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   font-size: 12px; font-weight: 600; color: var(--text); letter-spacing: -0.005em;
   flex: 1; min-width: 0;
   padding: 2px 4px; margin: -2px -4px;
-  border-radius: 4px;
+  border-radius: 0;
   cursor: text;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transition: background 100ms;
@@ -1501,7 +1549,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .kanban-title-input {
   flex: 1; min-width: 0;
   padding: 2px 4px; margin: -2px -4px;
-  border: 1px solid var(--accent); border-radius: 4px;
+  border: 1px solid var(--accent); border-radius: 0;
   background: var(--shell); color: var(--text);
   font: inherit; font-size: 12px; font-weight: 600;
   box-shadow: 0 0 0 3px var(--accent-soft); outline: none;
@@ -1509,7 +1557,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .kanban-del {
   width: 18px; height: 18px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 4px;
+  border-radius: 0;
   color: var(--text-mute);
   opacity: 0; transition: opacity 120ms, background 120ms, color 120ms;
 }
@@ -1529,7 +1577,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: inline-flex; align-items: center; gap: 6px;
   width: 100%;
   padding: 8px 10px;
-  border-radius: 5px;
+  border-radius: 0;
   color: var(--text-mute);
   font-size: 12px; font-weight: 500;
   transition: background 120ms, color 120ms;
@@ -1542,11 +1590,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .kanban-count {
   font-family: 'Geist Mono', monospace; font-size: 10.5px;
   color: var(--text-mute); padding: 1px 6px;
-  border-radius: 4px; background: var(--hairline);
+  border-radius: 0; background: var(--hairline);
 }
 .kanban-add {
   margin-left: auto; width: 22px; height: 22px;
-  display: grid; place-items: center; border-radius: 5px;
+  display: grid; place-items: center; border-radius: 0;
   color: var(--text-mute); transition: background 150ms;
 }
 .kanban-add:hover { background: var(--hairline); color: var(--text); }
@@ -1556,23 +1604,23 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   scrollbar-width: thin;
 }
 .kanban-list::-webkit-scrollbar { width: 6px; }
-.kanban-list::-webkit-scrollbar-thumb { background: rgba(17, 17, 20,0.12); border-radius: 3px; }
+.kanban-list::-webkit-scrollbar-thumb { background: rgba(17, 17, 20,0.12); border-radius: 0; }
 .kanban-empty {
   padding: 8px; font-size: 11.5px; color: var(--text-mute);
-  border: 1px dashed var(--hairline); border-radius: 5px;
+  border: 1px dashed var(--hairline); border-radius: 0;
   text-align: center; transition: all 150ms;
 }
 .kanban-empty:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
+/* midday card — cream fill floating on the white canvas, flat + bordered. */
 .kanban-card {
   padding: 11px 12px;
-  background: var(--shell); border: 1px solid var(--hairline);
-  border-radius: 6px;
-  box-shadow: var(--shadow-sm);
+  background: var(--panel-2); border: 1px solid var(--hairline);
+  border-radius: var(--card-r);
   display: flex; flex-direction: column; gap: 8px;
-  cursor: pointer; transition: border-color 150ms, box-shadow 150ms;
+  cursor: pointer; transition: border-color 150ms, background 150ms;
 }
-.kanban-card:hover { border-color: var(--hairline-strong); }
+.kanban-card:hover { border-color: var(--hairline-strong); background: var(--panel); }
 .kc-top { display: flex; align-items: center; gap: 9px; }
 .kc-avatar {
   width: 26px; height: 26px; border-radius: 50%;
@@ -1642,14 +1690,14 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 /* Table view */
 .tbl-wrap {
   flex: 1;
-  background: var(--shell); border: 1px solid var(--hairline);
-  border-radius: 5px; overflow: auto;
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: 0; overflow: auto;   /* midday tables are sharp + flat */
   min-width: 0; /* required inside flex parents so horizontal scroll activates */
   scrollbar-width: thin;
   scrollbar-color: rgba(17, 17, 20,0.15) transparent;
 }
 .tbl-wrap::-webkit-scrollbar { height: 8px; width: 8px; }
-.tbl-wrap::-webkit-scrollbar-thumb { background: rgba(17, 17, 20,0.12); border-radius: 4px; }
+.tbl-wrap::-webkit-scrollbar-thumb { background: rgba(17, 17, 20,0.12); border-radius: 0; }
 /* The grid is at least the sum of its declared column widths AND at
    least the wrap width — so on viewports wider than the columns, the
    trailing 1fr spacer (added inline by TableView) absorbs the slack and
@@ -1667,13 +1715,15 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   min-height: 44px;
 }
 .tbl-row:last-child { border-bottom: 0; }
-.tbl-row:not(.tbl-head):hover { background: var(--panel-2); }
+.tbl-row:not(.tbl-head):hover { background: var(--hover); }
+/* midday table header — muted grey #878787, sentence case, medium weight,
+   taller row, no shaded fill. Hierarchy from tone, not caps/bold. */
 .tbl-head {
-  background: var(--panel-2);
+  background: var(--panel);
   position: sticky; top: 0; z-index: 2;
-  font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-mute); font-weight: 600;
-  cursor: default; min-height: 36px;
+  font-size: 13px; text-transform: none; letter-spacing: 0;
+  color: var(--text-dim); font-weight: 500;
+  cursor: default; min-height: 48px;
 }
 .tbl-cell {
   font-size: 13px; color: var(--text);
@@ -1687,7 +1737,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .tbl-cell.c-num { font-variant-numeric: tabular-nums; justify-content: center; color: var(--text-dim); }
 .tbl-stage {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 9px; border-radius: 5px;
+  padding: 3px 9px; border-radius: 0;   /* midday tag — sharp */
   font-size: 11px; font-weight: 500;
   background: var(--stage-tint); color: var(--stage-color);
 }
@@ -1698,21 +1748,21 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .src-chip {
   font-family: 'Geist Mono', monospace; font-size: 10.5px;
-  padding: 2px 7px; border-radius: 5px;
+  padding: 2px 7px; border-radius: 0;
   background: var(--hairline); color: var(--text-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   max-width: 100%;
 }
 .ed-cell {
   display: inline-block; padding: 4px 6px; margin: -4px -6px;
-  border-radius: 5px; cursor: text;
+  border-radius: 0; cursor: text;
   transition: background 100ms;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ed-cell:hover { background: var(--hairline); }
 .ed-input {
   width: 100%; padding: 4px 6px; margin: -4px -6px;
-  border: 1px solid var(--accent); border-radius: 5px;
+  border: 1px solid var(--accent); border-radius: 0;
   background: var(--shell); font-size: 12.5px; color: var(--text);
   box-shadow: 0 0 0 3px var(--accent-soft); outline: none;
 }
@@ -1790,14 +1840,14 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .stage-menu {
   position: absolute; top: calc(100% + 4px); left: 0;
   background: var(--shell); border: 1px solid var(--hairline-strong);
-  border-radius: 5px; padding: 4px; z-index: 10;
+  border-radius: 0; padding: 4px; z-index: 10;
   box-shadow: 0 8px 24px rgba(17, 17, 20,0.12);
   min-width: 140px;
   display: flex; flex-direction: column; gap: 1px;
 }
 .stage-menu button {
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 8px; border-radius: 5px;
+  padding: 6px 8px; border-radius: 0;
   font-size: 12px; color: var(--text); text-align: left; text-transform: capitalize;
 }
 .stage-menu button:hover { background: var(--panel-2); }
@@ -1814,7 +1864,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .board-btn {
   display: inline-flex; align-items: center; gap: 8px;
   padding: 7px 11px 7px 9px;
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--panel); border: 1px solid var(--hairline);
   color: var(--text); font-size: 13px; font-weight: 500;
   transition: background 150ms, border-color 150ms;
@@ -1833,7 +1883,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   position: absolute; top: calc(100% + 6px); left: 0;
   z-index: 51; min-width: 260px;
   padding: 6px;
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--panel); border: 1px solid var(--hairline-strong);
   box-shadow: 0 18px 40px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.08);
   backdrop-filter: blur(14px);
@@ -1846,7 +1896,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .bm-item {
   display: flex; align-items: center; gap: 9px; width: 100%;
-  padding: 7px 10px; border-radius: 5px;
+  padding: 7px 10px; border-radius: 0;
   color: var(--text); font-size: 13px;
   text-align: left; transition: background 120ms;
 }
@@ -1861,7 +1911,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   width: min(620px, 94vw);
   max-height: 84vh;
   display: flex; flex-direction: column;
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--panel); border: 1px solid var(--hairline-strong);
   box-shadow: 0 30px 80px rgba(0,0,0,0.25), 0 8px 24px rgba(0,0,0,0.1);
   overflow: hidden;
@@ -1876,7 +1926,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   display: block;
   width: 100%; max-width: 100%; box-sizing: border-box;
   min-height: 160px; padding: 12px;
-  border-radius: 5px; background: var(--shell);
+  border-radius: 0; background: var(--shell);
   border: 1px solid var(--hairline); color: var(--text);
   font-family: 'Geist Mono', monospace;
   font-size: 12px; line-height: 1.55;
@@ -1894,7 +1944,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   background: var(--panel-2);
 }
 .im-preview {
-  border: 1px solid var(--hairline); border-radius: 5px;
+  border: 1px solid var(--hairline); border-radius: 0;
   overflow: hidden; font-size: 12px;
 }
 .im-prev-head, .im-prev-row {
@@ -1920,7 +1970,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   width: min(860px, 96vw);
   max-height: 88vh;
   display: flex; flex-direction: column;
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--shell);
   border: 1px solid var(--hairline-strong);
   box-shadow: 0 30px 80px rgba(0,0,0,0.25), 0 8px 24px rgba(0,0,0,0.1);
@@ -1936,7 +1986,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   position: relative;
   padding: 18px 16px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   display: flex; flex-direction: column;
 }
 .pack-card.popular {
@@ -1991,7 +2041,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   position: fixed; bottom: 24px; left: 50%;
   transform: translateX(-50%);
   background: var(--text); color: var(--shell);
-  padding: 10px 16px; border-radius: 6px;
+  padding: 10px 16px; border-radius: 0;
   font-size: 13px; font-weight: 450; z-index: 100;
   box-shadow: 0 10px 30px rgba(17, 17, 20,0.25), 0 0 0 1px rgba(255,255,255,0.06) inset;
   display: flex; align-items: center; gap: 10px;
@@ -2015,7 +2065,7 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 :focus-visible {
   outline: 2px solid oklch(0.72 0 0 / 0.55);
   outline-offset: 2px;
-  border-radius: 5px;
+  border-radius: 0;
   transition: outline-offset 120ms ease;
 }
 button:focus-visible { outline-offset: 3px; }
@@ -2063,7 +2113,7 @@ button:focus-visible { outline-offset: 3px; }
 .nav-row-action {
   width: 20px; height: 20px; flex: 0 0 20px;
   display: grid; place-items: center;
-  border-radius: 5px; color: var(--text-mute);
+  border-radius: 0; color: var(--text-mute);
   transition: background 140ms ease, color 140ms ease;
 }
 .nav-row-action:hover { background: var(--hairline); color: var(--text); }
@@ -2073,7 +2123,7 @@ button:focus-visible { outline-offset: 3px; }
 
 .nav-rename-input {
   flex: 1; min-width: 0;
-  padding: 3px 6px; border-radius: 5px;
+  padding: 3px 6px; border-radius: 0;
   background: var(--shell);
   box-shadow: inset 0 0 0 1.5px var(--accent);
   color: var(--text); font-size: 12.5px;
@@ -2355,7 +2405,7 @@ button:focus-visible { outline-offset: 3px; }
 .hdr-label {
   flex: 1; min-width: 0;
   padding: 4px 6px; margin: -4px -6px;
-  border-radius: 5px;
+  border-radius: 0;
   cursor: text;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   transition: background 100ms;
@@ -2365,7 +2415,7 @@ button:focus-visible { outline-offset: 3px; }
 .hdr-rename {
   flex: 1; min-width: 0;
   padding: 4px 6px; margin: -4px -6px;
-  border: 1px solid var(--accent); border-radius: 5px;
+  border: 1px solid var(--accent); border-radius: 0;
   background: var(--shell); color: var(--text);
   font: inherit;
   text-transform: none; letter-spacing: 0;
@@ -2376,7 +2426,7 @@ button:focus-visible { outline-offset: 3px; }
 .hdr-chev {
   width: 18px; height: 18px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 4px;
+  border-radius: 0;
   color: var(--text-mute);
   opacity: 0; transition: opacity 120ms, background 120ms;
   flex: 0 0 auto;
@@ -2390,7 +2440,7 @@ button:focus-visible { outline-offset: 3px; }
   position: absolute; top: calc(100% + 6px); left: 0;
   z-index: 60; min-width: 220px; max-width: 320px;
   padding: 6px;
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--panel); border: 1px solid var(--hairline-strong);
   box-shadow: 0 18px 40px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.08);
   text-transform: none; letter-spacing: 0;
@@ -2401,7 +2451,7 @@ button:focus-visible { outline-offset: 3px; }
   gap: 4px; padding: 4px 8px 8px;
 }
 .type-chip {
-  padding: 6px 8px; border-radius: 5px;
+  padding: 6px 8px; border-radius: 0;
   background: var(--panel-2); color: var(--text);
   font-size: 11.5px; font-weight: 500;
   border: 1px solid transparent;
@@ -2414,7 +2464,7 @@ button:focus-visible { outline-offset: 3px; }
 .hdr-x {
   width: 18px; height: 18px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 4px;
+  border-radius: 0;
   color: var(--text-mute);
   transition: background 120ms, color 120ms;
 }
@@ -2435,7 +2485,7 @@ button:focus-visible { outline-offset: 3px; }
 .hdr-add-btn {
   width: 22px; height: 22px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 5px;
+  border-radius: 0;
   background: var(--panel-2); color: var(--text-mute);
   font-size: 16px; font-weight: 400; line-height: 1;
   border: 1px dashed var(--hairline-strong);
@@ -2455,7 +2505,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .cb-box {
   width: 16px; height: 16px;
-  border-radius: 4px;
+  border-radius: 0;
   border: 1.5px solid var(--hairline-strong);
   background: var(--shell);
   display: inline-flex; align-items: center; justify-content: center;
@@ -2481,7 +2531,7 @@ button:focus-visible { outline-offset: 3px; }
 .counter-btn {
   width: 18px; height: 18px; flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 4px; border: 1px solid var(--hairline);
+  border-radius: 0; border: 1px solid var(--hairline);
   background: transparent; color: var(--text-mute);
   font-size: 13px; line-height: 1; cursor: pointer;
   transition: background 120ms, color 120ms, border-color 120ms;
@@ -2572,7 +2622,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .sa-card {
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px; padding: 16px 18px;
+  border-radius: 0; padding: 16px 18px;
   display: flex; flex-direction: column; gap: 6px;
 }
 .sa-card-label {
@@ -2587,7 +2637,7 @@ button:focus-visible { outline-offset: 3px; }
 
 .sa-placeholder {
   background: var(--panel); border: 1px dashed var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 48px 24px;
   text-align: center;
   color: var(--text-mute); font-size: 13px;
@@ -2610,7 +2660,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .sa-empty {
   background: var(--panel); border: 1px dashed var(--hairline);
-  border-radius: 5px; padding: 18px;
+  border-radius: 0; padding: 18px;
   color: var(--text-mute); font-size: 12.5px; text-align: center;
 }
 
@@ -2619,13 +2669,13 @@ button:focus-visible { outline-offset: 3px; }
   display: grid; grid-template-columns: minmax(160px, 1fr) auto auto;
   align-items: center; gap: 12px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px; padding: 10px 14px;
+  border-radius: 0; padding: 10px 14px;
 }
 .sa-upload-name { font-weight: 500; color: var(--text); font-size: 13px; }
 .sa-upload-meta { font-size: 11.5px; color: var(--text-dim); font-family: "Geist Mono", monospace; }
 .sa-upload-del {
   background: transparent; border: none; color: var(--text-mute);
-  cursor: pointer; padding: 4px; border-radius: 5px;
+  cursor: pointer; padding: 4px; border-radius: 0;
   display: grid; place-items: center;
 }
 .sa-upload-del:hover { color: var(--danger); background: var(--hairline); }
@@ -2636,7 +2686,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .sa-chart-panel {
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px; padding: 16px 18px;
+  border-radius: 0; padding: 16px 18px;
   display: flex; flex-direction: column; gap: 6px;
 }
 .sa-chart-title { font-size: 13px; font-weight: 600; color: var(--text); }
@@ -2658,7 +2708,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-chat {
   display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px; overflow: hidden;
+  border-radius: 0; overflow: hidden;
 }
 .sa-chat-stream {
   display: flex; flex-direction: column; gap: 12px;
@@ -2674,7 +2724,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-chat-turn.user { align-self: flex-end; align-items: flex-end; }
 .sa-chat-turn.assistant { align-self: flex-start; align-items: flex-start; }
 .sa-chat-bubble {
-  padding: 9px 13px; border-radius: 5px; font-size: 13px; line-height: 1.5;
+  padding: 9px 13px; border-radius: 0; font-size: 13px; line-height: 1.5;
   white-space: pre-wrap;
 }
 .sa-chat-turn.user .sa-chat-bubble {
@@ -2687,7 +2737,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-chat-chart {
   background: rgba(255, 255, 255, 0.7);
   border: 1px solid var(--hairline);
-  border-radius: 5px; padding: 12px; width: 100%;
+  border-radius: 0; padding: 12px; width: 100%;
   max-width: 480px;
 }
 .sa-chat-input {
@@ -2697,7 +2747,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .sa-chat-input textarea {
   flex: 1; padding: 8px 10px; border: 1px solid var(--hairline);
-  border-radius: 5px; resize: none; font-size: 13px; font-family: inherit;
+  border-radius: 0; resize: none; font-size: 13px; font-family: inherit;
   background: white; color: var(--text);
 }
 .sa-chat-input textarea:focus { outline: none; border-color: var(--accent); }
@@ -2711,7 +2761,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-input {
   width: 100%; padding: 9px 11px;
   background: white; border: 1px solid var(--hairline);
-  border-radius: 5px; color: var(--text); font-size: 13px;
+  border-radius: 0; color: var(--text); font-size: 13px;
   font-family: inherit;
 }
 .sa-input:focus { outline: none; border-color: var(--accent); }
@@ -2733,7 +2783,7 @@ button:focus-visible { outline-offset: 3px; }
   width: 100%; max-width: 520px; margin: 0 auto 28px;
   padding: 14px 18px 18px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   display: flex; flex-direction: column; gap: 10px;
 }
 .sa-progress-bar {
@@ -2801,7 +2851,7 @@ button:focus-visible { outline-offset: 3px; }
   width: 100%; max-width: 640px; margin: 0 auto 28px;
   padding: 16px 18px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
 }
 
 /* Audit report */
@@ -2832,7 +2882,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-insight {
   background: var(--panel); border: 1px solid var(--hairline);
   border-left: 3px solid var(--accent);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 10px 14px;
   font-size: 13px; color: var(--text); line-height: 1.5;
 }
@@ -2844,7 +2894,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .sa-group-card {
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 14px 16px;
   display: flex; flex-direction: column; gap: 12px;
 }
@@ -2870,7 +2920,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .sa-metric {
   background: rgba(17, 17, 20, 0.025);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 8px 10px;
 }
 .sa-metric-label {
@@ -2899,7 +2949,7 @@ button:focus-visible { outline-offset: 3px; }
 .sa-sample-text {
   font-size: 12.5px; line-height: 1.55; color: var(--text);
   background: rgba(255, 255, 255, 0.5);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 10px 12px;
   white-space: pre-wrap;
 }
@@ -2919,7 +2969,7 @@ button:focus-visible { outline-offset: 3px; }
 
 .sa-table-wrap {
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   overflow: hidden;
 }
 .sa-md-table {
@@ -2944,13 +2994,13 @@ button:focus-visible { outline-offset: 3px; }
 .sa-video-impact {
   display: flex; flex-direction: column; gap: 14px;
   background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 16px 18px;
 }
 .sa-video-summary { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
 .sa-video-cell {
   background: rgba(17, 17, 20, 0.025);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 12px 14px;
 }
 .sa-video-label { font-size: 11px; color: var(--text-mute); letter-spacing: 0.05em; text-transform: uppercase; }
@@ -3112,7 +3162,7 @@ button:focus-visible { outline-offset: 3px; }
   font-size: 12.5px;
   background: var(--panel);
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
 }
 .sa-md th, .sa-md td {
   padding: 8px 10px;
@@ -3147,13 +3197,13 @@ button:focus-visible { outline-offset: 3px; }
   font-size: 12px;
   padding: 1px 5px;
   background: rgba(17, 17, 20, 0.05);
-  border-radius: 4px;
+  border-radius: 0;
   color: var(--text);
 }
 .sa-md pre {
   background: rgba(17, 17, 20, 0.04);
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 10px 12px;
   overflow-x: auto;
   margin: 10px 0;
@@ -3180,7 +3230,7 @@ button:focus-visible { outline-offset: 3px; }
   margin: 4px 0 14px;
   background: var(--panel);
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   padding: 14px 16px;
 }
 .sa-inline-chart-head {
@@ -3201,7 +3251,7 @@ button:focus-visible { outline-offset: 3px; }
   padding: 3px 7px;
   font-size: 11px; font-weight: 500;
   border: 1px solid var(--hairline);
-  border-radius: 4px;
+  border-radius: 0;
   background: var(--shell);
   color: var(--text-dim);
   cursor: pointer;
@@ -3222,7 +3272,7 @@ button:focus-visible { outline-offset: 3px; }
   padding: 3px 9px;
   font-size: 11.5px; font-weight: 500;
   border: 1px solid var(--hairline);
-  border-radius: 4px;
+  border-radius: 0;
   background: var(--shell);
   color: var(--text);
   cursor: pointer;
@@ -3291,7 +3341,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .ov-empty {
   padding: 14px 12px; color: var(--text-mute); font-size: 12.5px;
-  background: var(--panel); border: 1px dashed var(--hairline); border-radius: 5px;
+  background: var(--panel); border: 1px dashed var(--hairline); border-radius: 0;
 }
 .ov-list {
   display: flex; flex-direction: column; gap: 4px;
@@ -3303,7 +3353,7 @@ button:focus-visible { outline-offset: 3px; }
   padding: 8px 12px;
   background: var(--shell);
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
   cursor: pointer;
   transition: background 120ms, border-color 120ms;
 }
@@ -3325,7 +3375,7 @@ button:focus-visible { outline-offset: 3px; }
 }
 .ov-stage-chip {
   font-size: 10.5px; font-weight: 500;
-  padding: 2px 8px; border-radius: 4px;
+  padding: 2px 8px; border-radius: 0;
   border: 1px solid;
   white-space: nowrap;
 }
@@ -3334,7 +3384,7 @@ button:focus-visible { outline-offset: 3px; }
 .ov-timer {
   font-family: var(--mono, 'Geist Mono', monospace);
   font-size: 10.5px; font-weight: 500;
-  padding: 2px 8px; border-radius: 4px;
+  padding: 2px 8px; border-radius: 0;
   white-space: nowrap;
   background: var(--panel-2);
   color: var(--text-dim);
@@ -3360,7 +3410,7 @@ button:focus-visible { outline-offset: 3px; }
 .nx-text {
   flex: 1 1 auto; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  padding: 2px 4px; border-radius: 4px;
+  padding: 2px 4px; border-radius: 0;
   cursor: text; font-size: 12.5px; color: var(--text);
 }
 .nx-text:hover { background: var(--panel-2); }
@@ -3416,7 +3466,7 @@ button:focus-visible { outline-offset: 3px; }
   padding: 10px 12px;
   background: var(--panel);
   border: 1px solid var(--hairline);
-  border-radius: 5px;
+  border-radius: 0;
 }
 .ov-add-picker { position: relative; min-width: 0; }
 .ov-add-search { position: relative; }
@@ -3456,7 +3506,7 @@ button:focus-visible { outline-offset: 3px; }
 .ov-done {
   flex: 0 0 auto;
   font-size: 11px; font-weight: 500;
-  padding: 4px 10px; border-radius: 5px;
+  padding: 4px 10px; border-radius: 0;
   border: 1px solid var(--hairline);
   background: var(--shell);
   color: var(--text-dim);
@@ -3534,7 +3584,7 @@ button:focus-visible { outline-offset: 3px; }
   padding: 1px 7px;
   font-size: 11px;
   border: 1px solid var(--hairline);
-  border-radius: 4px;
+  border-radius: 0;
   background: var(--shell);
   color: var(--text);
 }
@@ -3787,7 +3837,7 @@ button:focus-visible { outline-offset: 3px; }
 .au-bar-top { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-dim); margin-bottom: 4px; }
 .au-bar-n { font-family: inherit; color: var(--text-mute); }
 .au-bar-n.is-bad { color: var(--danger); }
-.au-bar-track { height: 5px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.au-bar-track { height: 5px; border-radius: 0; background: var(--panel-2); overflow: hidden; }
 .au-bar-fill { height: 100%; background: var(--accent); transition: width 200ms; }
 .au-bar-fill.is-bad { background: var(--danger); }
 
