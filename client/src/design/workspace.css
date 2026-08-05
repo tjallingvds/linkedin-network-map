@@ -119,13 +119,10 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .app {
   position: absolute; inset: 0; z-index: 1;
   background: var(--bg-0);
-  /* flowviz shell: a 12px gutter around everything; the canvas floats. */
-  padding: 12px;
-  display: grid;
-  --sidebar-w: 248px;
-  grid-template-columns: var(--sidebar-w) 1fr;
+  /* midday shell: flush; the rail is a fixed 70px overlay (.md-rail in
+     Sidebar.tsx); .main is simply offset by that width. */
+  padding: 0;
   overflow: hidden;
-  transition: --sidebar-w 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 /* Rail content never wraps as the column narrows — it clips cleanly. */
 .sidebar, .sidebar-header, .sidebar-body { min-width: 0; }
@@ -786,13 +783,16 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 .main {
   display: grid; grid-template-rows: auto 1fr auto;
   min-height: 0; min-width: 0; position: relative;
-  margin-left: 12px;
+  /* Content sits right of the rail. Offset follows the rail's PINNED width
+     (70px collapsed, 240px pinned-open); a transient hover just overlays. */
+  margin-left: 70px;
+  height: 100%;
   background: var(--shell);
-  border: 1px solid var(--hairline);
-  border-radius: 5px;
-  box-shadow: var(--shadow-card);
   overflow: hidden;
+  transition: margin-left 200ms ease;
 }
+[data-rail="open"] .main { margin-left: 240px; }
+[data-rail="closed"] .main { margin-left: 70px; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   /* Border removed — user requested the breadcrumb to sit flush with the
@@ -802,6 +802,11 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
 }
 .crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-dim); }
 .crumbs .cur { color: var(--text); font-weight: 500; }
+.crumb-link {
+  background: none; border: 0; padding: 0; margin: 0; font: inherit;
+  color: var(--text-dim); cursor: pointer; transition: color 120ms ease;
+}
+.crumb-link:hover { color: var(--text); }
 .crumb-sep { color: var(--text-mute); }
 
 .model-pill {
@@ -926,9 +931,9 @@ input, textarea { font: inherit; color: inherit; background: none; border: 0; ou
   width: 100%;
   max-width: 720px;
   background: var(--panel); border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-lg);
-  padding: 14px 16px 10px;
-  box-shadow: var(--shadow-card);
+  border-radius: 12px;
+  padding: 15px 16px 11px;
+  box-shadow: 0 1px 2px rgba(17, 17, 20, 0.04), 0 10px 30px -14px rgba(17, 17, 20, 0.12);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 .composer:focus-within {
@@ -2140,10 +2145,11 @@ button:focus-visible { outline-offset: 3px; }
   transition: border-color 200ms ease, box-shadow 240ms ease;
 }
 .composer:focus-within {
-  border-color: oklch(0.72 0.14 266 / 0.8);
+  /* Clean neutral focus to match the midday shell — no coloured glow. */
+  border-color: rgba(17, 17, 20, 0.30);
   box-shadow:
-    0 0 0 3px oklch(0.72 0.14 266 / 0.18),
-    0 10px 32px rgba(17, 17, 20,0.08);
+    0 0 0 3px rgba(17, 17, 20, 0.05),
+    0 10px 32px rgba(17, 17, 20, 0.08);
 }
 /* Kill the default focus ring on the inner textarea — the outer composer
    carries the visual focus state now. */

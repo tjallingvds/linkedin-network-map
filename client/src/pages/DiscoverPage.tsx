@@ -1239,20 +1239,21 @@ export function DiscoverPage() {
         <div className={`main${appMode === "crm" || appMode === "approvals" ? " crm" : ""}`}>
           <div className="topbar">
             <div className="crumbs">
-              {appMode === "approvals" && (
-                <>
-                  <span>{breadcrumb[0]}</span>
-                  <span className="crumb-sep">/</span>
-                  <span className="cur">{breadcrumb[1]}</span>
-                </>
-              )}
-              {appMode === "discover" && (
-                <>
-                  <span>{breadcrumb[0]}</span>
-                  <span className="crumb-sep">/</span>
-                  <span className="cur">{breadcrumb[1]}</span>
-                </>
-              )}
+              {/* First crumb is a working link to the section's home; second is
+                  the current page. Rendered in every mode (incl. CRM). */}
+              <button
+                type="button"
+                className="crumb-link"
+                onClick={() => {
+                  if (appMode === "discover") handleNewChat();
+                  else if (appMode === "crm") setCrmViewMode("overview");
+                }}
+                title={`Go to ${breadcrumb[0]}`}
+              >
+                {breadcrumb[0]}
+              </button>
+              <span className="crumb-sep">/</span>
+              <span className="cur">{breadcrumb[1]}</span>
             </div>
           </div>
 
@@ -1483,7 +1484,7 @@ export function DiscoverPage() {
               <div className="composer">
                 <div className="composer-row">
                   <div className="composer-spark">
-                    <IconSparkle size={16} style={{ color: "var(--accent)" }} />
+                    <IconSparkle size={16} style={{ color: "var(--text-dim)" }} />
                   </div>
                   <textarea
                     ref={draftRef}

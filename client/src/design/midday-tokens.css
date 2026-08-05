@@ -1,0 +1,61 @@
+/* midday shadcn palette + base — consumed ONLY by the ported components in
+   src/ui (via Tailwind classes bg-background / border-border / etc.). Kept in
+   its own file + namespaced under --md-* so it never touches the baseline
+   design system in workspace.css. Values are midday-ai/midday's globals.css. */
+:root {
+  --md-background: 0 0% 100%;
+  --md-foreground: 0 0% 7%;
+  --md-card: 45 18% 96%;
+  --md-card-foreground: 240 10% 3.9%;
+  --md-popover: 45 18% 96%;
+  --md-popover-foreground: 240 10% 3.9%;
+  --md-primary: 240 5.9% 10%;
+  --md-primary-foreground: 0 0% 98%;
+  --md-secondary: 40 11% 89%;
+  --md-secondary-foreground: 240 5.9% 10%;
+  --md-muted: 40 11% 89%;
+  --md-muted-foreground: 0 0% 38%;
+  --md-accent: 40 10% 94%;
+  --md-accent-foreground: 240 5.9% 10%;
+  --md-destructive: 0 84.2% 60.2%;
+  --md-destructive-foreground: 0 0% 98%;
+  --md-border: 45 5% 85%;
+  --md-input: 240 5.9% 90%;
+  --md-ring: 240 5.9% 10%;
+  --md-radius: 0.5rem;
+}
+
+[data-theme="dark"] {
+  --md-background: 0 0% 5%;
+  --md-foreground: 0 0% 98%;
+  --md-card: 0 0% 7%;
+  --md-card-foreground: 0 0% 98%;
+  --md-popover: 0 0% 7%;
+  --md-popover-foreground: 0 0% 98%;
+  --md-primary: 0 0% 98%;
+  --md-primary-foreground: 240 5.9% 10%;
+  --md-secondary: 0 0% 7%;
+  --md-secondary-foreground: 0 0% 98%;
+  --md-muted: 0 0% 11%;
+  --md-muted-foreground: 0 0% 38%;
+  --md-accent: 0 0% 11%;
+  --md-accent-foreground: 0 0% 98%;
+  --md-destructive: 359 100% 61%;
+  --md-destructive-foreground: 0 0% 100%;
+  --md-border: 0 0% 11%;
+  --md-input: 0 0% 11%;
+  --md-ring: 240 4.9% 83.9%;
+}
+
+/* Preflight is off (workspace.css owns the reset). Restore just the border
+   defaults so shadcn `border` utilities render — scoped so it never strips
+   borders the baseline CSS sets via shorthand. */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-width: 0;
+    border-style: solid;
+    border-color: hsl(var(--md-border));
+  }
+}
