@@ -1,4 +1,4 @@
-/* Observable Intuition Login — midday palette: warm-cream surfaces, ink button, no colour accent. */
+/* Observable Intuition Login — split-screen, sage palette. Ported from design bundle. */
 
 .l-page {
   display: grid;
@@ -28,12 +28,12 @@
   gap: 10px; margin-bottom: 8px; align-self: flex-start;
 }
 .l-mark {
-  width: 26px; height: 26px; border-radius: 0;
+  width: 26px; height: 26px; border-radius: 5px;
   background: var(--accent);
   display: grid; place-items: center;
 }
 .l-mark-dot {
-  width: 10px; height: 10px; border-radius: 0;
+  width: 10px; height: 10px; border-radius: 3px;
   background: transparent;
   border: 1.5px solid rgba(255, 255, 255, 0.95);
 }
@@ -62,7 +62,7 @@
   padding: 4px;
   background: var(--panel-2);
   border: 1px solid var(--hairline);
-  border-radius: 0;
+  border-radius: 5px;
   margin-top: 4px;
 }
 .l-tabs button {
@@ -70,7 +70,7 @@
   padding: 9px 0;
   font-size: 13px; font-weight: 500;
   color: var(--text-dim);
-  border-radius: 0;
+  border-radius: 5px;
   transition: color 180ms;
 }
 .l-tabs button.active { color: var(--text); }
@@ -79,7 +79,7 @@
   top: 4px; left: 4px;
   width: calc(50% - 4px); height: calc(100% - 8px);
   background: #fff;
-  border-radius: 0;
+  border-radius: 5px;
   box-shadow: 0 1px 2px rgba(17, 17, 20, 0.04), 0 2px 8px rgba(17, 17, 20, 0.06);
   transition: transform 240ms cubic-bezier(0.4, 0.1, 0.2, 1);
 }
@@ -91,7 +91,7 @@
   padding: 10px 14px 12px;
   background: var(--panel-2);
   border: 1px solid var(--hairline);
-  border-radius: 0;
+  border-radius: 5px;
   transition: border-color 180ms, background 180ms, box-shadow 180ms;
 }
 .l-field.focus {
@@ -121,7 +121,7 @@
 .l-eye {
   width: 28px; height: 28px;
   display: grid; place-items: center;
-  border-radius: 0;
+  border-radius: 5px;
   color: var(--text-mute);
   transition: background 150ms, color 150ms;
 }
@@ -129,7 +129,7 @@
 
 .l-alert {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 10px 13px; border-radius: 0;
+  padding: 10px 13px; border-radius: 5px;
   font-size: 13px; line-height: 1.5;
   animation: l-slide-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
@@ -149,8 +149,8 @@
 .l-alert.err .l-alert-dot { background: oklch(0.58 0.17 25); }
 .l-alert.ok {
   background: var(--accent-soft);
-  color: oklch(0.42 0 0);
-  border: 1px solid oklch(0.58 0 0 / 0.2);
+  color: oklch(0.42 0.07 266);
+  border: 1px solid oklch(0.58 0.07 266 / 0.2);
 }
 .l-alert.ok .l-alert-dot { background: var(--accent); }
 
@@ -166,7 +166,7 @@
 .l-check input { display: none; }
 .l-check-box {
   width: 16px; height: 16px;
-  border-radius: 0;
+  border-radius: 5px;
   border: 1px solid var(--hairline-strong);
   background: #fff;
   position: relative;
@@ -195,9 +195,9 @@
 .l-submit {
   margin-top: 4px;
   height: 44px;
-  border-radius: 0;
+  border-radius: 5px;
   background: var(--text);
-  color: var(--bg-0);
+  color: var(--on-dark, #fff);
   font-size: 14px; font-weight: 500;
   letter-spacing: -0.005em;
   display: inline-flex; align-items: center; justify-content: center;
@@ -218,7 +218,7 @@
 
 .l-google {
   height: 44px;
-  border-radius: 0;
+  border-radius: 5px;
   background: #fff; color: var(--text);
   border: 1px solid var(--hairline-strong);
   font-size: 14px; font-weight: 500;
@@ -249,7 +249,7 @@
 .l-right {
   position: relative; overflow: hidden;
   background:
-    radial-gradient(120% 90% at 50% 0%, oklch(0.28 0 0), transparent 60%),
+    radial-gradient(120% 90% at 50% 0%, oklch(0.28 0.05 266), transparent 60%),
     linear-gradient(180deg, #16161c 0%, #0d0d11 100%);
   color: #fff;
   display: flex; align-items: center; justify-content: center;
@@ -268,7 +268,7 @@
 }
 .l-blob-2 {
   width: 360px; height: 360px;
-  background: oklch(0.5 0 0);
+  background: oklch(0.5 0.10 266);
   bottom: -120px; right: -80px;
 }
 .l-blob-3 { display: none; }
@@ -291,7 +291,7 @@
   position: relative;
   width: 96px; height: 96px; border-radius: 20px;
   background: var(--accent);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 12px 40px oklch(0.3 0 0 / 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 12px 40px oklch(0.3 0.07 266 / 0.4);
   display: grid; place-items: center;
   z-index: 3;
 }
@@ -319,7 +319,7 @@
   color: oklch(1 0 0 / 0.94);
   margin: 0; text-wrap: balance;
 }
-.l-stage-caption h2 em { font-style: italic; color: oklch(0.8 0 0); }
+.l-stage-caption h2 em { font-style: italic; color: oklch(0.8 0.09 266); }
 
 @media (max-width: 960px) {
   .l-page { grid-template-columns: 1fr; }
