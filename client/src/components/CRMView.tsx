@@ -12,7 +12,6 @@ import type {
 } from "@app/shared";
 import { api } from "../lib/api";
 import { useModal } from "./Modal";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/components/table";
 import { initials, avatarGrad } from "../design/mockProspects";
 import {
   IconList, IconSheet, IconUpload, IconNewChat, IconClose, IconCheck, IconChevD, IconArrowR,
@@ -3166,119 +3165,104 @@ function TableView({
 
   return (
     <div className="tbl-wrap" style={{ "--rh": `${effectiveRowH}px` } as React.CSSProperties}>
-      {/* midday's real Table component drives the CRM grid. renderCell + the
-          per-type cell editors are unchanged, so dynamic columns and inline
-          editing survive — only the table shell is midday's now. */}
-      <Table className="min-w-full" style={{ tableLayout: "fixed" }}>
-        <TableHeader className="sticky top-0 z-10 bg-background">
-          <TableRow className="hover:bg-transparent">
-            {visibleCols.map((c) => (
-              <TableHead
-                key={c.id}
-                style={{ width: c.width ?? "200px" }}
-                className={isNumeric(c) ? "text-center" : ""}
-              >
-                <HeaderCell
-                  col={c}
-                  onChange={replaceCol}
-                  onDelete={() => deleteCol(c.id)}
-                  onDragStart={onHeaderDragStart}
-                  onDragOver={onHeaderDragOver}
-                  onDrop={onHeaderDrop}
-                  dropEdge={dropTarget?.id === c.id ? dropTarget.edge : null}
-                  onResizeStart={startResize}
-                />
-              </TableHead>
-            ))}
-            <TableHead style={{ width: 48 }}>
-              <AddColumnButton onAdd={addCol} />
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {(() => {
-            const renderRow = (p: CrmContact, i: number) => (
-              <TableRow
-                key={p.id}
-                className="group cursor-pointer hover:bg-accent/60"
-                style={{ height: effectiveRowH }}
-                onClick={() => onOpen(p)}
-              >
-                {visibleCols.map((c) => (
-                  <TableCell
-                    key={c.id}
-                    style={{ width: c.width ?? "200px" }}
-                    className={isNumeric(c) ? "text-center tabular-nums" : ""}
-                  >
-                    <div className="flex items-center gap-2 min-w-0 w-full">
-                      {renderCell(c, p, i)}
-                    </div>
-                  </TableCell>
-                ))}
-                <TableCell />
-              </TableRow>
+      <div className="tbl">
+        <div className="tbl-row tbl-head" style={{ gridTemplateColumns: gridTemplate }}>
+          {visibleCols.map((c) => (
+            <div key={c.id} className={`tbl-cell hdr${isNumeric(c) ? " c-num" : ""}`}>
+              <HeaderCell
+                col={c}
+                onChange={replaceCol}
+                onDelete={() => deleteCol(c.id)}
+                onDragStart={onHeaderDragStart}
+                onDragOver={onHeaderDragOver}
+                onDrop={onHeaderDrop}
+                dropEdge={dropTarget?.id === c.id ? dropTarget.edge : null}
+                onResizeStart={startResize}
+              />
+            </div>
+          ))}
+          <div className="tbl-cell hdr">
+            <AddColumnButton onAdd={addCol} />
+          </div>
+          {/* Trailing spacer cell consumes 1fr of leftover wrap width so
+              the header strip extends across the full canvas. */}
+          <div className="tbl-cell hdr tbl-tail" />
+          {/* Row-height drag handle — sits on the header's bottom edge,
+              spans the full row width, drag down/up to set the
+              board-wide row height. */}
+          <span className="row-resize" onPointerDown={startRowResize} title="Drag to resize rows" />
+        </div>
+        {(() => {
+          const renderRow = (p: CrmContact, i: number) => (
+            <div
+              key={p.id}
+              className="tbl-row"
+              onClick={() => onOpen(p)}
+              style={{ gridTemplateColumns: gridTemplate }}
+            >
+              {visibleCols.map((c) => (
+                <div key={c.id} className={`tbl-cell${isNumeric(c) ? " c-num" : ""}${c.id === "person" ? " c-name" : ""}`}>
+                  {renderCell(c, p, i)}
+                </div>
+              ))}
+              <div className="tbl-cell" />
+              <div className="tbl-cell tbl-tail" />
+            </div>
+          );
+          if (!groupByCompany) return contacts.map(renderRow);
+          let runningIdx = 0;
+          return companyGroups.map((group) => {
+            const collapsed = collapsedGroups.has(group.key);
+            return (
+              <Fragment key={group.key}>
+                <div
+                  className={`tbl-group-head${group.isStale ? " tbl-group-stale" : ""}`}
+                  onClick={() => toggleGroup(group.key)}
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={!collapsed}
+                >
+                  <span className="tgh-chev">{collapsed ? "▶" : "▼"}</span>
+                  <span className="tgh-name">{group.label}</span>
+                  <span className="tgh-count">
+                    {group.contacts.length} {group.contacts.length === 1 ? "contact" : "contacts"}
+                  </span>
+                  {group.lastTouchAt && group.lastTouchDirection && (
+                    <span className="tgh-touch">
+                      <span className={`touch-arrow ${group.lastTouchDirection === "out" ? "touch-out-arrow" : "touch-in-arrow"}`}>
+                        {group.lastTouchDirection === "out" ? "↗" : "↘"}
+                      </span>
+                      {formatRelativeTime(group.lastTouchAt)}
+                    </span>
+                  )}
+                  {group.warmestStageLabel && (
+                    <span
+                      className="tgh-stage tbl-stage"
+                      style={{
+                        "--stage-color": group.warmestStageColor ?? "var(--text-mute)",
+                        "--stage-tint": tintFor(group.warmestStageColor ?? "oklch(0.7 0.04 280)"),
+                      } as React.CSSProperties}
+                    >
+                      {group.warmestStageLabel}
+                    </span>
+                  )}
+                  {group.isStale && <span className="tgh-stale-pill">Needs follow-up</span>}
+                </div>
+                {!collapsed && group.contacts.map((p) => {
+                  const row = renderRow(p, runningIdx);
+                  runningIdx += 1;
+                  return row;
+                })}
+              </Fragment>
             );
-            if (!groupByCompany) return contacts.map(renderRow);
-            let runningIdx = 0;
-            return companyGroups.map((group) => {
-              const collapsed = collapsedGroups.has(group.key);
-              return (
-                <Fragment key={group.key}>
-                  <TableRow
-                    className="tbl-group-head-row hover:bg-transparent"
-                    onClick={() => toggleGroup(group.key)}
-                    role="button"
-                    tabIndex={0}
-                    aria-expanded={!collapsed}
-                  >
-                    <TableCell colSpan={visibleCols.length + 1} className="!py-1.5">
-                      <div className={`tbl-group-head${group.isStale ? " tbl-group-stale" : ""}`}>
-                        <span className="tgh-chev">{collapsed ? "▶" : "▼"}</span>
-                        <span className="tgh-name">{group.label}</span>
-                        <span className="tgh-count">
-                          {group.contacts.length} {group.contacts.length === 1 ? "contact" : "contacts"}
-                        </span>
-                        {group.lastTouchAt && group.lastTouchDirection && (
-                          <span className="tgh-touch">
-                            <span className={`touch-arrow ${group.lastTouchDirection === "out" ? "touch-out-arrow" : "touch-in-arrow"}`}>
-                              {group.lastTouchDirection === "out" ? "↗" : "↘"}
-                            </span>
-                            {formatRelativeTime(group.lastTouchAt)}
-                          </span>
-                        )}
-                        {group.warmestStageLabel && (
-                          <span
-                            className="tgh-stage tbl-stage"
-                            style={{
-                              "--stage-color": group.warmestStageColor ?? "var(--text-mute)",
-                              "--stage-tint": tintFor(group.warmestStageColor ?? "oklch(0.7 0.04 280)"),
-                            } as React.CSSProperties}
-                          >
-                            {group.warmestStageLabel}
-                          </span>
-                        )}
-                        {group.isStale && <span className="tgh-stale-pill">Needs follow-up</span>}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                  {!collapsed && group.contacts.map((p) => {
-                    const row = renderRow(p, runningIdx);
-                    runningIdx += 1;
-                    return row;
-                  })}
-                </Fragment>
-              );
-            });
-          })()}
-          {contacts.length === 0 && (
-            <TableRow className="hover:bg-transparent">
-              <TableCell colSpan={visibleCols.length + 1} className="text-center text-muted-foreground py-10 text-sm">
-                No contacts yet. Click <strong>Import CSV</strong> to paste your spreadsheet, or <strong>Add contact</strong> to create one.
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+          });
+        })()}
+        {contacts.length === 0 && (
+          <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--text-mute)", fontSize: 13 }}>
+            No contacts yet. Click <strong>Import CSV</strong> to paste your spreadsheet, or <strong>Add contact</strong> to create one.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
