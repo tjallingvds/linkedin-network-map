@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./app/*"],
+      "@midday/ui/*": ["./app/components/midday/*"]
     }
   },
   "include": [
