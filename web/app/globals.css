@@ -1,0 +1,368 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ===========================================================================
+ * Design tokens — ported from midday's `@midday/ui` globals.
+ * Light is the default theme; the `.dark` block is kept so every token has a
+ * dark value if a toggle is ever added.
+ * ======================================================================== */
+
+@layer base {
+  :root {
+    /* Pure-white surfaces on a neutral grey scale — midday's warm beige
+     * (45 18% 96% cards, 40 10% 94% accent) is dropped for this app. */
+    --background: 0, 0%, 100%;
+    --foreground: 0, 0%, 5%;
+    --card: 0, 0%, 100%;
+    --card-foreground: 0, 0%, 5%;
+    --popover: 0, 0%, 100%;
+    --popover-foreground: 0, 0%, 5%;
+    --primary: 0, 0%, 7%;
+    --primary-foreground: 0, 0%, 100%;
+    --secondary: 240, 6%, 94%;
+    --secondary-foreground: 0, 0%, 7%;
+    --muted: 240, 6%, 94%;
+    --muted-foreground: 0, 0%, 40%;
+    --accent: 240, 10%, 97%;
+    --accent-foreground: 0, 0%, 7%;
+    --destructive: 357, 60%, 47%;
+    --destructive-foreground: 0, 0%, 100%;
+    --border: 240, 6%, 90%;
+    --input: 240, 6%, 90%;
+    --ring: 240, 98%, 41%;
+    --radius: 0.5rem;
+
+    /* Brand accent — the app's own blue (#0203d1 / #0202a3), carried over.
+     * The tint + ring stay as literal rgba because they are alpha values, not
+     * hsl triplets, so they're used via var() directly rather than hsl(var()). */
+    --brand: 240, 98%, 41%;
+    --brand-foreground: 0, 0%, 100%;
+    --brand-deep: 240, 98%, 32%;
+    --brand-soft: rgba(2, 3, 209, 0.08);
+    --brand-ring: rgba(2, 3, 209, 0.16);
+
+    /* Status roles. `-muted` is the tint background, `-foreground` is text
+     * sitting on the solid colour. */
+    --success: 150, 74%, 31%;
+    --success-foreground: 0, 0%, 100%;
+    --success-muted: 144, 45%, 93%;
+    --warning: 33, 100%, 32%;
+    --warning-foreground: 0, 0%, 100%;
+    --warning-muted: 38, 79%, 91%;
+    --danger: 357, 60%, 47%;
+    --danger-foreground: 0, 0%, 100%;
+    --danger-muted: 357, 71%, 94%;
+    --info: 212, 66%, 39%;
+    --info-foreground: 0, 0%, 100%;
+    --info-muted: 214, 54%, 92%;
+
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+    /* Chart colours (midday's set) */
+    --chart-grid-stroke: #e6e6e6;
+    --chart-axis-text: #707070;
+    --chart-reference-line-stroke: #e6e6e6;
+    --chart-reference-label: #707070;
+    --chart-actual-line: #000000;
+    --chart-forecast-line: #666666;
+    --chart-tooltip-cursor: #666666;
+    --chart-pattern-bg: white;
+    --chart-pattern-stroke: #707070;
+    --chart-bar-fill: #000000;
+    --chart-bar-fill-secondary: #6666664d;
+    --chart-gradient-start: #707070;
+    --chart-gradient-end: #000000;
+    --chart-line-secondary: #666666;
+
+    /* Categorical series, used by the graph canvases and recharts wrappers.
+     * Resolved to concrete colours because canvas libraries read these with
+     * getComputedStyle and cannot evaluate `hsl(var(--x))` themselves. */
+    --series-brand: #0203d1;
+    --series-1: #121212;
+    --series-2: #707070;
+    --series-3: #15894a;
+    --series-4: #a55a00;
+    --series-5: #2160a5;
+    --graph-node: #121212;
+    --graph-node-alt: #dcdad2;
+    --graph-edge: #c9c7bf;
+    --graph-label: #121212;
+    --graph-label-muted: #707070;
+    --graph-surface: #ffffff;
+
+    /* Knowledge-graph node types. Concrete values for the same reason as
+     * --series-*: cytoscape / vis / force-graph draw to canvas. */
+    --kg-activity: #0203d1;
+    --kg-decision: #c1313a;
+    --kg-object: #15894a;
+    --kg-value: #2160a5;
+    --kg-event: #a55a00;
+    --kg-state: #7c3aed;
+    --kg-neutral: #707070;
+  }
+
+  .dark {
+    --background: 0, 0%, 5%;
+    --foreground: 0 0% 98%;
+    --card: 0, 0%, 7%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0, 0%, 7%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 0, 0%, 7%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0, 0%, 11%;
+    --muted-foreground: 0, 0%, 38%;
+    --accent: 0, 0%, 11%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 359, 100%, 61%;
+    --destructive-foreground: 0, 0%, 100%;
+    --border: 0, 0%, 11%;
+    --input: 0, 0%, 11%;
+    --ring: 240, 90%, 70%;
+
+    --brand: 240, 90%, 66%;
+    --brand-foreground: 0, 0%, 100%;
+    --brand-deep: 240, 90%, 74%;
+    --brand-soft: rgba(90, 92, 240, 0.14);
+    --brand-ring: rgba(90, 92, 240, 0.26);
+
+    --success: 150, 55%, 45%;
+    --success-muted: 150, 30%, 12%;
+    --warning: 33, 85%, 55%;
+    --warning-muted: 33, 40%, 12%;
+    --danger: 357, 85%, 62%;
+    --danger-muted: 357, 40%, 13%;
+    --info: 212, 75%, 60%;
+    --info-muted: 212, 40%, 13%;
+
+    --chart-grid-stroke: #1d1d1d;
+    --chart-axis-text: #666666;
+    --chart-reference-line-stroke: #333333;
+    --chart-reference-label: #666666;
+    --chart-actual-line: #ffffff;
+    --chart-forecast-line: #999999;
+    --chart-tooltip-cursor: #999999;
+    --chart-pattern-bg: #0c0c0c;
+    --chart-pattern-stroke: #666666;
+    --chart-bar-fill: white;
+    --chart-bar-fill-secondary: #6666664d;
+    --chart-gradient-start: #666666;
+    --chart-gradient-end: #ffffff;
+    --chart-line-secondary: #999999;
+
+    --series-brand: #5a5cf0;
+    --series-1: #fafafa;
+    --series-2: #999999;
+    --series-3: #3ec27f;
+    --series-4: #e8a13c;
+    --series-5: #5b9bee;
+    --graph-node: #fafafa;
+    --graph-node-alt: #2a2a2a;
+    --graph-edge: #3a3a3a;
+    --graph-label: #fafafa;
+    --graph-label-muted: #999999;
+    --graph-surface: #0c0c0c;
+
+    --kg-activity: #5a5cf0;
+    --kg-decision: #e8555f;
+    --kg-object: #3ec27f;
+    --kg-value: #5b9bee;
+    --kg-event: #e8a13c;
+    --kg-state: #a279f5;
+    --kg-neutral: #999999;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans), system-ui, sans-serif;
+  }
+}
+
+/* ===========================================================================
+ * Utilities carried over from midday
+ * ======================================================================== */
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+[type="search"]::-webkit-search-cancel-button,
+[type="search"]::-webkit-search-decoration {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+@keyframes dialog-overlay-show {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dialog-overlay-hide {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes dialog-content-show {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes dialog-content-hide {
+  from {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.97);
+  }
+}
+
+.loading-ellipsis:after {
+  overflow: hidden;
+  display: inline-block;
+  vertical-align: bottom;
+  animation: ellipsis steps(4, end) 900ms infinite;
+  content: "\2026";
+  width: 0px;
+}
+
+@keyframes ellipsis {
+  to {
+    width: 1.25em;
+  }
+}
+
+/* Date picker */
+.rdp-tbody .rdp-button {
+  border-radius: 100%;
+}
+
+.aria-selected\:text-accent-foreground[aria-selected="true"] {
+  border-radius: 0px;
+}
+
+/* ===========================================================================
+ * Canvas zoom slider — range pseudo-elements have no utility equivalent, so
+ * the workflow canvas toolbar styles them here. `--pct` is set inline by the
+ * component to fill the track up to the thumb.
+ * ======================================================================== */
+
+.wf-zoom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 110px;
+  height: 18px;
+  background: transparent;
+  cursor: grab;
+  margin: 0 6px;
+  --pct: 0%;
+}
+.wf-zoom-slider:active {
+  cursor: grabbing;
+}
+.wf-zoom-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  background: linear-gradient(
+    to right,
+    hsl(var(--foreground)) 0 var(--pct),
+    hsl(var(--border)) var(--pct) 100%
+  );
+}
+.wf-zoom-slider::-moz-range-track {
+  height: 4px;
+  background: hsl(var(--border));
+}
+.wf-zoom-slider::-moz-range-progress {
+  height: 4px;
+  background: hsl(var(--foreground));
+}
+.wf-zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: hsl(var(--background));
+  margin-top: -4px;
+  border: 1px solid hsl(var(--foreground));
+  transition: transform 120ms ease;
+}
+.wf-zoom-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--foreground));
+  transition: transform 120ms ease;
+}
+.wf-zoom-slider:hover::-webkit-slider-thumb,
+.wf-zoom-slider:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+.wf-zoom-slider:hover::-moz-range-thumb,
+.wf-zoom-slider:active::-moz-range-thumb {
+  transform: scale(1.12);
+}
+.wf-zoom-slider:focus-visible {
+  outline: none;
+}
+
+/* ===========================================================================
+ * Scrollbars — thin and only visible on hover.
+ * ======================================================================== */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 160ms ease;
+}
+*:hover::-webkit-scrollbar-thumb,
+*:focus-within::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, hsl(var(--foreground)) 22%, transparent);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, hsl(var(--foreground)) 38%, transparent);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
