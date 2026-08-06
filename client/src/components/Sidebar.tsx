@@ -1,12 +1,11 @@
 /**
- * Sidebar — midday-style icon rail. Collapsed it is a 70px column of icons;
- * on hover it expands to 240px and reveals labels + the dynamic Boards /
- * Recent lists (midday's Item→children pattern). Ported from
- * midday-ai/midday's Sidebar + MainMenu onto this app's data + actions.
+ * Sidebar — collapsible, with the past-searches + CRM-boards lists and
+ * a live API-usage card at the bottom.
  */
 import { useEffect, useRef, useState } from "react";
-import { Icons } from "../ui/components/icons";
-import { cn } from "../ui/utils";
+import {
+  IconNewChat, IconSearch, IconSidebar, IconUsers, IconSparkle, IconClose, IconCheck,
+} from "../design/icons";
 import { useModal } from "./Modal";
 
 export interface NavEntry {
@@ -29,16 +28,19 @@ interface Props {
   onNewBoard?: () => void;
   savedSearches: NavEntry[];
   lists: NavEntry[];
-  collapsed?: boolean;
-  onToggleCollapse?: () => void;
-  usage?: UsageBucket[];
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  usage: UsageBucket[];
   onOpenSettings: () => void;
+  /** Signed-in user, shown at the foot of the sidebar; opens settings. */
   userInitials?: string;
   userEmail?: string;
+  /** Optional — when supplied, each saved-search row gets rename + delete hover actions. */
   onRenameSearch?: (id: string, title: string) => void | Promise<void>;
   onDeleteSearch?: (id: string) => void | Promise<void>;
   onDeleteBoard?: (id: string) => void | Promise<void>;
   onRenameBoard?: (id: string, title: string) => void | Promise<void>;
+  /** Drafted emails waiting for a human, across every board. */
   approvalCount?: number;
   onOpenApprovals?: () => void;
   approvalsActive?: boolean;
@@ -46,285 +48,167 @@ interface Props {
 
 export function Sidebar({
   activeNav, onSelect, onNewChat, onNewBoard, savedSearches, lists,
-  onOpenSettings, userInitials, userEmail,
+  collapsed, onToggleCollapse, usage, onOpenSettings, userInitials, userEmail,
   onRenameSearch, onDeleteSearch, onRenameBoard, onDeleteBoard,
   approvalCount = 0, onOpenApprovals, approvalsActive,
 }: Props) {
-  // Persistent pin state (toggled by the button) OR a transient hover expands
-  // the rail. Pinned open by default so labels are visible; the header button
-  // collapses it to a 70px icon rail, and hovering the rail peeks it open.
-  const [pinned, setPinned] = useState(true);
-  const [hovering, setHovering] = useState(false);
-  const expanded = pinned || hovering;
-
-  // Push the main content when the rail is PINNED open (240px offset); a
-  // transient hover just overlays (main stays at the 70px rail width). The
-  // shell reads this off <html data-rail> to set .main's margin-left.
-  useEffect(() => {
-    document.documentElement.dataset.rail = pinned ? "open" : "closed";
-    return () => { delete document.documentElement.dataset.rail; };
-  }, [pinned]);
-
   return (
-    <aside
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => setHovering(false)}
-      className={cn(
-        "md-rail fixed top-0 left-0 h-screen z-50 flex flex-col justify-between",
-        "bg-background border-r border-border overflow-hidden",
-        "transition-[width] duration-200 ease-out",
-        expanded ? "w-[240px]" : "w-[70px]",
-      )}
-    >
-      {/* Brand box — fixed 70px header: logo at the rail edge + collapse toggle. */}
-      <div className="relative h-[70px] shrink-0 flex items-center border-b border-border">
-        <div className="absolute left-[19px] flex items-center gap-3">
-          <LogoMark />
-          <span
-            className={cn(
-              "whitespace-nowrap text-sm font-medium text-foreground transition-opacity duration-200",
-              expanded ? "opacity-100" : "opacity-0",
-            )}
-          >
-            Observable Intuition
-          </span>
-        </div>
-        <button
-          onClick={() => setPinned((p) => !p)}
-          title={pinned ? "Collapse sidebar" : "Keep sidebar open"}
-          aria-label={pinned ? "Collapse sidebar" : "Keep sidebar open"}
-          className={cn(
-            "absolute right-[14px] w-7 h-7 grid place-items-center rounded-[4px]",
-            "text-muted-foreground hover:text-foreground hover:bg-accent transition-opacity duration-200",
-            expanded ? "opacity-100" : "opacity-0 pointer-events-none",
+    <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
+      {/* Sidebar header — single 54px row in both states so the divider
+          lines up with the topbar's bottom border across the whole app. */}
+      <div className="sidebar-header">
+        <div className="brand-l">
+          {!collapsed && (
+            <div className="brand-meta">
+              <span className="brand-name">Observable Intuition</span>
+              <span className="brand-sub">Workspace</span>
+            </div>
           )}
-        >
-          <Icons.Sidebar size={16} />
-        </button>
+        </div>
+        {!collapsed && (
+          <button className="icon-btn" title="Collapse sidebar" onClick={onToggleCollapse}>
+            <IconSidebar size={14} />
+          </button>
+        )}
       </div>
 
-      {/* Menu */}
-      <div className="flex-1 flex flex-col w-full pt-4 gap-1 overflow-y-auto scrollbar-hide">
-        {onOpenApprovals && (
-          <RailItem
-            icon={<Icons.Check size={20} />}
-            label="Need approval"
-            expanded={expanded}
-            active={!!approvalsActive}
-            badge={approvalCount > 0 ? approvalCount : undefined}
-            onClick={onOpenApprovals}
-          />
-        )}
+      <div className="sidebar-body">
+        {collapsed ? (
+          <>
+            <button className="icon-btn" title="Expand sidebar" onClick={onToggleCollapse}>
+              <IconSidebar size={14} />
+            </button>
+            <button
+              className="icon-btn"
+              style={{ background: "var(--text)", color: "var(--shell)" }}
+              title="New search"
+              onClick={onNewChat}
+            >
+              <IconNewChat size={14} />
+            </button>
+          </>
+        ) : (
+          <>
+            {/* Emails waiting on a human — the first thing in the sidebar,
+                because it's the one thing that blocks sending across every
+                board. New searches start from the Recent section's + button. */}
+            {onOpenApprovals && (
+              <div className="nav-section">
+                <div
+                  className={`nav-item nav-row ${approvalsActive ? "active" : ""}`}
+                  onClick={onOpenApprovals}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter") onOpenApprovals(); }}
+                  title="Emails waiting for your approval"
+                >
+                  <IconCheck size={13} />
+                  <span className="nav-row-label">Need approval</span>
+                  {approvalCount > 0 && <span className="count">{approvalCount}</span>}
+                </div>
+              </div>
+            )}
 
-        <RailItem
-          icon={<Icons.Search size={20} />}
-          label="New search"
-          expanded={expanded}
-          onClick={onNewChat}
-        />
-
-        <div className="my-2 mx-[15px] border-b border-border" />
-
-        <RailGroup
-          icon={<Icons.Customers size={20} />}
-          label="Boards"
-          expanded={expanded}
-          onAdd={onNewBoard}
-          addTitle="New board"
-          emptyMsg={lists.length === 0 ? "Create your first board" : undefined}
-        >
-          {lists.map((b) => (
-            <ChildRow
-              key={b.id}
-              entry={b}
-              active={activeNav === b.id}
-              expanded={expanded}
+            {/* Boards first — the CRM is the home base. */}
+            <NavSection
+              label="Boards"
+              items={lists}
+              icon={<IconUsers size={13} />}
+              activeNav={activeNav}
               onSelect={onSelect}
+              emptyMsg={lists.length === 0 ? "Create your first board" : undefined}
               onRename={onRenameBoard}
               onDelete={onDeleteBoard}
+              onAdd={onNewBoard}
+              addTitle="New board"
             />
-          ))}
-        </RailGroup>
 
-        <RailGroup
-          icon={<Icons.History size={20} />}
-          label="Recent"
-          expanded={expanded}
-          onAdd={onNewChat}
-          addTitle="New search"
-          emptyMsg={savedSearches.length === 0 ? "Your searches appear here" : undefined}
-        >
-          {savedSearches.map((s) => (
-            <ChildRow
-              key={s.id}
-              entry={s}
-              active={activeNav === s.id}
-              expanded={expanded}
+            <div className="nav-divider" />
+
+            {/* Search history, demoted below the boards and scrollable. */}
+            <NavSection
+              label="Recent"
+              items={savedSearches}
+              icon={null}
+              activeNav={activeNav}
               onSelect={onSelect}
+              emptyMsg={savedSearches.length === 0 ? "Your searches appear here" : undefined}
               onRename={onRenameSearch}
               onDelete={onDeleteSearch}
+              onAdd={onNewChat}
+              addTitle="New search"
+              scrollable
             />
-          ))}
-        </RailGroup>
-      </div>
 
-      {/* Account — pinned bottom */}
-      <div className="shrink-0 w-full border-t border-border">
-        <button
-          onClick={onOpenSettings}
-          title="Settings and API keys"
-          className="group relative flex items-center h-[52px] w-full"
-        >
-          <span className="absolute left-[17px] w-9 h-9 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px] font-medium">
-            {userInitials || "··"}
-          </span>
-          <span
-            className={cn(
-              "absolute left-[62px] right-3 flex flex-col items-start text-left transition-opacity duration-200",
-              expanded ? "opacity-100" : "opacity-0 pointer-events-none",
-            )}
-          >
-            <span className="text-[13px] text-foreground truncate max-w-[150px]">
-              {userEmail ?? "Your account"}
-            </span>
-            <span className="text-[11px] text-muted-foreground">Settings & API keys</span>
-          </span>
-        </button>
+            <div className="nav-divider" />
+
+            <div className="sidebar-spacer" />
+
+            <ProfileButton initials={userInitials} email={userEmail} onOpen={onOpenSettings} />
+          </>
+        )}
       </div>
     </aside>
   );
 }
 
-/* ── Observable Intuition logo — a ring of 16 vertical bars, taller on the
-      horizontal flanks, shorter top/bottom. Recreated as SVG from the uploaded
-      mark so it stays crisp at any size and inherits the current text colour. */
-function LogoMark() {
-  // Precomputed bar geometry: 16 points around a circle (r≈27, centre 50,50);
-  // each bar is a vertical rounded rect whose height tracks |cos(angle)|.
-  const bars = [
-    [74.9, 41.0, 18.0], [72.8, 51.7, 17.2], [67.0, 61.5, 15.1], [58.2, 69.0, 11.8],
-    [47.9, 73.0, 8.0], [37.6, 69.0, 11.8], [28.8, 61.5, 15.1], [23.0, 51.7, 17.2],
-    [20.9, 41.0, 18.0], [23.0, 31.1, 17.2], [28.8, 23.4, 15.1], [37.6, 19.2, 11.8],
-    [47.9, 19.0, 8.0], [58.2, 19.2, 11.8], [67.0, 23.4, 15.1], [72.8, 31.1, 17.2],
-  ] as const;
-  return (
-    <svg viewBox="0 0 100 100" width="24" height="24" className="shrink-0 text-foreground" aria-label="Observable Intuition" role="img">
-      {bars.map(([x, y, h], i) => (
-        <rect key={i} x={x} y={y} width="4.2" height={h} rx="1.6" fill="currentColor" />
-      ))}
-    </svg>
-  );
-}
+// ---------- helpers ----------
 
-/* ── a single fixed rail item (icon + label, midday active pill) ── */
-function RailItem({
-  icon, label, expanded, active, badge, onClick,
+function NavSection({
+  label, items, icon, activeNav, onSelect, emptyMsg, onRename, onDelete, onAdd, addTitle, scrollable,
 }: {
-  icon: React.ReactNode;
   label: string;
-  expanded: boolean;
-  active?: boolean;
-  badge?: number;
-  onClick?: () => void;
-}) {
-  return (
-    <button onClick={onClick} title={label} className="group relative block h-[40px] w-full">
-      {/* expanding active/hover pill */}
-      <div
-        className={cn(
-          "absolute top-0 left-[15px] h-[40px] border border-transparent",
-          "transition-all duration-200 ease-out",
-          "group-hover:bg-accent",
-          active && "bg-accent border-border",
-          expanded ? "w-[calc(100%-30px)]" : "w-[40px]",
-        )}
-      />
-      <div
-        className={cn(
-          "absolute top-0 left-[15px] w-[40px] h-[40px] flex items-center justify-center pointer-events-none",
-          active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
-        )}
-      >
-        {icon}
-      </div>
-      {expanded && (
-        <div className="absolute top-0 left-[55px] right-[10px] h-[40px] flex items-center pointer-events-none">
-          <span
-            className={cn(
-              "text-sm font-medium whitespace-nowrap overflow-hidden",
-              active ? "text-foreground" : "text-muted-foreground group-hover:text-foreground",
-            )}
-          >
-            {label}
-          </span>
-          {badge !== undefined && (
-            <span className="ml-auto min-w-[18px] h-[18px] px-1 grid place-items-center rounded-full bg-primary text-primary-foreground text-[10px] font-medium">
-              {badge}
-            </span>
-          )}
-        </div>
-      )}
-    </button>
-  );
-}
-
-/* ── a rail group: an icon header whose children (dynamic rows) reveal
-      when the rail is expanded — midday's Item→children pattern ── */
-function RailGroup({
-  icon, label, expanded, onAdd, addTitle, emptyMsg, children,
-}: {
+  items: NavEntry[];
   icon: React.ReactNode;
-  label: string;
-  expanded: boolean;
+  activeNav: string;
+  onSelect: (id: string) => void;
+  emptyMsg?: string;
+  onRename?: (id: string, title: string) => void | Promise<void>;
+  onDelete?: (id: string) => void | Promise<void>;
   onAdd?: () => void;
   addTitle?: string;
-  emptyMsg?: string;
-  children: React.ReactNode;
+  /** When true, the items list scrolls internally (capped height) so long
+   *  lists don't push everything below (CRM boards, usage) out of view. */
+  scrollable?: boolean;
 }) {
+  const rows =
+    items.length === 0 && emptyMsg ? (
+      <div style={{ padding: "6px 10px", fontSize: 11.5, color: "var(--text-mute)" }}>{emptyMsg}</div>
+    ) : (
+      items.map((s) => (
+        <NavRow
+          key={s.id}
+          entry={s}
+          icon={icon}
+          active={activeNav === s.id}
+          onSelect={onSelect}
+          onRename={onRename}
+          onDelete={onDelete}
+        />
+      ))
+    );
+
   return (
-    <div className="group/section">
-      <div className="relative h-[40px] w-full">
-        <div className="absolute top-0 left-[15px] w-[40px] h-[40px] flex items-center justify-center text-muted-foreground pointer-events-none">
-          {icon}
-        </div>
-        {expanded && (
-          <div className="absolute top-0 left-[55px] right-[12px] h-[40px] flex items-center">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              {label}
-            </span>
-            {onAdd && (
-              <button
-                onClick={onAdd}
-                title={addTitle}
-                className="ml-auto w-6 h-6 grid place-items-center rounded-[4px] text-muted-foreground hover:text-foreground hover:bg-accent"
-              >
-                <Icons.Add size={16} />
-              </button>
-            )}
-          </div>
+    <div className="nav-section">
+      <div className="nav-label">
+        <span>{label}</span>
+        {onAdd && (
+          <button className="nav-add" title={addTitle ?? `New ${label.toLowerCase()}`} onClick={onAdd}>
+            <PlusIcon />
+          </button>
         )}
       </div>
-
-      {expanded && (
-        <div className="flex flex-col pb-1">
-          {emptyMsg ? (
-            <div className="ml-[35px] mr-[15px] pl-3 py-1 text-xs text-muted-foreground">{emptyMsg}</div>
-          ) : (
-            children
-          )}
-        </div>
-      )}
+      {scrollable ? <div className="nav-scroll">{rows}</div> : rows}
     </div>
   );
 }
 
-/* ── a dynamic board / search row (rename + delete on hover) ── */
-function ChildRow({
-  entry, active, expanded, onSelect, onRename, onDelete,
+function NavRow({
+  entry, icon, active, onSelect, onRename, onDelete,
 }: {
   entry: NavEntry;
+  icon: React.ReactNode;
   active: boolean;
-  expanded: boolean;
   onSelect: (id: string) => void;
   onRename?: (id: string, title: string) => void | Promise<void>;
   onDelete?: (id: string) => void | Promise<void>;
@@ -340,14 +224,17 @@ function ChildRow({
     const next = value.trim();
     setRenaming(false);
     if (!next || next === entry.label) { setValue(entry.label); return; }
-    try { await onRename?.(entry.id, next); } catch { setValue(entry.label); }
+    try { await onRename?.(entry.id, next); }
+    catch { setValue(entry.label); }
   };
 
   if (renaming) {
     return (
-      <div className="ml-[35px] mr-[15px] border-l border-border pl-3 h-[32px] flex items-center">
+      <div className={`nav-item ${active ? "active" : ""}`}>
+        {icon}
         <input
           ref={inputRef}
+          className="nav-rename-input"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onBlur={commit}
@@ -355,7 +242,7 @@ function ChildRow({
             if (e.key === "Enter") commit();
             else if (e.key === "Escape") { setValue(entry.label); setRenaming(false); }
           }}
-          className="w-full bg-transparent text-xs text-foreground outline-none"
+          onClick={(e) => e.stopPropagation()}
         />
       </div>
     );
@@ -363,36 +250,28 @@ function ChildRow({
 
   return (
     <div
+      className={`nav-item nav-row ${active ? "active" : ""}`}
+      onClick={() => onSelect(entry.id)}
       role="button"
       tabIndex={0}
-      onClick={() => onSelect(entry.id)}
       onKeyDown={(e) => { if (e.key === "Enter") onSelect(entry.id); }}
-      className="group/child ml-[35px] mr-[15px] border-l border-border pl-3 h-[32px] flex items-center cursor-pointer"
     >
-      <span
-        className={cn(
-          "text-xs font-medium truncate transition-colors",
-          active ? "text-foreground" : "text-muted-foreground group-hover/child:text-foreground",
-        )}
-      >
-        {entry.label}
-      </span>
-      {expanded && (onRename || onDelete) && (
-        <div
-          className="ml-auto flex items-center gap-1 opacity-0 group-hover/child:opacity-100"
-          onClick={(e) => e.stopPropagation()}
-        >
+      {icon}
+      <span className="nav-row-label">{entry.label}</span>
+      {(onRename || onDelete) && (
+        <div className="nav-row-actions" onClick={(e) => e.stopPropagation()}>
           {onRename && (
             <button
+              className="nav-row-action"
               title="Rename"
               onClick={(e) => { e.stopPropagation(); setRenaming(true); }}
-              className="w-5 h-5 grid place-items-center rounded-[4px] text-muted-foreground hover:text-foreground hover:bg-accent"
             >
               <PencilIcon />
             </button>
           )}
           {onDelete && (
             <button
+              className="nav-row-action danger"
               title="Delete"
               onClick={async (e) => {
                 e.stopPropagation();
@@ -404,16 +283,13 @@ function ChildRow({
                 });
                 if (ok) onDelete(entry.id);
               }}
-              className="w-5 h-5 grid place-items-center rounded-[4px] text-muted-foreground hover:text-destructive hover:bg-accent"
             >
-              <Icons.Close size={12} />
+              <IconClose size={11} />
             </button>
           )}
         </div>
       )}
-      {entry.count > 0 && !expanded && (
-        <span className="ml-auto text-[10px] text-muted-foreground">{entry.count}</span>
-      )}
+      {entry.count > 0 && <span className="count">{entry.count}</span>}
     </div>
   );
 }
@@ -423,5 +299,31 @@ function PencilIcon() {
     <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12.2 2.8a1.8 1.8 0 1 1 2.6 2.6L6 14.2l-3.5.9.9-3.5 8.8-8.8z" />
     </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M8 3v10M3 8h10" />
+    </svg>
+  );
+}
+
+/**
+ * The signed-in user, at the foot of the sidebar. Opens the same settings
+ * drawer the topbar avatar did — it just lives somewhere findable now.
+ */
+function ProfileButton({ initials, email, onOpen }: {
+  initials?: string; email?: string; onOpen: () => void;
+}) {
+  return (
+    <button className="nav-profile" onClick={onOpen} title="Settings and API keys">
+      <span className="nav-profile-avatar">{initials || "··"}</span>
+      <span className="nav-profile-text">
+        <span className="nav-profile-name">{email ?? "Your account"}</span>
+        <span className="nav-profile-sub">Settings and API keys</span>
+      </span>
+    </button>
   );
 }
