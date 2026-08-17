@@ -878,6 +878,7 @@ Rules:
 - Extract EXACT company names mentioned as targets. Do not add companies not named in the brief.
 - COMPANY NAMES CAN BE ORDINARY WORDS. Many real companies are spelled as common English words or adjectives — Wise, Stripe, Block, Brex, Ramp, Monzo, Revolut, Apple, Meta, Mercury, Plaid, Notion, Linear, Figma. When the brief references such a word as an organisation, extract it as a firm even when it is lowercase or reads like an adjective. Signals that a word is the target COMPANY (not a description): it follows "at", "from", "@", "with"; it is possessive ("X's head of…"); or it sits directly before a role noun ("the X Head of Y", "X CTO"). Example: "who is the wise Head of TGS" → firms: ["Wise"] (Wise is the fintech, NOT the adjective "wise"). Example: "find the block VP of risk" → firms: ["Block"].
 - WHO-IS / SINGLE-TARGET QUESTIONS: a question like "who is the <role> at <Company>" or "who runs <function> at <Company>" names exactly one target firm — always populate "firms" with that company. Never return empty firms when a company is identifiable in the brief.
+- PLATFORM NAMES ARE ALSO EMPLOYERS. LinkedIn, Meta, Google, Microsoft, X/Twitter, Apple and Amazon are real companies that employ people, and this tool searches LinkedIn — so "at LinkedIn" is ambiguous. Resolve it by grammar, not by the tool: after "at"/"from"/"@"/"with", or possessive ("LinkedIn's Head of X"), the word is the EMPLOYER → put it in "firms". Only treat it as the platform when it describes WHERE TO LOOK ("search on LinkedIn", "find their LinkedIn profile", "people on LinkedIn who…"). Example: "ai transformation leads at linkedin" → firms: ["LinkedIn"] (people EMPLOYED BY LinkedIn). Example: "find AI leads on LinkedIn" → firms: [] (LinkedIn is the search surface).
 - titles = SHORT searchable keywords (≤4 words each), not verbose verbatim titles. Keep unfamiliar acronyms or internal team names (e.g. "TGS") verbatim in titles — do NOT expand them into guesses like "AI" or "Technology"; if you genuinely cannot tell what a role token means, keep it as-is rather than substituting a broader function.
 - archetypes: if the brief numbers or names role categories (e.g. "1. <archetype name>", "Archetype 2: <archetype name>"), capture each as a separate entry WITH its disambiguation rules and exclusions. When the brief is a long ICP/company description rather than a role list, derive archetypes from the PERSON the user actually wants to reach — e.g. a bullet like "they have hired a Head of AI / Enterprise Head of AI / Head of AI Transformation" means the archetypes are those job titles. Do NOT leave archetypes empty just because the doc is prose.
 - antiPatterns: capture ONLY explicit PERSON/ROLE-level exclusions — clauses that tell you which kind of PERSON to reject ("exclude RPA developers", "no sales reps", "not customer-facing roles", "avoid junior engineers"). A valid anti-pattern names a role/job-family to drop.
@@ -897,8 +898,30 @@ Return ONLY the JSON object.`,
       { maxTokens: 3000, userId, userKeys },
     );
     const employmentIntent: "current" | "past" = parsed.employmentIntent === "past" ? "past" : "current";
+
+    // Deterministic backstop for the platform-name collision. The extractor
+    // still sometimes reads "at LinkedIn" as "on LinkedIn" — and because every
+    // query is already domain-restricted to linkedin.com, that firm token
+    // becomes invisible: the target-firm gate downstream sees an empty firm
+    // list, waves everyone through, and the search returns whoever holds the
+    // title ANYWHERE (the "why is it all banks?" failure). If the brief puts a
+    // platform company in employer position and no firms came back, add it.
+    const firms = parsed.firms ?? [];
+    if (firms.length === 0) {
+      const PLATFORMS = ["LinkedIn", "Meta", "Google", "Microsoft", "Apple", "Amazon", "Netflix", "Uber", "Airbnb"];
+      for (const name of PLATFORMS) {
+        // Employer position only: "at/from/@ <Name>" or "<Name>'s <role>".
+        const re = new RegExp(String.raw`(?:\b(?:at|from)\s+|@\s*)${name}\b|\b${name}(?:'s|’s)\s`, "i");
+        if (re.test(brief)) {
+          console.log(`[find] recovered platform employer from brief: ${name}`);
+          firms.push(name);
+          break;
+        }
+      }
+    }
+
     return {
-      firms: parsed.firms ?? [],
+      firms,
       titles: parsed.titles ?? [],
       excludeFirms: parsed.excludeFirms ?? [],
       excludeTitles: parsed.excludeTitles ?? [],
@@ -1897,6 +1920,8 @@ QUERY FORMAT — every query MUST name at least one specific company from the br
 
 Use the EXACT firm names from the brief. Do NOT substitute well-known firms from the same industry that the brief did not list.
 
+TARGET FIRM IS LINKEDIN ITSELF — these searches are already restricted to linkedin.com, so a bare "LinkedIn" token is invisible noise and returns people at every OTHER company. When LinkedIn (or another platform whose own domain is being searched) is a target firm, bind the employer as a quoted phrase instead: prefer "\"<Title>\" \"at LinkedIn\"", "\"<Title>\" \"LinkedIn\" Sunnyvale", or "\"<Title>\" \"LinkedIn Corporation\"". Never emit the unquoted form "<Title> LinkedIn".
+
 SENIORITY FLOOR — if the filters mention "SENIORITY FLOOR" (minimum bar like "Managing Director or above"), bias every query toward at-or-above titles. The floor is a hard signal: spending a query on a title below it is wasted budget because downstream gates will drop those candidates.
   - Replace generic role keywords with the at-or-above synonym set for the stated floor. Examples:
       • "MD or above" → use "MD" OR "Managing Director" OR "Partner" OR "Head of" OR "Global Head" OR "Chief" OR "President" OR "Founder" OR "CEO" OR "Chair". DO NOT use "VP", "SVP", "EVP", "Director", "Principal", "Lead" — those are below the floor for most firms.
@@ -1983,6 +2008,19 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
     searchBudget.remaining--;
     return tavilySearch(q, opts);
   };
+  // When a TARGET FIRM is the very domain being searched (i.e. the user asked
+  // for people employed BY LinkedIn), the restricted pass below always returns
+  // a full page — just mostly people at OTHER companies — so the dry-query
+  // fallback never fires, and after the target-firm gate rejects them the
+  // search yields almost nobody. For that case only, run the open-web pass too
+  // and merge: pages like "LinkedIn leadership team" name the actual employees.
+  // Matches "LinkedIn", "linked in", "LinkedIn Corporation" — but not a
+  // different company that merely contains the word (e.g. "LinkedIn Learning
+  // Partner Ltd" is still LinkedIn-ish, so a prefix match is the right bar).
+  const platformIsTargetFirm = (parsed?.firms ?? []).some((f) =>
+    /^linked\s*in\b/i.test(f.trim()),
+  );
+
   const runQuery = async (sq: string): Promise<QueryOutcome> => {
     const cleanQuery = sq.replace(/\s*site:\S+\s*/gi, " ").trim();
     try {
@@ -1997,6 +2035,21 @@ Return {"queries": [...]} — exactly ${numQueries} queries, each materially dif
         userKeys,
       });
       if (linked === null) return { results: [], error: null }; // budget spent
+      if (linked.length > 0 && platformIsTargetFirm) {
+        const alsoOpen = await budgetedSearch(`${cleanQuery} LinkedIn employee`, {
+          depth: "basic",
+          maxResults: maxPerQuery,
+          rawContent: true,
+          userId,
+          userKeys,
+        });
+        if (!alsoOpen?.length) return { results: linked, error: null };
+        const seenUrl = new Set(linked.map((r) => r.url));
+        return {
+          results: [...linked, ...alsoOpen.filter((r) => !seenUrl.has(r.url))],
+          error: null,
+        };
+      }
       if (linked.length > 0) return { results: linked, error: null };
       // 2. Open-web fallback when the LinkedIn-restricted call came up dry.
       // BASIC depth (1 credit) not advanced (2): this is a last-chance attempt
