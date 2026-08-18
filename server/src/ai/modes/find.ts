@@ -25,6 +25,7 @@
  */
 import type { AiProvider, Company, CompletionResult, Prospect, ProspectSignal } from "@app/shared";
 import { env } from "../../env.js";
+import { apolloConfigured, apolloPeopleSearch } from "../../integrations/apollo.js";
 import { aiJson } from "../json.js";
 import {
   tavilySearch, type TavilyResult,
@@ -506,6 +507,14 @@ export async function runFind(
   // for MORE people per firm (depth) after breadth is done and only stops once
   // this hits 2 — genuine exhaustion, not one unlucky focused pass.
   let dryRounds = 0;
+  // Don't declare defeat on a thin result set. A count-driven brief used to
+  // stop the instant one round came back empty — so a single-firm search
+  // ("leads at LinkedIn") gave up after ~10s with nothing, even though the
+  // budget and rounds were barely touched. Keep digging until we have at
+  // least this many people, tolerating consecutive dry rounds, and only then
+  // let the normal exhaustion rules end the run.
+  const MIN_RESULTS = 10;
+  const MAX_DRY_ROUNDS_BEFORE_MIN = 4;
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const remaining = targetCount - allPeople.length;
     // Count-driven briefs stop once the ask is met; coverage-driven briefs
@@ -626,7 +635,12 @@ export async function runFind(
     // uncovered. Keep going — the per-firm exhaustion counter (2 focused
     // attempts) + budget/time/round caps are what end a coverage run, not one
     // dry round. This is the "keep going until every company is covered" fix.
-    if (!coverageMode && roundPeople.length === 0) break;
+    if (!coverageMode && roundPeople.length === 0) {
+      // Under the floor → keep querying (budget/time/round caps still apply).
+      if (allPeople.length >= MIN_RESULTS || ++dryRounds >= MAX_DRY_ROUNDS_BEFORE_MIN) break;
+      console.log(`[find] dry round ${dryRounds}/${MAX_DRY_ROUNDS_BEFORE_MIN} with ${allPeople.length}/${MIN_RESULTS} people — retrying`);
+      continue;
+    }
 
     let newCount = 0;
     for (const p of roundPeople) {
@@ -688,7 +702,11 @@ export async function runFind(
     // have more people to surface. Only stop after TWO consecutive rounds add
     // nobody new — genuine exhaustion, whether in the breadth or the depth phase.
     if (newCount === 0) {
-      if (!coverageMode) break;
+      if (!coverageMode) {
+        if (allPeople.length >= MIN_RESULTS || ++dryRounds >= MAX_DRY_ROUNDS_BEFORE_MIN) break;
+        console.log(`[find] no new people (dry ${dryRounds}/${MAX_DRY_ROUNDS_BEFORE_MIN}), ${allPeople.length}/${MIN_RESULTS} — retrying`);
+        continue;
+      }
       if (++dryRounds >= 2) {
         console.log(`[find] coverage: 2 dry rounds — exhausted (${allPeople.length} people, ${coveredFirms.size}/${namedFirmKeys.length} companies) — stopping`);
         break;
@@ -705,6 +723,66 @@ export async function runFind(
   // AFTER a lead is confirmed good — i.e. when the user adds it to the CRM
   // (auto-enrich-on-add in routes/crm.ts). Resolving at search time would
   // burn credits on people the user never keeps.
+  // ── Apollo top-up ────────────────────────────────────────────────────────
+  // A web index is the wrong tool for "everyone with title T at firm F".
+  // Tavily's coverage of linkedin.com profiles is thin, which is how a search
+  // for AI transformation leads AT LinkedIn returns nothing while the same
+  // search on LinkedIn itself returns dozens. Apollo indexes people BY
+  // employer + title, so when the brief names firms and the web pass came up
+  // short, ask Apollo directly. Gated on the floor, so healthy runs never
+  // spend an Apollo credit.
+  if (
+    !coverageMode &&
+    allPeople.length < MIN_RESULTS &&
+    (parsed?.firms.length ?? 0) > 0 &&
+    apolloConfigured(userKeys)
+  ) {
+    const titles = (parsed!.titles.length ? parsed!.titles : parsed!.archetypes).slice(0, 3);
+    const firms = parsed!.firms.slice(0, 3);
+    const combos: { firm: string; title?: string }[] = [];
+    for (const firm of firms) {
+      if (titles.length === 0) combos.push({ firm });
+      else for (const title of titles) combos.push({ firm, title });
+    }
+    onProgress?.(`Web search thin (${allPeople.length}) — querying Apollo by employer + title…`);
+    const apolloCandidates: Candidate[] = [];
+    for (const { firm, title } of combos.slice(0, 6)) {
+      try {
+        const { people: found } = await apolloPeopleSearch({ company: firm, title, userId, userKeys });
+        for (const ap of found) {
+          const nm = (ap.name ?? `${ap.first_name ?? ""} ${ap.last_name ?? ""}`).trim();
+          const co = ap.organization?.name ?? firm;
+          if (!nm || !ap.title) continue;
+          apolloCandidates.push({
+            name: nm,
+            title: ap.title,
+            company: co,
+            linkedin: ap.linkedin_url,
+            evidence: `Apollo: ${ap.title} at ${co}`,
+            confidence: "high",
+            source: ap.linkedin_url ?? "apollo",
+          });
+        }
+        console.log(`[find] apollo ${firm}${title ? ` / ${title}` : ""}: ${found.length} people`);
+      } catch (e) {
+        console.warn(`[find] apollo top-up failed for ${firm}:`, (e as Error).message);
+      }
+    }
+    // Same deterministic brief filters the web path uses (firm gate, title and
+    // seniority exclusions) so Apollo can't smuggle in off-target people.
+    const vetted = applyBriefFilters(dedupByName(cleanBadEntries(apolloCandidates)), parsed);
+    let added = 0;
+    for (const c of vetted) {
+      const key = (c.name || "").toLowerCase().trim();
+      if (!key || seenNames.has(key)) continue;
+      seenNames.add(key);
+      allPeople.push(c);
+      added++;
+    }
+    console.log(`[find] apollo top-up added ${added} (total ${allPeople.length})`);
+    if (added > 0) onProgress?.(`Apollo added ${added} — ${allPeople.length} total`);
+  }
+
   const finalPeople = coverageMode ? allPeople : allPeople.slice(0, targetCount);
 
   // ── Map Candidate → Prospect ─────────────────────────────────────────────
@@ -1945,7 +2023,12 @@ QUERY FORMAT — every query MUST name at least one specific company from the br
 
 Use the EXACT firm names from the brief. Do NOT substitute well-known firms from the same industry that the brief did not list.
 
-TARGET FIRM IS LINKEDIN ITSELF — these searches are already restricted to linkedin.com, so a bare "LinkedIn" token is invisible noise and returns people at every OTHER company. When LinkedIn (or another platform whose own domain is being searched) is a target firm, bind the employer as a quoted phrase instead: prefer "\"<Title>\" \"at LinkedIn\"", "\"<Title>\" \"LinkedIn\" Sunnyvale", or "\"<Title>\" \"LinkedIn Corporation\"". Never emit the unquoted form "<Title> LinkedIn".
+TARGET FIRM IS LINKEDIN ITSELF — these searches are already restricted to linkedin.com, so a bare "LinkedIn" token is invisible noise and returns people at every OTHER company. Bind the employer instead, and VARY the shape across queries so a single unlucky phrasing can't return nothing. Spread the budget over forms like:
+  - "\"<Title>\" \"at LinkedIn\""            (profile headline phrasing)
+  - "\"<Title>\" \"LinkedIn Corporation\""   (formal entity name)
+  - "<Title> LinkedIn Sunnyvale OR \"Mountain View\""  (HQ locations)
+  - "LinkedIn <Title> team OR leadership OR \"reports to\""  (team/leadership pages)
+  Use at least three DIFFERENT shapes when one firm carries the whole brief — one rigid phrasing repeated is how a firm-anchored search comes back empty.
 
 SENIORITY FLOOR — if the filters mention "SENIORITY FLOOR" (minimum bar like "Managing Director or above"), bias every query toward at-or-above titles. The floor is a hard signal: spending a query on a title below it is wasted budget because downstream gates will drop those candidates.
   - Replace generic role keywords with the at-or-above synonym set for the stated floor. Examples:
