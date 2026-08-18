@@ -371,7 +371,13 @@ export async function runFind(
     !isNameLookup &&
     parsed.employmentIntent !== "past" &&
     !parsed.targetsAiVendors &&
-    !(looksLockedToNamedFirms(fullBrief) && parsed.firms.length > 0)
+    !(looksLockedToNamedFirms(fullBrief) && parsed.firms.length > 0) &&
+    // Naming concrete firms IS the target set. Previously discovery ran unless
+    // the user said "only at X", so an ordinary "leads at Costco" got 39 more
+    // retailers appended and the firm gate then waved all of them through —
+    // the "it searched for the wrong thing" bug. Expand a named-firm brief
+    // only when it actually asks to broaden.
+    (parsed.firms.length === 0 || looksLikeFirmExpansionRequest(fullBrief))
   ) {
     try {
       const discovered = await discoverFirms({ provider, parsed, brief: fullBrief, userId, userKeys, searchBudget });
@@ -1005,6 +1011,25 @@ function buildExtractCtx(parsed: ParsedBrief | null): string {
  *  locking — discovery is the default the user asked for — EXCEPT when the user
  *  clearly handed us the account list ("… at these companies"), which is a
  *  coverage request, not a discovery one. */
+/** True when the brief asks to BROADEN beyond the firms it names — "similar
+ *  companies", "competitors of X", "more accounts like these", "adjacent
+ *  firms". Firm discovery exists for ICP-by-characteristics briefs; when the
+ *  user names concrete companies, naming them IS the target set, and silently
+ *  appending 39 more is how "heads of X at Costco" comes back full of Walmart
+ *  and Kroger people. Only expand a named-firm brief when it asks for it. */
+function looksLikeFirmExpansionRequest(brief: string): boolean {
+  const hay = brief.toLowerCase();
+  const orgNoun = "(?:compan(?:y|ies)|firms?|orgs?|organi[sz]ations?|accounts?|employers?|businesses|retailers?|institutions?|players?|brands?)";
+  return (
+    new RegExp(`\\b(?:similar|comparable|adjacent|sibling|peer|competing|rival|other|additional|more)\\s+${orgNoun}\\b`).test(hay) ||
+    new RegExp(`\\b${orgNoun}\\s+(?:like|similar\\s+to|comparable\\s+to)\\b`).test(hay) ||
+    /\b(?:competitors?|peers|rivals)\s+(?:of|to)\b/.test(hay) ||
+    /\b(?:and|or)\s+(?:similar|comparable|the\s+like|others?)\b/.test(hay) ||
+    /\b(?:expand|broaden|widen)\b[^.\n]{0,30}\b(?:firms?|companies|orgs?|accounts?|search|list)\b/.test(hay) ||
+    new RegExp(`\\b(?:find|add|include|surface)\\s+(?:me\\s+)?(?:more|other|additional)\\s+${orgNoun}\\b`).test(hay)
+  );
+}
+
 function looksLockedToNamedFirms(brief: string): boolean {
   const hay = brief.toLowerCase();
   const orgNoun = "(?:compan(?:y|ies)|firms?|orgs?|organi[sz]ations?|accounts?|employers?|businesses|institutions?)";
